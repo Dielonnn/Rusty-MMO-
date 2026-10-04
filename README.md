@@ -99,11 +99,21 @@ title and on the login screen.
 | `M` | World map |
 | `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
-| `Enter` | Chat (`/who` lists who's online) |
+| `Enter` | Chat (`/help` lists the chat commands, `/who` lists who's online) |
 | `H` | Show / hide the controls |
 
 Your character turns to face where the camera looks whenever you move, and
 turns to face your target when you attack while standing still.
+
+### Parties
+
+Up to 8 players can group up. Target a player and click **Invite** (or type
+`/invite NAME`); they accept or decline from a popup. Party frames down the
+left show everyone's health and power; click one to target that member. When
+anyone in the party kills a mob, every member alive and within 60 yards gets
+full experience for their level and quest credit, and members take turns
+looting (10 seconds each, then it's open to the party). `/p MESSAGE` is party
+chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 
 ### Combat
 
