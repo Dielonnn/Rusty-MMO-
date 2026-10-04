@@ -5,6 +5,34 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.0
+
+Commit: the one titled "v8.0: Rigged, animated characters".
+
+- **Real character models**: players, townsfolk and humanoid mobs are now
+  rigged 3D models with bending limbs, painted textures and skeletal
+  animation, instead of stacks of boxes. They come from the free KayKit
+  Adventurers and Skeletons packs (CC0)
+- **Classes look the part**: fighters and paladins in plate with sword and
+  shield or greatsword, barbarians and monks in fur and leather, rogues,
+  rangers, artificers and bards in leather with knives, crossbows or a
+  songbook, and casters in robes with staves, wands and spellbooks. Each class
+  keeps its colors, and worn armor recolors the chest, legs and gloves
+- **Races**: each race has its own skin colors, size and build; elves and
+  goblins have long ears, orcs tusks, gnomes and goblins bigger heads
+- **Hairstyles** are real heads now: bald with a beard, short, long, a
+  ponytail, or a mohawk. Hair takes the color you picked. Wearing something
+  on your head shows your class's helmet, hat or hood
+- **Animations**: idle, running, jumping, casting, hit reactions and dying,
+  and attacks for every fighting style: two-handed chops, sword slashes,
+  punches and kicks, twin knife stabs, crossbow shots and thrown spells.
+  Attacking while running swings with the upper body while the legs keep
+  running
+- **Mobs**: bandits, raiders, mystics, shamans, satyrs, troggs and trolls
+  wear the same bodies in their own colors; skeletons and necromancers are
+  real skeleton models, warriors, rogues and minions with their own gear.
+  Beasts and giants are still built from shapes until v9.0
+
 ## v7.2
 
 Commit: the one titled "v7.2: Account passwords".

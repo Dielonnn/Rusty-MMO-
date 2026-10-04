@@ -308,8 +308,8 @@ client/   The macroquad client: login, character select and creation,
   Scenery is placed by a seeded generator in `shared/src/props.rs`, so what the
   client draws is exactly what players bump into and where the server spawns
   mobs. (Mobs don't collide with scenery yet.)
-- **Rendering.** Everything is built from boxes, ellipsoids and cones in a
-  custom batcher, lit per pixel on the GPU: a warm sun, a cool sky fill and a
+- **Rendering.** People are rigged 3D models (below); everything else is
+  built from boxes, ellipsoids and cones in a custom batcher, and all of it is lit per pixel on the GPU: a warm sun, a cool sky fill and a
   warm bounce from the ground, a soft rim light, a faint painted grain and
   distance fog (`client/src/gfx/shader.rs`). Boxes shade like slightly rounded
   blocks and cones like round ones, and everything standing on the ground casts
@@ -335,15 +335,21 @@ client/   The macroquad client: login, character select and creation,
   of light, drains pour a beam back to the caster, casters stand in a
   glowing rune circle, and auras show on whoever has them: shield bubbles,
   stun stars, roots, frost, flames, poison, bleeding and more.
-- **Models and animation.** Characters and creatures (`client/src/models/`)
-  are posed each frame from what they're doing. Every class fights and casts
-  in its own way: barbarians chop overhead with both hands, fighters slash
-  behind a raised shield, monks jab and kick from a guard, rogues stab with
-  both daggers, rangers draw their bows, artificers aim and feel the kick,
-  bards strum, clerics raise their arms, druids spread theirs, and warlocks
-  claw at the air. People flinch when hit, tuck their legs when they jump and
-  blink; wolves sniff about and snap their jaws, boars root around, spiders
-  rear up and scorpions sway their tails.
+- **Models and animation.** Players, townsfolk and humanoid mobs are rigged,
+  skinned models with skeletal animation, from the free (CC0) KayKit
+  Adventurers and Skeletons packs (`client/assets/characters/`). All bodies
+  share one skeleton and one set of animation clips; the `.glb` loader
+  (`client/src/gfx/model_file.rs`) reads skeletons, skins and clips, and
+  `client/src/models/rigged.rs` picks a body and props for each class or mob,
+  repaints its texture for race, class and armor colors, and blends clips from
+  what someone is doing: running, idling, casting, attacking (with the upper
+  body only while running), flinching, jumping and dying. Every class fights
+  in its own way: barbarians chop with a great axe, fighters slash behind a
+  shield, monks punch and kick, rogues stab with two knives, rangers and
+  artificers shoot crossbows, and casters channel and hurl spells. Creatures
+  and giants are still built from shapes and posed in code: wolves sniff about
+  and snap their jaws, boars root around, spiders rear up and scorpions sway
+  their tails.
 
 ## Ideas for what's next
 

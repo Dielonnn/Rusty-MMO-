@@ -1,11 +1,14 @@
 //! Character and creature models, and how they move.
 //!
-//! Every model is built from shaded primitives in its own `Frame`, so all of
-//! it turns together. Humanoids are posed by an `Anim` (angles for each arm
-//! and leg, a lean and a crouch) worked out from what they're doing and from
-//! their class: a barbarian chops overhead with both hands, a monk throws
-//! alternating punches and kicks, a ranger draws a bow, a druid spreads their
-//! arms to cast, and so on.
+//! People (players, townsfolk and humanoid mobs) are rigged, animated models
+//! (`rigged`): a body per class or mob type on a shared skeleton, repainted
+//! for race, class and armor, and animated by how they fight: a barbarian
+//! chops with a great axe, a monk throws punches and kicks, a rogue stabs
+//! with two knives, casters channel and throw spells, and so on.
+//!
+//! Creatures and giants are still built from shaded primitives in their own
+//! `Frame`, so all of it turns together, posed by an `Anim` (angles for each
+//! limb, a lean and a crouch). They become models too in a later release.
 
 use macroquad::prelude::*;
 use shared::data::{
@@ -19,6 +22,7 @@ mod anim;
 mod creatures;
 mod gear;
 mod humanoid;
+mod rigged;
 
 use anim::*;
 use creatures::*;
@@ -140,9 +144,9 @@ pub fn draw_model(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
 
 fn draw_body(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
     match look.kind {
-        EntityKind::Player(class) => humanoid(b, pos, yaw, Outfit::Class(class), look, pose),
-        EntityKind::Merchant(_) => humanoid(b, pos, yaw, Outfit::Merchant, look, pose),
-        EntityKind::QuestGiver(_) => humanoid(b, pos, yaw, Outfit::QuestGiver, look, pose),
+        EntityKind::Player(class) => rigged::draw(b, look, Outfit::Class(class), pos, yaw, pose),
+        EntityKind::Merchant(_) => rigged::draw(b, look, Outfit::Merchant, pos, yaw, pose),
+        EntityKind::QuestGiver(_) => rigged::draw(b, look, Outfit::QuestGiver, pos, yaw, pose),
         EntityKind::Mob { kind, .. } => {
             let t = kind.template();
             let colors = t.colors.map(rgb);
@@ -152,7 +156,7 @@ fn draw_body(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
                 MobModel::Spider => spider(b, pos, yaw, colors, look.seed, pose),
                 MobModel::Scorpion => scorpion(b, pos, yaw, colors, pose),
                 MobModel::Humanoid(style) => {
-                    humanoid(b, pos, yaw, Outfit::Mob(style, colors), look, pose)
+                    rigged::draw(b, look, Outfit::Mob(style, colors), pos, yaw, pose)
                 }
                 MobModel::Giant(style) => {
                     humanoid(b, pos, yaw, Outfit::Giant(style, colors), look, pose)
