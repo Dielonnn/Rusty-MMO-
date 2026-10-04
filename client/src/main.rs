@@ -15,7 +15,7 @@ use render::Scene;
 fn window_conf() -> macroquad::conf::Conf {
     macroquad::conf::Conf {
         miniquad_conf: miniquad::conf::Conf {
-            window_title: format!("Rusty MMO v{}", env!("CARGO_PKG_VERSION")),
+            window_title: format!("Rusty MMO {}", shared::VERSION),
             window_width: 1440,
             window_height: 900,
             sample_count: 4,

@@ -37,7 +37,8 @@ fn main() {
         }
     };
     println!(
-        "Rusty MMO server listening on {}",
+        "Rusty MMO {} server listening on {}",
+        shared::VERSION,
         server.local_addr().unwrap()
     );
     server.run();

@@ -198,7 +198,7 @@ impl Menu {
             Color::new(1.0, 0.82, 0.25, 1.0),
         );
         text_centered(
-            "A tab-target adventure",
+            &format!("A tab-target adventure  -  {}", shared::VERSION),
             cx,
             p.y + 80.0,
             18.0,

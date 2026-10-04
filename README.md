@@ -36,6 +36,26 @@ sudo apt install libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev
 
 Run the tests with `cargo test --workspace`.
 
+### Building a Windows .exe
+
+On Windows, `cargo build --release` produces `target/release/rusty_mmo.exe`
+(the game) and `target/release/server.exe` (the dedicated server).
+To cross-compile from Linux:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+sudo apt install gcc-mingw-w64-x86-64
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+The exes end up in `target/x86_64-pc-windows-gnu/release/` and run on their
+own, with no installer or extra files needed.
+
+## Versions
+
+See [CHANGELOG.md](CHANGELOG.md). The current version is shown in the window
+title and on the login screen.
+
 ## How to play
 
 | Input | Action |
