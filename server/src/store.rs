@@ -1,5 +1,6 @@
-//! Saved characters, kept in a JSON file.
+//! Saved accounts and characters, kept in a JSON file.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -16,12 +17,16 @@ pub const MAX_CHARACTERS: usize = 8;
 #[derive(Serialize, Deserialize, Default)]
 struct SaveFile {
     version: u32,
+    /// Account name to password hash. Saves from before v7.2 have none.
+    #[serde(default)]
+    accounts: BTreeMap<String, String>,
     characters: Vec<Character>,
 }
 
 pub struct Store {
     /// `None` keeps everything in memory (tests).
     path: Option<PathBuf>,
+    accounts: BTreeMap<String, String>,
     characters: Vec<Character>,
     /// What was last written, to skip writing when nothing changed.
     written: String,
@@ -40,6 +45,7 @@ impl Store {
     pub fn in_memory() -> Self {
         Self {
             path: None,
+            accounts: BTreeMap::new(),
             characters: Vec::new(),
             written: String::new(),
         }
@@ -49,6 +55,7 @@ impl Store {
     pub fn open(path: PathBuf) -> io::Result<Self> {
         let mut store = Self {
             path: Some(path.clone()),
+            accounts: BTreeMap::new(),
             characters: Vec::new(),
             written: String::new(),
         };
@@ -60,6 +67,7 @@ impl Store {
                         format!("{}: {e}", path.display()),
                     )
                 })?;
+                store.accounts = file.accounts;
                 store.characters = file.characters;
                 for c in &mut store.characters {
                     c.sanitize();
@@ -70,6 +78,21 @@ impl Store {
             Err(e) => return Err(e),
         }
         Ok(store)
+    }
+
+    /// The account's password hash, or `None` if it has no password yet
+    /// (a new account, or one saved before passwords existed).
+    pub fn password_hash(&self, account: &str) -> Option<&str> {
+        self.accounts.get(account).map(String::as_str)
+    }
+
+    pub fn set_password_hash(&mut self, account: &str, hash: String) {
+        self.accounts.insert(account.to_string(), hash);
+    }
+
+    /// Whether any character was saved under this account.
+    pub fn has_characters(&self, account: &str) -> bool {
+        self.characters.iter().any(|c| c.account == account)
     }
 
     pub fn list(&self, account: &str) -> Vec<CharacterSummary> {
@@ -139,7 +162,8 @@ impl Store {
             return Ok(());
         };
         let file = SaveFile {
-            version: 1,
+            version: 2,
+            accounts: self.accounts.clone(),
             characters: self.characters.clone(),
         };
         let text = serde_json::to_string_pretty(&file).map_err(io::Error::other)?;
@@ -204,13 +228,36 @@ mod tests {
         c.level = 5;
         c.money = 77;
         s.update(c);
+        s.set_password_hash("ann", "$argon2id$hash".into());
         s.save().unwrap();
 
         let loaded = Store::open(path.clone()).unwrap();
+        assert_eq!(loaded.password_hash("ann"), Some("$argon2id$hash"));
+        assert_eq!(loaded.password_hash("bob"), None);
         let c = loaded.get("ann", "Aria").unwrap();
         assert_eq!(c.level, 5);
         assert_eq!(c.money, 77);
         assert_eq!(c.appearance.hair_style, 3);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_saves_without_passwords() {
+        let dir = std::env::temp_dir().join(format!("rusty-mmo-old-{}", std::process::id()));
+        let path = dir.join("characters.json");
+        let mut s = Store::open(path.clone()).unwrap();
+        s.create("ann", "Aria", Class::Mage, Appearance::default())
+            .unwrap();
+        s.save().unwrap();
+        // Strip the accounts, as a v7.0 server would have written it.
+        let text = fs::read_to_string(&path).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json.as_object_mut().unwrap().remove("accounts");
+        fs::write(&path, json.to_string()).unwrap();
+
+        let loaded = Store::open(path.clone()).unwrap();
+        assert!(loaded.has_characters("ann"));
+        assert_eq!(loaded.password_hash("ann"), None);
         let _ = fs::remove_dir_all(dir);
     }
 

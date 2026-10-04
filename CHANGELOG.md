@@ -5,6 +5,23 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.2
+
+Commit: the one titled "v7.2: Account passwords".
+
+- **Account passwords**: joining a server now asks for a password as well as
+  an account name. The first time you log in to an account, the password you
+  type becomes its password; after that, only that password gets in. Passwords
+  are 6 to 64 characters
+- **Existing accounts**: accounts saved before v7.2 have no password yet, and
+  take the password used on their next login, keeping all their characters.
+  Server owners who open their server to strangers should have their players
+  log in once first, so nobody else claims their accounts
+- Passwords are never saved: the server keeps only a salted Argon2 hash of
+  each one, in the same save file as the characters
+- Solo and sandbox play don't need a password
+- Older games can't join a v7.2 server (protocol 8)
+
 ## v7.1
 
 Commit: the one titled "v7.1: weapons as loot and more crafting recipes".

@@ -3,6 +3,7 @@
 
 pub mod character;
 mod network;
+pub mod password;
 pub mod store;
 pub mod world;
 

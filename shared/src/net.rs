@@ -130,6 +130,7 @@ mod tests {
             .send(&ClientMsg::Hello {
                 version: PROTOCOL_VERSION,
                 account: "Tester".into(),
+                password: String::new(),
             })
             .unwrap();
         client.send(&ClientMsg::StartAttack).unwrap();
