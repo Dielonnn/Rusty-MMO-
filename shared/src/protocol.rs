@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -65,6 +65,8 @@ pub enum ClientMsg {
     Equip(usize),
     /// Take off a piece of armor and put it in your bags.
     Unequip(Slot),
+    /// Put your weapon away in your bags.
+    UnequipWeapon,
     /// Make the recipe with this index in `RECIPES`.
     Craft(usize),
     /// Buy one of an item from a merchant.
@@ -191,6 +193,8 @@ pub struct EntityView {
     pub appearance: Appearance,
     /// Worn armor, by `Slot` index (players only).
     pub gear: [Option<ItemId>; 5],
+    /// Held weapon (players only).
+    pub weapon: Option<ItemId>,
     /// A corpse with loot you're allowed to take.
     pub lootable: bool,
 }
@@ -300,12 +304,14 @@ pub struct PartyMember {
     pub near: bool,
 }
 
-/// Totals from worn armor.
+/// Totals from worn armor and the held weapon.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub armor: f32,
     pub stamina: f32,
     pub power: f32,
+    /// Added to every auto attack.
+    pub damage: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

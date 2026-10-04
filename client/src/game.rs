@@ -1092,7 +1092,7 @@ impl Game {
                 let kind = item(*id).kind;
                 if let (Some(merchant), false) = (self.windows.vendor, left) {
                     self.send(ClientMsg::Sell { merchant, slot: i });
-                } else if matches!(kind, ItemKind::Armor { .. }) {
+                } else if matches!(kind, ItemKind::Armor { .. } | ItemKind::Weapon { .. }) {
                     self.send(ClientMsg::Equip(i));
                 } else if matches!(kind, ItemKind::Potion { .. }) {
                     self.send(ClientMsg::UseItem(i));
@@ -1105,8 +1105,14 @@ impl Game {
             .iter()
             .position(|r| self.windows.character && r.contains(mouse))
         {
-            if self.my_view().is_some_and(|v| v.gear[i].is_some()) {
-                self.send(ClientMsg::Unequip(Slot::ALL[i]));
+            if self
+                .my_view()
+                .is_some_and(|v| hud::gear_row(v, i).0.is_some())
+            {
+                self.send(match Slot::ALL.get(i) {
+                    Some(&slot) => ClientMsg::Unequip(slot),
+                    None => ClientMsg::UnequipWeapon,
+                });
             }
         } else if let Some(i) = layout
             .craft_buttons
