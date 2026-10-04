@@ -11,8 +11,8 @@ use shared::data::{
 use shared::protocol::{AuraView, EntityId};
 use shared::world::*;
 
+use crate::gfx::{Batch, mix};
 use crate::hud::school_color;
-use crate::render::{Batch, mix};
 
 /// Where an entity is, for effects that follow it.
 #[derive(Clone, Copy)]

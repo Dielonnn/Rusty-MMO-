@@ -87,7 +87,6 @@ fn draw_backdrop(
     set_camera(&cam);
     scene.begin_3d(zone);
     scene.draw(zone);
-    batch.light = render::theme(zone).light;
     if let Some((look, yaw)) = preview {
         let pose = Pose {
             time,

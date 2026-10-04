@@ -5,6 +5,27 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v6.0
+
+Commit: the one titled "v6.0: GPU lighting, soft shadows and a split renderer".
+
+- **Smooth lighting**: light is worked out per pixel on the graphics card
+  instead of once per face. A warm sun, a cool fill from the sky and a dim
+  warm bounce from the ground; light wraps softly around shapes; a gentle rim
+  light catches edges. Spheres and limbs no longer look faceted, cones and
+  cylinders (tree trunks, barrels, wells, posts) shade as round, and boxes
+  shade in soft gradients like slightly rounded blocks
+- **Soft shadows**: every character and creature, and trees, rocks, shrubs,
+  barrels, crates, carts, wells and stalls, cast a soft dark patch on the
+  ground, so they sit on it instead of floating. A jumping character's shadow
+  stays on the ground and fades as they rise
+- **Painted grain**: a faint, brush-like grain over every lit surface up
+  close, so large flat colors aren't perfectly flat
+- Under the hood, for what's next: the renderer can draw textured surfaces
+  and load 3D models (`.glb`), and the client's graphics code is split into
+  an engine, the world, the models and the effects so they can be worked on
+  separately
+
 ## v5.0
 
 Commit: the one titled "v5.0: quests, green drops, spell effects, map and model detail".
