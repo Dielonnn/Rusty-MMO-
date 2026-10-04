@@ -9,7 +9,7 @@ built from that commit.
 
 Commit: the one titled "v7.0: parties".
 
-- **Parties** of up to 5 players. Target a player and click **Invite** (or
+- **Parties** of up to 8 players. Target a player and click **Invite** (or
   type `/invite NAME`); they get a popup to **Accept** or **Decline**, and the
   invite runs out after 60 seconds. Only the leader invites
 - **Party frames** down the left of the screen show each member's name,
@@ -21,8 +21,8 @@ Commit: the one titled "v7.0: parties".
   leaves, the next member takes over; a party of one breaks up. Logging out
   leaves your party
 - **Shared kills**: when anyone in the party kills a mob, every member who
-  is alive and within 60 yards gets the full experience for their level and
-  quest kill credit, and can loot the corpse
+  is alive and within 60 yards gets the same experience they'd get solo
+  (nothing is split) and quest kill credit, and can loot the corpse
 - **Loot turns**: party members take turns at the loot. The member whose
   turn it is has the corpse to themselves for 10 seconds, then anyone in the
   party nearby can take what's left

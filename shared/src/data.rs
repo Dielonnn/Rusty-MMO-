@@ -30,7 +30,7 @@ pub const BAG_SLOTS: usize = 20;
 /// How close you have to be to loot a corpse.
 pub const LOOT_RANGE: f32 = 6.0;
 /// The most players in one party.
-pub const MAX_PARTY_SIZE: usize = 5;
+pub const MAX_PARTY_SIZE: usize = 8;
 /// Party members this close to a kill share its experience, quest credit
 /// and loot.
 pub const PARTY_RANGE: f32 = 60.0;

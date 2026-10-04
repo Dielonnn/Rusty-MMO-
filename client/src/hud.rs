@@ -65,7 +65,7 @@ impl PartyLayout {
         if let Some(p) = party {
             let mut y = PARTY_TOP;
             for m in p.members.iter().filter(|m| Some(m.id) != me) {
-                let r = Rect::new(16.0, y, 200.0, 44.0);
+                let r = Rect::new(16.0, y, 200.0, 38.0);
                 l.frames.push((r, m.id));
                 if leader {
                     l.kicks.push((
@@ -73,7 +73,7 @@ impl PartyLayout {
                         m.name.clone(),
                     ));
                 }
-                y += 50.0;
+                y += 42.0;
             }
             l.leave = Some(Rect::new(16.0, y, 110.0, 24.0));
         }
@@ -485,7 +485,7 @@ fn party_frames(game: &Game, layout: &Layout) {
         }
         let mut color = class_color(m.class);
         color.a = alpha;
-        text(&m.name, name_x, r.y + 16.0, 17.0, color);
+        text(&m.name, name_x, r.y + 15.0, 16.0, color);
         let lvl = m.level.to_string();
         let lvl_right = if layout.party.kicks.is_empty() {
             r.right() - 7.0
@@ -495,7 +495,7 @@ fn party_frames(game: &Game, layout: &Layout) {
         text(
             &lvl,
             lvl_right - text_width(&lvl, 16.0),
-            r.y + 16.0,
+            r.y + 15.0,
             16.0,
             Color::new(1.0, 1.0, 1.0, alpha),
         );
@@ -508,7 +508,7 @@ fn party_frames(game: &Game, layout: &Layout) {
         hp.a = alpha;
         let label = if m.dead { "Dead" } else { "" };
         bar(
-            Rect::new(r.x + 7.0, r.y + 21.0, r.w - 14.0, 12.0),
+            Rect::new(r.x + 7.0, r.y + 19.0, r.w - 14.0, 11.0),
             frac,
             hp,
             label,
@@ -517,7 +517,7 @@ fn party_frames(game: &Game, layout: &Layout) {
             let mut c = class_power_color(m.class);
             c.a = alpha;
             bar(
-                Rect::new(r.x + 7.0, r.y + 35.0, r.w - 14.0, 5.0),
+                Rect::new(r.x + 7.0, r.y + 31.0, r.w - 14.0, 4.0),
                 m.power / m.max_power,
                 c,
                 "",

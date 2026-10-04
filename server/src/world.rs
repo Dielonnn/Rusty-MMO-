@@ -3790,6 +3790,12 @@ mod tests {
                 .map(|(id, x)| w.entities[id].player().unwrap().xp != *x)
                 .collect();
             assert_eq!(gained, [true, true, false, false], "round {round}");
+            // Nobody's share is cut: each gets what they'd get solo.
+            let solo = kill_xp(3, w.entities[&boar].level, false);
+            for (id, before) in [(a, xp[0]), (b, xp[1])] {
+                let now = w.entities[&id].player().unwrap().xp;
+                assert_eq!(now - before, solo);
+            }
 
             let loot = w.entities[&boar].mob().unwrap().loot.as_ref().unwrap();
             assert_eq!(loot.looters, vec![a, b]);

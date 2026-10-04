@@ -107,7 +107,7 @@ turns to face your target when you attack while standing still.
 
 ### Parties
 
-Up to 5 players can group up. Target a player and click **Invite** (or type
+Up to 8 players can group up. Target a player and click **Invite** (or type
 `/invite NAME`); they accept or decline from a popup. Party frames down the
 left show everyone's health and power; click one to target that member. When
 anyone in the party kills a mob, every member alive and within 60 yards gets
