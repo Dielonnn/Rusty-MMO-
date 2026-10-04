@@ -20,9 +20,12 @@ For each release:
    (the game shows it as `vN.0`).
 2. Bump `PROTOCOL_VERSION` in `shared/src/protocol.rs` if any message changed shape.
 3. Add a `## vN.0` section at the top of CHANGELOG.md (below the intro), with a
-   `Tag: \`vN.0\`.` line and a bullet list of player-facing changes.
-4. Commit with a message starting `vN.0: ` and a short summary.
-5. Tag the commit `vN.0` and push the branch and the tag.
+   `Commit: the one titled "vN.0: ...".` line and a bullet list of
+   player-facing changes.
+4. Commit with a message starting `vN.0: ` and a short summary, and push.
+5. Tag the commit `vN.0` and try to push the tag. Cloud sessions may not be
+   allowed to push tags; if the push is refused, don't work around it, just
+   tell the user which commit to tag.
 6. Build the Windows exes with
    `cargo build --release --workspace --target x86_64-pc-windows-gnu`
    (needs `rustup target add x86_64-pc-windows-gnu` and `gcc-mingw-w64-x86-64`)

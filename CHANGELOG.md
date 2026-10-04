@@ -1,13 +1,13 @@
 # Changelog
 
 Each release's number is set in the workspace `Cargo.toml` and shown in the
-window title, on the login screen and in the server's startup message. Each
-release is tagged in git (`v1.0`, `v2.0`, ...), and a Windows .exe is built
-from that commit.
+window title, on the login screen and in the server's startup message. The
+commit for each release is listed under its heading, and a Windows .exe is
+built from that commit.
 
 ## v1.0
 
-Tag: `v1.0`.
+Commit: the one titled "v1.0: version labels, changelog, Windows exe build".
 
 The first playable version.
 
