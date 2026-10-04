@@ -10,7 +10,7 @@ use shared::protocol::*;
 use shared::world::*;
 
 use crate::hud::{self, Layout};
-use crate::render::{self, Batch, Pose, Scene};
+use crate::render::{self, Batch, Look, Pose, Scene};
 
 /// How far Tab looks for enemies.
 const TAB_RANGE: f32 = 45.0;
@@ -30,6 +30,17 @@ pub struct Ent {
     swing: f32,
 }
 
+impl Ent {
+    pub fn look(&self) -> Look {
+        Look {
+            kind: self.view.kind,
+            appearance: self.view.appearance,
+            gear: self.view.gear,
+            seed: self.view.id,
+        }
+    }
+}
+
 pub struct FloatText {
     pub entity: EntityId,
     pub anchor: Vec3,
@@ -45,7 +56,6 @@ pub struct ChatLine {
 }
 
 struct Projectile {
-    from: EntityId,
     to: EntityId,
     start: Vec3,
     color: Color,
@@ -68,6 +78,14 @@ struct RingEffect {
 struct Press {
     start: Vec2,
     dragged: bool,
+}
+
+/// Which windows are open.
+#[derive(Default)]
+pub struct Windows {
+    pub bags: bool,
+    pub character: bool,
+    pub crafting: bool,
 }
 
 pub struct Game {
@@ -93,17 +111,19 @@ pub struct Game {
     cam_dist: f32,
     lmb: Option<Press>,
     rmb: Option<Press>,
+    cursor_locked: bool,
     last_mouse: Vec2,
 
     pub chat: Vec<ChatLine>,
     pub chat_input: Option<String>,
     pub errors: Vec<(String, f32)>,
     pub floats: Vec<FloatText>,
-    pub banner: Option<(String, f32)>,
+    pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
     pub cast_flash: Option<(String, f32)>,
     projectiles: Vec<Projectile>,
     rings: Vec<RingEffect>,
+    pub windows: Windows,
     pub show_help: bool,
     pub menu_open: bool,
     pub time: f32,
@@ -112,17 +132,15 @@ pub struct Game {
 
 pub enum Outcome {
     Continue,
-    /// Back to the main menu, with a message.
-    Leave(String),
+    /// Back to the character list on the same connection.
+    Logout,
+    /// Back to the login screen, with a message.
+    Disconnected(String),
 }
 
 impl Game {
-    pub fn new(mut conn: Connection, name: &str, class: Class) -> std::io::Result<Self> {
-        conn.send(&ClientMsg::Hello {
-            version: PROTOCOL_VERSION,
-            name: name.to_string(),
-            class,
-        })?;
+    /// Starts playing on a connection whose character has just entered the world.
+    pub fn new(conn: Connection, class: Class) -> Self {
         let (mx, my) = mouse_position();
         let mut game = Self {
             conn,
@@ -140,26 +158,34 @@ impl Game {
             last_sent: (Vec3::ZERO, 0.0, false),
             heartbeat: 0.0,
             cam_yaw: 0.0,
-            cam_pitch: 0.35,
+            cam_pitch: 0.32,
             cam_dist: 9.0,
             lmb: None,
             rmb: None,
+            cursor_locked: false,
             last_mouse: vec2(mx, my),
             chat: Vec::new(),
             chat_input: None,
             errors: Vec::new(),
             floats: Vec::new(),
-            banner: None,
+            banner: Some((render::ZONE_NAME.into(), render::ZONE_SUBTITLE.into(), 0.0)),
             cast_flash: None,
             projectiles: Vec::new(),
             rings: Vec::new(),
+            windows: Windows::default(),
             show_help: true,
             menu_open: false,
             time: 0.0,
             batch: Batch::new(),
         };
-        game.system("Welcome! Press H to show or hide the controls.");
-        Ok(game)
+        game.system("Welcome to Amberfall Vale! Press H to show or hide the controls.");
+        game
+    }
+
+    /// Gives the connection back after logging out.
+    pub fn into_connection(mut self) -> Connection {
+        self.lock_cursor(false);
+        self.conn
     }
 
     pub fn my_view(&self) -> Option<&EntityView> {
@@ -170,6 +196,10 @@ impl Game {
 
     pub fn target_ent(&self) -> Option<&Ent> {
         self.target.and_then(|t| self.entities.get(&t))
+    }
+
+    pub fn level(&self) -> u8 {
+        self.my_view().map_or(1, |v| v.level)
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -184,7 +214,7 @@ impl Game {
         });
     }
 
-    fn error(&mut self, text: &str) {
+    pub fn error(&mut self, text: &str) {
         self.errors.retain(|(t, _)| t != text);
         self.errors.push((text.to_string(), 0.0));
         if self.errors.len() > 3 {
@@ -192,23 +222,35 @@ impl Game {
         }
     }
 
+    fn lock_cursor(&mut self, lock: bool) {
+        if self.cursor_locked != lock {
+            self.cursor_locked = lock;
+            set_cursor_grab(lock);
+            show_mouse(!lock);
+        }
+    }
+
     pub fn frame(&mut self, scene: &Scene) -> Outcome {
         let dt = get_frame_time().min(0.1);
         self.time += dt;
         if let Err(reason) = self.network() {
-            return Outcome::Leave(reason);
+            self.lock_cursor(false);
+            return Outcome::Disconnected(reason);
         }
-        let layout = Layout::new();
+        let layout = Layout::new(&self.windows);
         if let Some(outcome) = self.input(&layout) {
+            self.lock_cursor(false);
             return outcome;
         }
         self.simulate(dt);
         self.send_movement(dt);
 
-        clear_background(Color::new(0.55, 0.75, 0.95, 1.0));
         let cam = self.camera();
+        render::draw_sky(&cam, |p| hud::project(&cam, p));
         set_camera(&cam);
+        scene.begin_3d();
         self.draw_world(scene);
+        scene.end_3d();
         set_default_camera();
         hud::draw(self, &layout, &cam);
         Outcome::Continue
@@ -240,6 +282,9 @@ impl Game {
                 self.vel_y = 0.0;
             }
             ServerMsg::Snapshot(snap) => {
+                let first = self
+                    .my_id
+                    .is_some_and(|id| !self.entities.contains_key(&id));
                 let mut seen = std::collections::HashSet::new();
                 for view in snap.entities {
                     seen.insert(view.id);
@@ -262,11 +307,20 @@ impl Game {
                 }
                 self.entities.retain(|id, _| seen.contains(id));
                 self.me = snap.me;
+                // Our saved position arrives with the first snapshot.
+                if first && let Some(me) = self.my_id.and_then(|id| self.entities.get(&id)) {
+                    self.pos = me.view.pos;
+                    self.yaw = me.view.yaw;
+                    self.cam_yaw = me.view.yaw;
+                    self.last_sent = (self.pos, self.yaw, false);
+                }
                 if self.target.is_some_and(|t| !self.entities.contains_key(&t)) {
                     self.target = None;
                 }
             }
             ServerMsg::Event(event) => self.event(event),
+            // Only meaningful on the character screen.
+            ServerMsg::Characters(_) | ServerMsg::CharacterError(_) => {}
         }
         Ok(())
     }
@@ -356,7 +410,6 @@ impl Game {
                 if a.projectile {
                     if let (Some(to), Some(from)) = (target, self.entities.get(&caster)) {
                         self.projectiles.push(Projectile {
-                            from: caster,
                             to,
                             start: from.pos + Vec3::Y * 1.5,
                             color,
@@ -378,16 +431,19 @@ impl Game {
                 {
                     e.swing = 0.0;
                 }
-                if a.effects.iter().any(|e| {
+                let soothing = a.effects.iter().any(|e| {
                     matches!(
                         e,
                         Effect::Heal { .. }
                             | Effect::Aura {
-                                kind: AuraKind::Hot { .. } | AuraKind::Absorb(_),
+                                kind: AuraKind::Hot { .. }
+                                    | AuraKind::Absorb(_)
+                                    | AuraKind::DamageTaken(_),
                                 ..
                             }
                     )
-                }) {
+                });
+                if soothing {
                     self.rings.push(RingEffect {
                         entity: target.unwrap_or(caster),
                         radius: 0.9,
@@ -439,14 +495,48 @@ impl Game {
                     duration: 1.5,
                 });
                 if Some(id) == me {
-                    self.banner = Some((format!("Level {level}!"), 0.0));
+                    self.banner = Some((format!("Level {level}!"), String::new(), 0.0));
                     self.system(&format!("Congratulations, you have reached level {level}!"));
+                }
+            }
+            GameEvent::Learned(id) => {
+                let name = ability(id).name;
+                self.system(&format!("You have learned a new ability: {name}."));
+                if let Some((_, sub, _)) = &mut self.banner {
+                    *sub = format!("New ability: {name}");
                 }
             }
             GameEvent::Xp { amount, from } => {
                 self.chat.push(ChatLine {
                     text: format!("{from} dies, you gain {amount} experience."),
                     color: Color::new(0.75, 0.6, 1.0, 1.0),
+                });
+            }
+            GameEvent::Looted { money, items } => {
+                if money > 0 {
+                    self.chat.push(ChatLine {
+                        text: format!("You loot {}.", format_money(money)),
+                        color: Color::new(1.0, 0.85, 0.35, 1.0),
+                    });
+                }
+                for (id, n) in items {
+                    let it = item(id);
+                    let text = if n > 1 {
+                        format!("You receive loot: {} x{n}.", it.name)
+                    } else {
+                        format!("You receive loot: {}.", it.name)
+                    };
+                    self.chat.push(ChatLine {
+                        text,
+                        color: hud::quality_color(it.quality),
+                    });
+                }
+            }
+            GameEvent::Crafted(id) => {
+                let it = item(id);
+                self.chat.push(ChatLine {
+                    text: format!("You create {}.", it.name),
+                    color: hud::quality_color(it.quality),
                 });
             }
             GameEvent::Error(text) => self.error(&text),
@@ -474,11 +564,40 @@ impl Game {
         e.kind.hostile_to(EntityKind::Player(self.class))
     }
 
-    fn use_slot(&mut self, slot: usize) {
+    /// Standing still and attacking? Turn to face the target first.
+    fn face_target(&mut self) {
+        if self.moving {
+            return;
+        }
+        let Some(t) = self.target_ent() else { return };
+        if !self.is_hostile(&t.view) || t.view.dead || t.pos.distance(self.pos) < 0.3 {
+            return;
+        }
+        self.yaw = yaw_towards(self.pos, t.pos);
+        self.last_sent = (self.pos, self.yaw, self.moving);
+        self.send(ClientMsg::Move {
+            pos: self.pos,
+            yaw: self.yaw,
+            moving: false,
+        });
+    }
+
+    pub fn use_slot(&mut self, slot: usize) {
         let ability = self.class.abilities()[slot];
         if self.my_view().is_some_and(|v| v.dead) {
             self.error("You are dead.");
             return;
+        }
+        if UNLOCK_LEVELS[slot] > self.level() {
+            self.error(&format!(
+                "You learn {} at level {}.",
+                shared::data::ability(ability).name,
+                UNLOCK_LEVELS[slot]
+            ));
+            return;
+        }
+        if shared::data::ability(ability).targeting == Targeting::Enemy {
+            self.face_target();
         }
         self.send(ClientMsg::UseAbility {
             ability,
@@ -520,14 +639,18 @@ impl Game {
             .values()
             .filter(|e| Some(e.view.id) != self.my_id)
             .filter_map(|e| {
-                let h = render::model_height(e.view.kind);
+                let h = if e.view.dead {
+                    0.8
+                } else {
+                    render::model_height(e.view.kind)
+                };
                 let r = render::model_radius(e.view.kind);
                 let bottom = hud::project(cam, e.pos)?;
                 let top = hud::project(cam, e.pos + Vec3::Y * h)?;
                 let height = (bottom.y - top.y).max(8.0);
-                let half_width = (height * r / h).max(12.0);
-                let inside = mouse.y >= top.y - 4.0
-                    && mouse.y <= bottom.y + 4.0
+                let half_width = (height * r.max(h * 0.6) / h).max(14.0);
+                let inside = mouse.y >= top.y - 6.0
+                    && mouse.y <= bottom.y + 6.0
                     && (mouse.x - bottom.x).abs() <= half_width;
                 inside.then(|| (e.pos.distance(cam.position), e.view.id))
             })
@@ -570,6 +693,8 @@ impl Game {
         if !typing && is_key_pressed(KeyCode::Escape) {
             if self.menu_open {
                 self.menu_open = false;
+            } else if self.windows.bags || self.windows.character || self.windows.crafting {
+                self.windows = Windows::default();
             } else if self.target.is_some() {
                 self.set_target(None);
             } else {
@@ -578,14 +703,17 @@ impl Game {
         }
 
         let left_pressed = is_mouse_button_pressed(MouseButton::Left);
+        let right_pressed = is_mouse_button_pressed(MouseButton::Right);
         if self.menu_open {
             self.lmb = None;
             self.rmb = None;
+            self.lock_cursor(false);
             if left_pressed {
                 if layout.menu_buttons[0].contains(mouse) {
                     self.menu_open = false;
                 } else if layout.menu_buttons[1].contains(mouse) {
-                    return Some(Outcome::Leave("Logged out.".into()));
+                    self.send(ClientMsg::Logout);
+                    return Some(Outcome::Logout);
                 } else if layout.menu_buttons[2].contains(mouse) {
                     std::process::exit(0);
                 }
@@ -594,25 +722,20 @@ impl Game {
         }
 
         // Clicks on the interface.
-        let over_ui = layout.blocks(mouse, self.target.is_some(), dead);
-        if left_pressed && over_ui {
-            if let Some(slot) = layout.hotbar.iter().position(|r| r.contains(mouse)) {
-                self.use_slot(slot);
-            } else if layout.player_frame.contains(mouse) {
-                self.set_target(self.my_id);
-            } else if dead && layout.release_button.contains(mouse) {
-                self.send(ClientMsg::ReleaseSpirit);
-            }
+        let over_ui = !self.cursor_locked && layout.blocks(mouse, self.target.is_some(), dead);
+        if (left_pressed || right_pressed) && over_ui {
+            self.click_ui(layout, mouse, left_pressed);
         }
 
-        // Mouse buttons in the world: drag to look around, click to target.
+        // Mouse buttons in the world: drag to look around (the cursor locks
+        // while dragging), click to target.
         if left_pressed && !over_ui {
             self.lmb = Some(Press {
                 start: mouse,
                 dragged: false,
             });
         }
-        if is_mouse_button_pressed(MouseButton::Right) && !over_ui {
+        if right_pressed && !over_ui {
             self.rmb = Some(Press {
                 start: mouse,
                 dragged: false,
@@ -623,30 +746,25 @@ impl Game {
                 press.dragged = true;
             }
         }
-        if self.lmb.is_some_and(|p| p.dragged) || self.rmb.is_some_and(|p| p.dragged) {
+        let dragging = self.lmb.is_some_and(|p| p.dragged) || self.rmb.is_some_and(|p| p.dragged);
+        // Holding the right button always locks the cursor, even before it moves.
+        self.lock_cursor(dragging || self.rmb.is_some());
+        if dragging {
             self.cam_yaw -= delta.x * MOUSE_SENSITIVITY;
             self.cam_pitch = (self.cam_pitch + delta.y * MOUSE_SENSITIVITY).clamp(-0.4, 1.35);
         }
         if is_mouse_button_released(MouseButton::Left)
             && let Some(press) = self.lmb.take()
             && !press.dragged
-            && let Some(id) = self.pick(&cam, mouse)
+            && let Some(id) = self.pick(&cam, press.start)
         {
             self.set_target(Some(id));
         }
         if is_mouse_button_released(MouseButton::Right)
             && let Some(press) = self.rmb.take()
             && !press.dragged
-            && let Some(id) = self.pick(&cam, mouse)
         {
-            self.set_target(Some(id));
-            if self
-                .entities
-                .get(&id)
-                .is_some_and(|e| self.is_hostile(&e.view) && !e.view.dead)
-            {
-                self.send(ClientMsg::StartAttack);
-            }
+            self.right_click(&cam, press.start);
         }
         let wheel = mouse_wheel().1;
         if wheel != 0.0 && !over_ui {
@@ -681,11 +799,21 @@ impl Game {
             if self.me.auto_attacking {
                 self.send(ClientMsg::StopAttack);
             } else {
+                self.face_target();
                 self.send(ClientMsg::StartAttack);
             }
         }
         if is_key_pressed(KeyCode::H) {
             self.show_help = !self.show_help;
+        }
+        if is_key_pressed(KeyCode::B) {
+            self.windows.bags = !self.windows.bags;
+        }
+        if is_key_pressed(KeyCode::C) {
+            self.windows.character = !self.windows.character;
+        }
+        if is_key_pressed(KeyCode::K) {
+            self.windows.crafting = !self.windows.crafting;
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
             self.chat_input = Some(String::new());
@@ -693,6 +821,62 @@ impl Game {
             self.chat_input = Some("/".into());
         }
         None
+    }
+
+    /// Right click in the world: loot a corpse, or target and attack.
+    fn right_click(&mut self, cam: &Camera3D, at: Vec2) {
+        let Some(id) = self.pick(cam, at) else { return };
+        self.set_target(Some(id));
+        let Some(e) = self.entities.get(&id) else {
+            return;
+        };
+        if e.view.lootable {
+            self.send(ClientMsg::Loot(id));
+        } else if self.is_hostile(&e.view) && !e.view.dead {
+            self.face_target();
+            self.send(ClientMsg::StartAttack);
+        }
+    }
+
+    fn click_ui(&mut self, layout: &Layout, mouse: Vec2, left: bool) {
+        if let Some(slot) = layout.hotbar.iter().position(|r| r.contains(mouse)) {
+            self.use_slot(slot);
+        } else if left && layout.player_frame.contains(mouse) {
+            self.set_target(self.my_id);
+        } else if left
+            && self.my_view().is_some_and(|v| v.dead)
+            && layout.release_button.contains(mouse)
+        {
+            self.send(ClientMsg::ReleaseSpirit);
+        } else if let Some(i) = layout
+            .bag_slots
+            .iter()
+            .position(|r| self.windows.bags && r.contains(mouse))
+        {
+            // Right click (or left) wears armor.
+            if let Some(Some((id, _))) = self.me.bags.get(i) {
+                if matches!(item(*id).kind, ItemKind::Armor { .. }) {
+                    self.send(ClientMsg::Equip(i));
+                } else if !left {
+                    self.error("You can't wear that. Use it for crafting (K).");
+                }
+            }
+        } else if let Some(i) = layout
+            .gear_slots
+            .iter()
+            .position(|r| self.windows.character && r.contains(mouse))
+        {
+            if self.my_view().is_some_and(|v| v.gear[i].is_some()) {
+                self.send(ClientMsg::Unequip(Slot::ALL[i]));
+            }
+        } else if let Some(i) = layout
+            .craft_buttons
+            .iter()
+            .position(|r| self.windows.crafting && r.contains(mouse))
+            && left
+        {
+            self.send(ClientMsg::Craft(i));
+        }
     }
 
     // ---- Simulation ----
@@ -726,18 +910,15 @@ impl Game {
         let lmb = self.lmb.is_some();
         let rmb = self.rmb.is_some();
         let factor = self.movement_factor();
+        let alive = self.my_view().is_some_and(|v| !v.dead);
 
-        let mut turning = false;
-        if rmb {
-            self.yaw = self.cam_yaw;
-        } else if factor > 0.0 || self.my_view().is_some_and(|v| !v.dead) {
-            if key(KeyCode::A) || key(KeyCode::Left) {
-                self.yaw += TURN_SPEED * dt;
-                turning = true;
+        // Arrow keys turn the camera (and with it, the character).
+        if alive {
+            if key(KeyCode::Left) {
+                self.cam_yaw += TURN_SPEED * dt;
             }
-            if key(KeyCode::D) || key(KeyCode::Right) {
-                self.yaw -= TURN_SPEED * dt;
-                turning = true;
+            if key(KeyCode::Right) {
+                self.cam_yaw -= TURN_SPEED * dt;
             }
         }
         let mut fwd = 0.0;
@@ -747,12 +928,19 @@ impl Game {
         if key(KeyCode::S) || key(KeyCode::Down) {
             fwd -= 1.0;
         }
+        // A and D (and Q and E) strafe.
         let mut strafe = 0.0;
-        if key(KeyCode::Q) || (rmb && key(KeyCode::A)) {
+        if key(KeyCode::A) || key(KeyCode::Q) {
             strafe -= 1.0;
         }
-        if key(KeyCode::E) || (rmb && key(KeyCode::D)) {
+        if key(KeyCode::D) || key(KeyCode::E) {
             strafe += 1.0;
+        }
+        let wants_move = (fwd != 0.0 || strafe != 0.0) && alive;
+        // Moving (or steering with the right button) turns you to face where
+        // the camera looks.
+        if alive && (rmb || wants_move || key(KeyCode::Left) || key(KeyCode::Right)) {
+            self.yaw = self.cam_yaw;
         }
         let f = forward(self.yaw);
         let right = vec3(-f.z, 0.0, f.x);
@@ -779,11 +967,6 @@ impl Game {
             self.grounded = true;
         }
         self.pos = clamp_to_world(self.pos);
-        // Swing the camera back behind the player as they move.
-        if (self.moving || turning) && !lmb && !rmb {
-            let diff = wrap_angle(self.yaw - self.cam_yaw);
-            self.cam_yaw += diff * (1.0 - (-5.0 * dt).exp());
-        }
 
         // Everyone else glides towards where the server says they are.
         let smooth = 1.0 - (-12.0 * dt).exp();
@@ -818,9 +1001,9 @@ impl Game {
             e.1 += dt;
         }
         self.errors.retain(|e| e.1 < 2.5);
-        if let Some((_, t)) = &mut self.banner {
+        if let Some((_, _, t)) = &mut self.banner {
             *t += dt;
-            if *t > 3.0 {
+            if *t > 5.0 {
                 self.banner = None;
             }
         }
@@ -904,7 +1087,20 @@ impl Game {
                 dead: e.view.dead,
                 time: self.time + e.view.id as f32,
             };
-            render::draw_model(b, e.view.kind, e.pos, e.yaw, pose);
+            render::draw_model(b, &e.look(), e.pos, e.yaw, pose);
+            // Corpses you can loot sparkle.
+            if e.view.lootable {
+                for k in 0..4 {
+                    let a = self.time * 2.0 + k as f32 * 1.57;
+                    let p = e.pos
+                        + vec3(
+                            a.cos() * 0.7,
+                            0.6 + (self.time * 3.0 + k as f32).sin() * 0.25,
+                            a.sin() * 0.7,
+                        );
+                    b.glow_sphere(p, 0.07, Color::new(1.0, 0.88, 0.35, 1.0));
+                }
+            }
         }
         for p in &self.projectiles {
             let Some(to) = self.entities.get(&p.to) else {
@@ -914,13 +1110,18 @@ impl Game {
             let dist = p.start.distance(end).max(0.1);
             let t = (p.age * 35.0 / dist).min(1.0);
             let at = p.start.lerp(end, t);
-            b.sphere(at, 0.25, p.color);
-            b.sphere(
-                at - (end - p.start).normalize_or_zero() * 0.35,
-                0.15,
-                p.color,
+            let back = (end - p.start).normalize_or_zero();
+            b.glow_sphere(at, 0.25, p.color);
+            b.glow_sphere(
+                at - back * 0.35,
+                0.17,
+                Color::new(p.color.r, p.color.g, p.color.b, 0.6),
             );
-            let _ = p.from;
+            b.glow_sphere(
+                at - back * 0.65,
+                0.1,
+                Color::new(p.color.r, p.color.g, p.color.b, 0.3),
+            );
         }
         for r in &self.rings {
             let Some(e) = self.entities.get(&r.entity) else {
@@ -938,6 +1139,7 @@ impl Game {
                 b.air_ring(e.pos + Vec3::Y * 0.3, r.radius * t.sqrt(), 0.5, color);
             }
         }
+        scene.draw_effects(b, self.time);
         b.flush();
         scene.draw_water();
     }

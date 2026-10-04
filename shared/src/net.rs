@@ -115,7 +115,6 @@ impl Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::Class;
     use crate::protocol::{ClientMsg, PROTOCOL_VERSION};
     use std::net::TcpListener;
 
@@ -130,8 +129,7 @@ mod tests {
         client
             .send(&ClientMsg::Hello {
                 version: PROTOCOL_VERSION,
-                name: "Tester".into(),
-                class: Class::Mage,
+                account: "Tester".into(),
             })
             .unwrap();
         client.send(&ClientMsg::StartAttack).unwrap();
@@ -147,9 +145,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
-        assert!(
-            matches!(&got[0], ClientMsg::Hello { name, class: Class::Mage, .. } if name == "Tester")
-        );
+        assert!(matches!(&got[0], ClientMsg::Hello { account, .. } if account == "Tester"));
         assert!(matches!(got[1], ClientMsg::StartAttack));
     }
 }

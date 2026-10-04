@@ -1,8 +1,10 @@
-//! Accepts connections, runs the world at a fixed tick rate and routes messages.
+//! Accepts connections, runs the world at a fixed tick rate, routes messages
+//! and keeps the save file up to date.
 
 use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,14 +13,18 @@ use shared::protocol::*;
 use shared::world::VIEW_DISTANCE;
 
 use crate::TICK_RATE;
+use crate::store::{Store, normalize_account};
 use crate::world::{Audience, World};
 
 /// Connections that haven't said hello by now are dropped.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often characters in the world are written to the save file.
+const AUTOSAVE_INTERVAL: f32 = 5.0;
 
 struct Client {
     conn: Connection,
     addr: SocketAddr,
+    account: Option<String>,
     player: Option<EntityId>,
     connected_at: Instant,
 }
@@ -28,12 +34,14 @@ pub struct Server {
     clients: HashMap<u64, Client>,
     next_client: u64,
     pub world: World,
+    pub store: Store,
+    since_save: f32,
     /// Print connections and disconnections.
     pub verbose: bool,
 }
 
 impl Server {
-    pub fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
+    pub fn bind(addr: impl ToSocketAddrs, store: Store) -> io::Result<Self> {
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         let seed = SystemTime::now()
@@ -44,6 +52,8 @@ impl Server {
             clients: HashMap::new(),
             next_client: 0,
             world: World::new(seed),
+            store,
+            since_save: 0.0,
             verbose: true,
         })
     }
@@ -70,12 +80,29 @@ impl Server {
         }
     }
 
-    /// One server tick: network in, simulate, network out.
+    /// One server tick: network in, simulate, network out, maybe save.
     pub fn step(&mut self, dt: f32) {
         self.accept();
         self.receive();
         self.world.tick(dt);
         self.deliver();
+        self.since_save += dt;
+        if self.since_save >= AUTOSAVE_INTERVAL {
+            self.since_save = 0.0;
+            self.save();
+        }
+    }
+
+    /// Writes everyone in the world to the save file.
+    pub fn save(&mut self) {
+        for client in self.clients.values() {
+            if let Some(c) = client.player.and_then(|id| self.world.character(id)) {
+                self.store.update(c);
+            }
+        }
+        if let Err(e) = self.store.save() {
+            eprintln!("Couldn't save characters: {e}");
+        }
     }
 
     fn accept(&mut self) {
@@ -89,6 +116,7 @@ impl Server {
                             Client {
                                 conn,
                                 addr,
+                                account: None,
                                 player: None,
                                 connected_at: Instant::now(),
                             },
@@ -120,50 +148,143 @@ impl Server {
                         break;
                     }
                 };
-                match (client.player, msg) {
-                    (
-                        None,
-                        ClientMsg::Hello {
-                            version,
-                            name,
-                            class,
-                        },
-                    ) => {
-                        if version != PROTOCOL_VERSION {
-                            let reason = format!(
-                                "Version mismatch: the server speaks protocol {PROTOCOL_VERSION}, you have {version}. Update your game."
-                            );
-                            let _ = client.conn.send(&ServerMsg::Rejected(reason));
-                            dropped.push(cid);
-                            break;
-                        }
-                        let id = self.world.add_player(&name, class);
-                        let client = self.clients.get_mut(&cid).unwrap();
-                        client.player = Some(id);
-                        let _ = client.conn.send(&ServerMsg::Welcome { id });
-                        let msg = format!(
-                            "{} joined as {} ({:?})",
-                            client.addr, self.world.entities[&id].name, class
-                        );
-                        self.log(msg);
-                    }
-                    (None, _) => {}
-                    (Some(id), msg) => self.world.handle(id, msg),
+                if !self.handle(cid, msg) {
+                    dropped.push(cid);
+                    break;
                 }
             }
             let client = &self.clients[&cid];
-            if client.player.is_none() && client.connected_at.elapsed() > HELLO_TIMEOUT {
+            if client.account.is_none() && client.connected_at.elapsed() > HELLO_TIMEOUT {
                 dropped.push(cid);
             }
         }
         for cid in dropped {
-            if let Some(client) = self.clients.remove(&cid) {
-                if let Some(id) = client.player {
-                    self.world.remove_player(id);
-                }
-                self.log(format!("{} disconnected", client.addr));
-            }
+            self.disconnect(cid, "disconnected");
         }
+    }
+
+    fn send_characters(&mut self, cid: u64) {
+        let client = self.clients.get_mut(&cid).unwrap();
+        let list = client
+            .account
+            .as_ref()
+            .map_or_else(Vec::new, |a| self.store.list(a));
+        let _ = client.conn.send(&ServerMsg::Characters(list));
+    }
+
+    fn character_error(&mut self, cid: u64, msg: String) {
+        let client = self.clients.get_mut(&cid).unwrap();
+        let _ = client.conn.send(&ServerMsg::CharacterError(msg));
+    }
+
+    /// Handles one message. Returns false to drop the connection.
+    fn handle(&mut self, cid: u64, msg: ClientMsg) -> bool {
+        let client = self.clients.get_mut(&cid).unwrap();
+        match (&client.account, client.player, msg) {
+            (None, _, ClientMsg::Hello { version, account }) => {
+                if version != PROTOCOL_VERSION {
+                    let reason = format!(
+                        "Version mismatch: the server speaks protocol {PROTOCOL_VERSION}, you have {version}. Update your game."
+                    );
+                    let _ = client.conn.send(&ServerMsg::Rejected(reason));
+                    return false;
+                }
+                match normalize_account(&account) {
+                    Ok(account) => {
+                        client.account = Some(account);
+                        self.send_characters(cid);
+                    }
+                    Err(e) => {
+                        let _ = client.conn.send(&ServerMsg::Rejected(e.to_string()));
+                        return false;
+                    }
+                }
+            }
+            (None, _, _) => {}
+            (
+                Some(account),
+                None,
+                ClientMsg::CreateCharacter {
+                    name,
+                    class,
+                    appearance,
+                },
+            ) => {
+                let account = account.clone();
+                match self.store.create(&account, &name, class, appearance) {
+                    Ok(()) => {
+                        self.save_now();
+                        self.send_characters(cid);
+                    }
+                    Err(e) => self.character_error(cid, e),
+                }
+            }
+            (Some(account), None, ClientMsg::DeleteCharacter(name)) => {
+                let account = account.clone();
+                match self.store.delete(&account, &name) {
+                    Ok(()) => {
+                        self.save_now();
+                        self.send_characters(cid);
+                    }
+                    Err(e) => self.character_error(cid, e),
+                }
+            }
+            (Some(account), None, ClientMsg::EnterWorld(name)) => {
+                let Some(c) = self.store.get(account, &name).cloned() else {
+                    self.character_error(cid, format!("You have no character named {name}."));
+                    return true;
+                };
+                let online = self.clients.values().any(|other| {
+                    other.player.is_some_and(|id| {
+                        self.world
+                            .entities
+                            .get(&id)
+                            .is_some_and(|e| e.name == c.name)
+                    })
+                });
+                if online {
+                    self.character_error(cid, format!("{} is already in the world.", c.name));
+                    return true;
+                }
+                let id = self.world.add_player(&c);
+                let client = self.clients.get_mut(&cid).unwrap();
+                client.player = Some(id);
+                let _ = client.conn.send(&ServerMsg::Welcome { id });
+                let msg = format!(
+                    "{} entered the world as {} ({:?})",
+                    client.addr, c.name, c.class
+                );
+                self.log(msg);
+            }
+            (Some(_), Some(id), ClientMsg::Logout) => {
+                if let Some(c) = self.world.remove_player(id) {
+                    self.store.update(c);
+                    self.save_now();
+                }
+                self.clients.get_mut(&cid).unwrap().player = None;
+                self.send_characters(cid);
+            }
+            (Some(_), Some(id), msg) => self.world.handle(id, msg),
+            (Some(_), None, _) => {}
+        }
+        true
+    }
+
+    fn save_now(&mut self) {
+        if let Err(e) = self.store.save() {
+            eprintln!("Couldn't save characters: {e}");
+        }
+    }
+
+    fn disconnect(&mut self, cid: u64, why: &str) {
+        let Some(client) = self.clients.remove(&cid) else {
+            return;
+        };
+        if let Some(c) = client.player.and_then(|id| self.world.remove_player(id)) {
+            self.store.update(c);
+            self.save_now();
+        }
+        self.log(format!("{} {why}", client.addr));
     }
 
     fn deliver(&mut self) {
@@ -194,12 +315,7 @@ impl Server {
             }
         }
         for cid in dropped {
-            if let Some(client) = self.clients.remove(&cid) {
-                if let Some(id) = client.player {
-                    self.world.remove_player(id);
-                }
-                self.log(format!("{} dropped", client.addr));
-            }
+            self.disconnect(cid, "dropped");
         }
     }
 
@@ -210,10 +326,11 @@ impl Server {
     }
 }
 
-/// Starts a server on a background thread, listening on localhost only.
-/// Used by the client's single-player mode.
-pub fn spawn_local() -> io::Result<SocketAddr> {
-    let mut server = Server::bind("127.0.0.1:0")?;
+/// Starts a server on a background thread, listening on localhost only and
+/// saving to `save_path`. Used by the client's single-player mode.
+pub fn spawn_local(save_path: PathBuf) -> io::Result<SocketAddr> {
+    let store = Store::open(save_path)?;
+    let mut server = Server::bind("127.0.0.1:0", store)?;
     server.verbose = false;
     let addr = server.local_addr()?;
     thread::Builder::new()
@@ -225,54 +342,121 @@ pub fn spawn_local() -> io::Result<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::data::Class;
+    use shared::data::{Appearance, Class};
 
-    #[test]
-    fn client_joins_and_gets_snapshots() {
-        let mut server = Server::bind("127.0.0.1:0").unwrap();
-        server.verbose = false;
+    fn pump(
+        server: &mut Server,
+        conn: &mut Connection,
+        until: impl Fn(&ServerMsg) -> bool,
+    ) -> Vec<ServerMsg> {
+        let mut got = Vec::new();
+        for _ in 0..300 {
+            server.step(0.05);
+            while let Some(msg) = conn.poll::<ServerMsg>().unwrap() {
+                let done = until(&msg);
+                got.push(msg);
+                if done {
+                    return got;
+                }
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        panic!("timed out; got {got:?}");
+    }
+
+    fn connect(server: &Server, account: &str) -> Connection {
         let addr = server.local_addr().unwrap().to_string();
         let mut conn = Connection::connect(&addr, DEFAULT_PORT).unwrap();
         conn.send(&ClientMsg::Hello {
             version: PROTOCOL_VERSION,
-            name: "Net".into(),
-            class: Class::Cleric,
+            account: account.into(),
         })
         .unwrap();
+        conn
+    }
 
-        let mut my_id = None;
-        let mut snapshot = None;
-        for _ in 0..200 {
-            server.step(0.05);
-            while let Some(msg) = conn.poll::<ServerMsg>().unwrap() {
-                match msg {
-                    ServerMsg::Welcome { id } => my_id = Some(id),
-                    ServerMsg::Snapshot(s) => snapshot = Some(s),
-                    _ => {}
-                }
-            }
-            if snapshot.is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(2));
-        }
-        let id = my_id.expect("welcomed");
-        let snapshot = snapshot.expect("got a snapshot");
-        let me = snapshot.entities.iter().find(|e| e.id == id).unwrap();
-        assert_eq!(me.name, "Net");
-        assert_eq!(me.kind, EntityKind::Player(Class::Cleric));
+    #[test]
+    fn create_enter_logout_and_keep_progress() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        let mut conn = connect(&server, "Ann");
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        assert!(matches!(got.last(), Some(ServerMsg::Characters(list)) if list.is_empty()));
+
+        conn.send(&ClientMsg::CreateCharacter {
+            name: "aria".into(),
+            class: Class::Cleric,
+            appearance: Appearance::default(),
+        })
+        .unwrap();
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        assert!(
+            matches!(got.last(), Some(ServerMsg::Characters(list)) if list.len() == 1 && list[0].name == "Aria")
+        );
+
+        conn.send(&ClientMsg::EnterWorld("Aria".into())).unwrap();
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Snapshot(_))
+        });
+        let id = got
+            .iter()
+            .find_map(|m| match m {
+                ServerMsg::Welcome { id } => Some(*id),
+                _ => None,
+            })
+            .expect("welcomed");
+        server.world.give_xp(id, 150, "test");
+
+        conn.send(&ClientMsg::Logout).unwrap();
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        assert!(matches!(got.last(), Some(ServerMsg::Characters(list)) if list[0].level == 2));
+        assert!(server.world.entities.values().all(|e| e.player().is_none()));
+    }
+
+    #[test]
+    fn names_are_unique_across_accounts() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        server
+            .store
+            .create("ann", "Aria", Class::Mage, Appearance::default())
+            .unwrap();
+        let mut conn = connect(&server, "bob");
+        pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        conn.send(&ClientMsg::CreateCharacter {
+            name: "Aria".into(),
+            class: Class::Rogue,
+            appearance: Appearance::default(),
+        })
+        .unwrap();
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::CharacterError(_))
+        });
+        assert!(matches!(got.last(), Some(ServerMsg::CharacterError(e)) if e.contains("taken")));
+        // And bob can't play ann's character.
+        conn.send(&ClientMsg::EnterWorld("Aria".into())).unwrap();
+        pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::CharacterError(_))
+        });
     }
 
     #[test]
     fn wrong_version_is_rejected() {
-        let mut server = Server::bind("127.0.0.1:0").unwrap();
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
         server.verbose = false;
         let addr = server.local_addr().unwrap().to_string();
         let mut conn = Connection::connect(&addr, DEFAULT_PORT).unwrap();
         conn.send(&ClientMsg::Hello {
             version: PROTOCOL_VERSION + 1,
-            name: "Old".into(),
-            class: Class::Mage,
+            account: "old".into(),
         })
         .unwrap();
         let mut rejected = false;
@@ -288,6 +472,5 @@ mod tests {
             }
         }
         assert!(rejected);
-        assert!(server.world.entities.values().all(|e| e.player().is_none()));
     }
 }

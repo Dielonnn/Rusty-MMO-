@@ -1,16 +1,19 @@
 //! The 2D interface drawn over the world: unit frames, action bar, cast bar,
-//! nameplates, chat, minimap and floating combat text.
+//! nameplates, chat, minimap, floating combat text and the bag, character
+//! and crafting windows.
 
 use macroquad::prelude::*;
 use shared::data::*;
 use shared::protocol::*;
 
-use crate::game::{Game, wrap_angle};
+use crate::game::{Game, Windows, wrap_angle};
 use crate::render;
 
-pub const PANEL: Color = Color::new(0.06, 0.06, 0.09, 0.82);
-pub const BORDER: Color = Color::new(0.55, 0.5, 0.38, 1.0);
-const GOLD: Color = Color::new(1.0, 0.82, 0.25, 1.0);
+pub const PANEL: Color = Color::new(0.07, 0.06, 0.08, 0.86);
+pub const BORDER: Color = Color::new(0.6, 0.48, 0.3, 1.0);
+pub const GOLD: Color = Color::new(1.0, 0.82, 0.25, 1.0);
+
+const SLOT: f32 = 44.0;
 
 /// Where everything goes on screen this frame.
 pub struct Layout {
@@ -23,10 +26,16 @@ pub struct Layout {
     pub minimap: (Vec2, f32),
     pub release_button: Rect,
     pub menu_buttons: [Rect; 3],
+    pub bags: Option<Rect>,
+    pub bag_slots: Vec<Rect>,
+    pub character: Option<Rect>,
+    pub gear_slots: Vec<Rect>,
+    pub crafting: Option<Rect>,
+    pub craft_buttons: Vec<Rect>,
 }
 
 impl Layout {
-    pub fn new() -> Self {
+    pub fn new(windows: &Windows) -> Self {
         let (w, h) = (screen_width(), screen_height());
         let slot = 54.0;
         let gap = 6.0;
@@ -37,6 +46,59 @@ impl Layout {
             std::array::from_fn(|i| Rect::new(bar_x + i as f32 * (slot + gap), bar_y, slot, slot));
         let menu_w = 240.0;
         let menu_x = (w - menu_w) / 2.0;
+
+        let bags_rect = Rect::new(
+            w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
+            h - 330.0,
+            5.0 * (SLOT + 4.0) + 20.0,
+            4.0 * (SLOT + 4.0) + 76.0,
+        );
+        let bag_slots = if windows.bags {
+            (0..BAG_SLOTS)
+                .map(|i| {
+                    let (col, row) = (i % 5, i / 5);
+                    Rect::new(
+                        bags_rect.x + 12.0 + col as f32 * (SLOT + 4.0),
+                        bags_rect.y + 36.0 + row as f32 * (SLOT + 4.0),
+                        SLOT,
+                        SLOT,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let char_rect = Rect::new(16.0, 150.0, 280.0, 330.0);
+        let gear_slots = if windows.character {
+            (0..5)
+                .map(|i| {
+                    Rect::new(
+                        char_rect.x + 12.0,
+                        char_rect.y + 40.0 + i as f32 * (SLOT + 6.0),
+                        char_rect.w - 24.0,
+                        SLOT,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let craft_x = if windows.character { 312.0 } else { 16.0 };
+        let craft_rect = Rect::new(craft_x, 150.0, 400.0, 46.0 + RECIPES.len() as f32 * 34.0);
+        let craft_buttons = if windows.crafting {
+            (0..RECIPES.len())
+                .map(|i| {
+                    Rect::new(
+                        craft_rect.x + craft_rect.w - 82.0,
+                        craft_rect.y + 38.0 + i as f32 * 34.0,
+                        70.0,
+                        28.0,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Self {
             player_frame: Rect::new(16.0, 16.0, 250.0, 66.0),
             target_frame: Rect::new(282.0, 16.0, 250.0, 66.0),
@@ -44,11 +106,17 @@ impl Layout {
             hotbar,
             castbar: Rect::new((w - 320.0) / 2.0, bar_y - 46.0, 320.0, 20.0),
             xpbar: Rect::new(bar_x - 120.0, h - 16.0, bar_w + 240.0, 10.0),
-            minimap: (vec2(w - 96.0, 96.0), 80.0),
+            minimap: (vec2(w - 96.0, 104.0), 80.0),
             release_button: Rect::new((w - 200.0) / 2.0, h * 0.3 + 46.0, 200.0, 40.0),
             menu_buttons: std::array::from_fn(|i| {
                 Rect::new(menu_x, h * 0.35 + 50.0 + i as f32 * 52.0, menu_w, 40.0)
             }),
+            bags: windows.bags.then_some(bags_rect),
+            bag_slots,
+            character: windows.character.then_some(char_rect),
+            gear_slots,
+            crafting: windows.crafting.then_some(craft_rect),
+            craft_buttons,
         }
     }
 
@@ -59,6 +127,10 @@ impl Layout {
             || (has_target && self.target_frame.contains(mouse))
             || (dead && self.release_button.contains(mouse))
             || self.minimap.0.distance(mouse) < self.minimap.1
+            || [self.bags, self.character, self.crafting]
+                .iter()
+                .flatten()
+                .any(|r| r.contains(mouse))
     }
 }
 
@@ -87,6 +159,14 @@ pub fn school_color(school: School) -> Color {
     }
 }
 
+pub fn quality_color(q: Quality) -> Color {
+    match q {
+        Quality::Common => Color::new(0.95, 0.95, 0.95, 1.0),
+        Quality::Uncommon => Color::new(0.3, 1.0, 0.25, 1.0),
+        Quality::Rare => Color::new(0.25, 0.55, 1.0, 1.0),
+    }
+}
+
 /// Name color: red for enemies that attack on sight, yellow for ones that
 /// don't, green for friends, grey for the dead.
 pub fn reaction_color(view: &EntityView, my_class: Class) -> Color {
@@ -112,6 +192,7 @@ pub fn class_color(class: Class) -> Color {
         Class::Warrior => Color::new(0.78, 0.61, 0.43, 1.0),
         Class::Mage => Color::new(0.41, 0.8, 0.94, 1.0),
         Class::Cleric => Color::new(0.95, 0.95, 0.95, 1.0),
+        Class::Rogue => Color::new(1.0, 0.96, 0.41, 1.0),
     }
 }
 
@@ -133,11 +214,39 @@ pub fn text_centered(s: &str, cx: f32, y: f32, size: f32, color: Color) {
 pub fn panel(r: Rect) {
     draw_rectangle(r.x, r.y, r.w, r.h, PANEL);
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BORDER);
+    draw_rectangle_lines(
+        r.x + 3.0,
+        r.y + 3.0,
+        r.w - 6.0,
+        r.h - 6.0,
+        1.0,
+        Color::new(BORDER.r, BORDER.g, BORDER.b, 0.35),
+    );
+}
+
+fn window(r: Rect, title: &str) {
+    panel(r);
+    draw_rectangle(
+        r.x + 2.0,
+        r.y + 2.0,
+        r.w - 4.0,
+        26.0,
+        Color::new(0.25, 0.17, 0.08, 0.9),
+    );
+    text(title, r.x + 10.0, r.y + 21.0, 20.0, GOLD);
 }
 
 pub fn bar(r: Rect, frac: f32, fill: Color, label: &str) {
     draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.0, 0.0, 0.0, 0.6));
     draw_rectangle(r.x, r.y, r.w * frac.clamp(0.0, 1.0), r.h, fill);
+    // A little shine along the top.
+    draw_rectangle(
+        r.x,
+        r.y,
+        r.w * frac.clamp(0.0, 1.0),
+        r.h * 0.35,
+        Color::new(1.0, 1.0, 1.0, 0.12),
+    );
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, Color::new(0.0, 0.0, 0.0, 0.8));
     if !label.is_empty() {
         let size = (r.h + 2.0).min(18.0);
@@ -152,22 +261,42 @@ pub fn bar(r: Rect, frac: f32, fill: Color, label: &str) {
 }
 
 pub fn button(r: Rect, label: &str) {
-    let hover = r.contains(vec2(mouse_position().0, mouse_position().1));
-    let bg = if hover {
-        Color::new(0.35, 0.27, 0.12, 0.95)
+    button_ex(r, label, true);
+}
+
+pub fn button_ex(r: Rect, label: &str, enabled: bool) {
+    let hover = enabled && r.contains(vec2(mouse_position().0, mouse_position().1));
+    let bg = if !enabled {
+        Color::new(0.15, 0.13, 0.1, 0.9)
+    } else if hover {
+        Color::new(0.38, 0.27, 0.11, 0.95)
     } else {
-        Color::new(0.22, 0.17, 0.08, 0.95)
+        Color::new(0.24, 0.17, 0.08, 0.95)
     };
     draw_rectangle(r.x, r.y, r.w, r.h, bg);
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if hover { GOLD } else { BORDER });
-    text_centered(label, r.x + r.w / 2.0, r.y + r.h / 2.0 + 7.0, 22.0, WHITE);
+    let size = if r.h < 34.0 { 18.0 } else { 22.0 };
+    let color = if enabled {
+        WHITE
+    } else {
+        Color::new(0.5, 0.5, 0.5, 1.0)
+    };
+    text_centered(
+        label,
+        r.x + r.w / 2.0,
+        r.y + r.h / 2.0 + size * 0.32,
+        size,
+        color,
+    );
 }
 
 fn power_color(view: &EntityView) -> Color {
     match view.kind {
-        EntityKind::Player(c) if c.power_kind() == PowerKind::Rage => {
-            Color::new(0.8, 0.15, 0.15, 1.0)
-        }
+        EntityKind::Player(c) => match c.power_kind() {
+            PowerKind::Rage => Color::new(0.8, 0.15, 0.15, 1.0),
+            PowerKind::Energy => Color::new(0.95, 0.85, 0.2, 1.0),
+            PowerKind::Mana => Color::new(0.2, 0.4, 0.95, 1.0),
+        },
         _ => Color::new(0.2, 0.4, 0.95, 1.0),
     }
 }
@@ -211,14 +340,13 @@ fn unit_frame(r: Rect, view: &EntityView, game: &Game) {
         _ => reaction_color(view, game.class),
     };
     text(&view.name, r.x + 8.0, r.y + 19.0, 20.0, name_color);
-    let my_level = game.my_view().map_or(1, |v| v.level);
     let lvl = level_label(view);
     text(
         &lvl,
         r.x + r.w - 8.0 - text_width(&lvl, 18.0),
         r.y + 18.0,
         18.0,
-        level_color(view, my_level),
+        level_color(view, game.level()),
     );
     if view.in_combat {
         draw_circle(
@@ -278,6 +406,15 @@ fn aura_row(x: f32, y: f32, view: &EntityView) {
             13.0,
             WHITE,
         );
+        if aura.stacks > 1 {
+            text(
+                &aura.stacks.to_string(),
+                r.x + r.w - 7.0,
+                r.y + r.h + 4.0,
+                16.0,
+                GOLD,
+            );
+        }
     }
 }
 
@@ -327,11 +464,26 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
 
     // Unit frames.
     unit_frame(layout.player_frame, me, game);
-    aura_row(
-        layout.player_frame.x,
-        layout.player_frame.bottom() + 6.0,
-        me,
-    );
+    let mut below = layout.player_frame.bottom() + 6.0;
+    if game.class == Class::Rogue {
+        for i in 0..MAX_COMBO_POINTS {
+            let lit = i < game.me.combo_points;
+            let c = vec2(layout.player_frame.x + 16.0 + i as f32 * 20.0, below + 8.0);
+            draw_circle(c.x, c.y, 7.0, Color::new(0.0, 0.0, 0.0, 0.7));
+            draw_circle(
+                c.x,
+                c.y,
+                5.0,
+                if lit {
+                    Color::new(1.0, 0.3, 0.15, 1.0)
+                } else {
+                    Color::new(0.25, 0.2, 0.2, 1.0)
+                },
+            );
+        }
+        below += 20.0;
+    }
+    aura_row(layout.player_frame.x, below, me);
     if let Some(t) = game.target_ent() {
         unit_frame(layout.target_frame, &t.view, game);
         aura_row(
@@ -342,7 +494,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         if let Some(cast) = &t.view.cast {
             let r = Rect::new(
                 layout.target_frame.x + 8.0,
-                layout.target_frame.bottom() + 38.0,
+                layout.target_frame.bottom() + 40.0,
                 layout.target_frame.w - 16.0,
                 14.0,
             );
@@ -365,13 +517,22 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
             );
         }
         if game.me.auto_attacking {
-            let y = layout.target_frame.bottom() + if t.view.cast.is_some() { 72.0 } else { 50.0 };
+            let y = layout.target_frame.bottom() + if t.view.cast.is_some() { 74.0 } else { 52.0 };
             text(
                 "Attacking",
                 layout.target_frame.x + 8.0,
                 y,
                 16.0,
                 Color::new(1.0, 0.5, 0.3, 1.0),
+            );
+        }
+        if t.view.lootable {
+            text(
+                "Right-click to loot",
+                layout.target_frame.x + 120.0,
+                layout.target_frame.bottom() + 52.0,
+                16.0,
+                GOLD,
             );
         }
     }
@@ -420,6 +581,15 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
 
     minimap(game, layout);
     chat(game);
+    if let Some(r) = layout.bags {
+        bags(game, layout, r);
+    }
+    if let Some(r) = layout.character {
+        character(game, layout, r, me);
+    }
+    if let Some(r) = layout.crafting {
+        crafting(game, layout, r);
+    }
 
     // Errors and banners.
     for (i, (msg, t)) in game.errors.iter().enumerate() {
@@ -432,15 +602,25 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
             Color::new(1.0, 0.2, 0.15, alpha),
         );
     }
-    if let Some((msg, t)) = &game.banner {
-        let alpha = (3.0 - t).min(1.0);
+    if let Some((title, sub, t)) = &game.banner {
+        let alpha = (5.0 - t).min(1.0).min(t * 2.0);
+        let y = screen_height() * 0.27;
         text_centered(
-            msg,
+            title,
             screen_width() / 2.0,
-            screen_height() * 0.3,
-            54.0,
-            Color::new(1.0, 0.85, 0.3, alpha),
+            y,
+            58.0,
+            Color::new(1.0, 0.85, 0.45, alpha),
         );
+        if !sub.is_empty() {
+            text_centered(
+                sub,
+                screen_width() / 2.0,
+                y + 34.0,
+                24.0,
+                Color::new(0.95, 0.9, 0.8, alpha),
+            );
+        }
     }
 
     if me.dead {
@@ -477,6 +657,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
             button(*b, label);
         }
     }
+    item_tooltips(game, layout);
 }
 
 fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
@@ -486,40 +667,96 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
     for (i, (r, id)) in layout.hotbar.iter().zip(game.class.abilities()).enumerate() {
         let a = ability(id);
         let c = school_color(a.school);
+        let locked = UNLOCK_LEVELS[i] > me.level;
         draw_rectangle(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0, PANEL);
-        draw_rectangle(
-            r.x,
-            r.y,
-            r.w,
-            r.h,
-            Color::new(c.r * 0.45, c.g * 0.45, c.b * 0.45, 1.0),
-        );
-        draw_rectangle(
-            r.x + 4.0,
-            r.y + 4.0,
-            r.w - 8.0,
-            r.h - 8.0,
-            Color::new(c.r * 0.7, c.g * 0.7, c.b * 0.7, 1.0),
-        );
-
-        let out_of_range = a.targeting == Targeting::Enemy
-            && target.is_some_and(|t| {
-                game.is_hostile(&t.view)
-                    && t.pos.distance(game.pos)
-                        > a.range + 1.0 + render::model_radius(t.view.kind) * 0.5
-            });
-        let label_color = if out_of_range {
-            Color::new(1.0, 0.25, 0.2, 1.0)
+        if locked {
+            draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.12, 0.12, 0.13, 1.0));
+            // A little padlock.
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0 - 4.0);
+            draw_circle_lines(cx, cy - 4.0, 7.0, 3.0, Color::new(0.55, 0.55, 0.58, 1.0));
+            draw_rectangle(
+                cx - 10.0,
+                cy - 2.0,
+                20.0,
+                14.0,
+                Color::new(0.55, 0.55, 0.58, 1.0),
+            );
+            text_centered(
+                &format!("Lv {}", UNLOCK_LEVELS[i]),
+                cx,
+                r.y + r.h - 4.0,
+                15.0,
+                Color::new(0.8, 0.8, 0.8, 1.0),
+            );
         } else {
-            WHITE
-        };
-        text_centered(
-            &abbreviation(a.name),
-            r.x + r.w / 2.0,
-            r.y + r.h / 2.0 + 7.0,
-            20.0,
-            label_color,
-        );
+            draw_rectangle(
+                r.x,
+                r.y,
+                r.w,
+                r.h,
+                Color::new(c.r * 0.45, c.g * 0.45, c.b * 0.45, 1.0),
+            );
+            draw_rectangle(
+                r.x + 4.0,
+                r.y + 4.0,
+                r.w - 8.0,
+                r.h - 8.0,
+                Color::new(c.r * 0.7, c.g * 0.7, c.b * 0.7, 1.0),
+            );
+            let out_of_range = a.targeting == Targeting::Enemy
+                && target.is_some_and(|t| {
+                    game.is_hostile(&t.view)
+                        && t.pos.distance(game.pos)
+                            > a.range + 1.0 + render::model_radius(t.view.kind) * 0.5
+                });
+            let label_color = if out_of_range {
+                Color::new(1.0, 0.25, 0.2, 1.0)
+            } else {
+                WHITE
+            };
+            text_centered(
+                &abbreviation(a.name),
+                r.x + r.w / 2.0,
+                r.y + r.h / 2.0 + 7.0,
+                20.0,
+                label_color,
+            );
+            let unusable = (a.cost > 0.0 && me.power < a.cost)
+                || (a.needs_combo_points() && game.me.combo_points == 0);
+            if unusable {
+                draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.1, 0.2, 0.8, 0.45));
+            }
+            // Cooldown, or the global cooldown, as a shrinking shade.
+            let cd = game
+                .me
+                .cooldowns
+                .iter()
+                .find(|(a, _, _)| *a == id)
+                .map(|(_, rem, total)| (*rem, *total));
+            let (rem, total) = match cd {
+                Some((rem, total)) if rem > game.me.gcd => (rem, total),
+                _ => (game.me.gcd, GCD),
+            };
+            if rem > 0.0 {
+                let frac = (rem / total).clamp(0.0, 1.0);
+                draw_rectangle(
+                    r.x,
+                    r.y + r.h * (1.0 - frac),
+                    r.w,
+                    r.h * frac,
+                    Color::new(0.0, 0.0, 0.0, 0.6),
+                );
+                if rem > 1.6 {
+                    text_centered(
+                        &format!("{:.0}", rem.ceil()),
+                        r.x + r.w / 2.0,
+                        r.y + r.h - 6.0,
+                        18.0,
+                        GOLD,
+                    );
+                }
+            }
+        }
         text(
             &(i + 1).to_string(),
             r.x + 4.0,
@@ -527,51 +764,40 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
             15.0,
             Color::new(0.9, 0.9, 0.9, 1.0),
         );
-        if a.cost > 0.0 && me.power < a.cost {
-            draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.1, 0.2, 0.8, 0.45));
-        }
-        // Cooldown, or the global cooldown, as a shrinking shade.
-        let cd = game
-            .me
-            .cooldowns
-            .iter()
-            .find(|(a, _, _)| *a == id)
-            .map(|(_, rem, total)| (*rem, *total));
-        let (rem, total) = match cd {
-            Some((rem, total)) if rem > game.me.gcd => (rem, total),
-            _ => (game.me.gcd, GCD),
-        };
-        if rem > 0.0 {
-            let frac = (rem / total).clamp(0.0, 1.0);
-            draw_rectangle(
-                r.x,
-                r.y + r.h * (1.0 - frac),
-                r.w,
-                r.h * frac,
-                Color::new(0.0, 0.0, 0.0, 0.6),
-            );
-            if rem > 1.6 {
-                text_centered(
-                    &format!("{:.0}", rem.ceil()),
-                    r.x + r.w / 2.0,
-                    r.y + r.h - 6.0,
-                    18.0,
-                    GOLD,
-                );
-            }
-        }
         let hover = r.contains(mouse);
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if hover { GOLD } else { BORDER });
         if hover {
-            tooltip = Some((a, *r));
+            tooltip = Some((a, *r, UNLOCK_LEVELS[i], locked));
         }
     }
-    if let Some((a, r)) = tooltip {
-        ability_tooltip(a, r, game.class);
+    if let Some((a, r, level, locked)) = tooltip {
+        ability_tooltip(a, r, game.class, locked.then_some(level));
     }
 }
 
-fn ability_tooltip(a: &Ability, slot: Rect, class: Class) {
+fn tooltip_box(lines: &[(String, Color)], anchor: Rect, above: bool) {
+    let w = 300.0;
+    let h = 12.0 + lines.len() as f32 * 20.0;
+    let x = (anchor.x + anchor.w / 2.0 - w / 2.0).clamp(4.0, screen_width() - w - 4.0);
+    let y = if above {
+        anchor.y - h - 10.0
+    } else {
+        anchor.bottom() + 8.0
+    };
+    let y = y.clamp(4.0, screen_height() - h - 4.0);
+    panel(Rect::new(x, y, w, h));
+    for (i, (line, color)) in lines.iter().enumerate() {
+        text(
+            line,
+            x + 10.0,
+            y + 24.0 + i as f32 * 20.0,
+            if i == 0 { 20.0 } else { 17.0 },
+            *color,
+        );
+    }
+}
+
+fn ability_tooltip(a: &Ability, slot: Rect, class: Class, locked_until: Option<u8>) {
     let mut lines: Vec<(String, Color)> = vec![(a.name.to_string(), WHITE)];
     let mut stats = Vec::new();
     if a.cost > 0.0 {
@@ -595,19 +821,245 @@ fn ability_tooltip(a: &Ability, slot: Rect, class: Class) {
     for line in wrap(a.description, 34) {
         lines.push((line, GOLD));
     }
-    let w = 300.0;
-    let h = 12.0 + lines.len() as f32 * 20.0;
-    let x = (slot.x + slot.w / 2.0 - w / 2.0).clamp(4.0, screen_width() - w - 4.0);
-    let y = slot.y - h - 10.0;
-    panel(Rect::new(x, y, w, h));
-    for (i, (line, color)) in lines.iter().enumerate() {
+    if let Some(level) = locked_until {
+        lines.push((
+            format!("Learned at level {level}"),
+            Color::new(1.0, 0.35, 0.3, 1.0),
+        ));
+    }
+    tooltip_box(&lines, slot, true);
+}
+
+fn item_lines(id: ItemId) -> Vec<(String, Color)> {
+    let it = item(id);
+    let grey = Color::new(0.8, 0.8, 0.8, 1.0);
+    let green = Color::new(0.3, 1.0, 0.25, 1.0);
+    let mut lines = vec![(it.name.to_string(), quality_color(it.quality))];
+    match it.kind {
+        ItemKind::Material => lines.push(("Crafting material".into(), grey)),
+        ItemKind::Armor {
+            slot,
+            armor,
+            stamina,
+            power,
+        } => {
+            lines.push((slot.name().into(), grey));
+            lines.push((format!("{armor} Armor"), WHITE));
+            if stamina > 0.0 {
+                lines.push((format!("+{stamina} Stamina"), green));
+            }
+            if power > 0.0 {
+                lines.push((format!("+{power} Power"), green));
+            }
+        }
+    }
+    for line in wrap(it.description, 34) {
+        lines.push((line, GOLD));
+    }
+    lines
+}
+
+fn item_tooltips(game: &Game, layout: &Layout) {
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    for (i, r) in layout.bag_slots.iter().enumerate() {
+        if r.contains(mouse)
+            && let Some(Some((id, _))) = game.me.bags.get(i)
+        {
+            let mut lines = item_lines(*id);
+            if matches!(item(*id).kind, ItemKind::Armor { .. }) {
+                lines.push(("Click to wear".into(), Color::new(0.6, 0.8, 1.0, 1.0)));
+            }
+            tooltip_box(&lines, *r, true);
+        }
+    }
+    let Some(me) = game.my_view() else { return };
+    for (i, r) in layout.gear_slots.iter().enumerate() {
+        if r.contains(mouse)
+            && let Some(id) = me.gear[i]
+        {
+            let mut lines = item_lines(id);
+            lines.push(("Click to take off".into(), Color::new(0.6, 0.8, 1.0, 1.0)));
+            tooltip_box(&lines, *r, false);
+        }
+    }
+}
+
+fn item_icon(r: Rect, id: ItemId, count: u16) {
+    let it = item(id);
+    let c = Color::new(it.color.0, it.color.1, it.color.2, 1.0);
+    draw_rectangle(r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h - 6.0, c);
+    draw_rectangle(
+        r.x + 3.0,
+        r.y + 3.0,
+        r.w - 6.0,
+        (r.h - 6.0) * 0.35,
+        Color::new(1.0, 1.0, 1.0, 0.18),
+    );
+    let q = quality_color(it.quality);
+    draw_rectangle_lines(r.x + 1.0, r.y + 1.0, r.w - 2.0, r.h - 2.0, 2.0, q);
+    let short: String = it
+        .name
+        .split(' ')
+        .filter_map(|w| w.chars().next())
+        .collect();
+    text_centered(
+        &short,
+        r.x + r.w / 2.0,
+        r.y + r.h / 2.0 + 6.0,
+        18.0,
+        Color::new(0.1, 0.08, 0.06, 0.9),
+    );
+    if count > 1 {
+        let s = count.to_string();
         text(
-            line,
-            x + 10.0,
-            y + 24.0 + i as f32 * 20.0,
-            if i == 0 { 20.0 } else { 17.0 },
-            *color,
+            &s,
+            r.x + r.w - 4.0 - text_width(&s, 16.0),
+            r.y + r.h - 4.0,
+            16.0,
+            WHITE,
         );
+    }
+}
+
+fn bags(game: &Game, layout: &Layout, r: Rect) {
+    window(r, "Backpack (B)");
+    for (i, slot) in layout.bag_slots.iter().enumerate() {
+        draw_rectangle(
+            slot.x,
+            slot.y,
+            slot.w,
+            slot.h,
+            Color::new(0.0, 0.0, 0.0, 0.5),
+        );
+        draw_rectangle_lines(
+            slot.x,
+            slot.y,
+            slot.w,
+            slot.h,
+            1.0,
+            Color::new(0.4, 0.33, 0.22, 1.0),
+        );
+        if let Some(Some((id, n))) = game.me.bags.get(i) {
+            item_icon(*slot, *id, *n);
+        }
+    }
+    let money = format_money(game.me.money);
+    text(
+        &money,
+        r.x + r.w - 12.0 - text_width(&money, 20.0),
+        r.bottom() - 12.0,
+        20.0,
+        GOLD,
+    );
+}
+
+fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
+    window(
+        r,
+        &format!("{} - Level {} {} (C)", me.name, me.level, game.class.name()),
+    );
+    for (i, slot) in layout.gear_slots.iter().enumerate() {
+        draw_rectangle(
+            slot.x,
+            slot.y,
+            slot.w,
+            slot.h,
+            Color::new(0.0, 0.0, 0.0, 0.45),
+        );
+        let icon = Rect::new(slot.x, slot.y, SLOT, SLOT);
+        draw_rectangle_lines(
+            icon.x,
+            icon.y,
+            icon.w,
+            icon.h,
+            1.0,
+            Color::new(0.4, 0.33, 0.22, 1.0),
+        );
+        let name = Slot::ALL[i].name();
+        match me.gear[i] {
+            Some(id) => {
+                item_icon(icon, id, 1);
+                text(
+                    item(id).name,
+                    slot.x + SLOT + 8.0,
+                    slot.y + 20.0,
+                    18.0,
+                    quality_color(item(id).quality),
+                );
+                text(
+                    name,
+                    slot.x + SLOT + 8.0,
+                    slot.y + 38.0,
+                    15.0,
+                    Color::new(0.65, 0.65, 0.65, 1.0),
+                );
+            }
+            None => {
+                text(
+                    name,
+                    slot.x + SLOT + 8.0,
+                    slot.y + 28.0,
+                    18.0,
+                    Color::new(0.5, 0.5, 0.5, 1.0),
+                );
+            }
+        }
+    }
+    let s = game.me.stats;
+    let y = r.y + 40.0 + 5.0 * (SLOT + 6.0) + 8.0;
+    text(
+        &format!("Health {}    Armor {}", me.max_hp, s.armor),
+        r.x + 14.0,
+        y,
+        17.0,
+        WHITE,
+    );
+    text(
+        &format!("Stamina +{}    Power +{}%", s.stamina, s.power),
+        r.x + 14.0,
+        y + 20.0,
+        17.0,
+        WHITE,
+    );
+}
+
+fn crafting(game: &Game, layout: &Layout, r: Rect) {
+    window(r, "Crafting (K)");
+    for (i, (recipe, b)) in RECIPES.iter().zip(&layout.craft_buttons).enumerate() {
+        let y = r.y + 38.0 + i as f32 * 34.0;
+        let result = item(recipe.result);
+        text(
+            result.name,
+            r.x + 12.0,
+            y + 14.0,
+            17.0,
+            quality_color(result.quality),
+        );
+        let mut have_all = true;
+        let mats: Vec<String> = recipe
+            .materials
+            .iter()
+            .map(|(m, n)| {
+                let have: u32 = game
+                    .me
+                    .bags
+                    .iter()
+                    .flatten()
+                    .filter(|(id, _)| id == m)
+                    .map(|(_, c)| *c as u32)
+                    .sum();
+                have_all &= have >= *n as u32;
+                format!("{} {} ({have})", n, item(*m).name)
+            })
+            .collect();
+        let color = if have_all {
+            Color::new(0.75, 0.75, 0.75, 1.0)
+        } else {
+            Color::new(0.9, 0.4, 0.35, 1.0)
+        };
+        text(&mats.join(", "), r.x + 12.0, y + 29.0, 14.0, color);
+        button_ex(*b, "Craft", have_all);
+        let _ = i;
     }
 }
 
@@ -635,13 +1087,18 @@ fn nameplates(game: &Game, cam: &Camera3D) {
         .values()
         .filter(|e| Some(e.view.id) != game.my_id && e.pos.distance(game.pos) < 60.0)
         .filter_map(|e| {
-            let head = e.pos + Vec3::Y * (render::model_height(e.view.kind) + 0.45);
+            let h = if e.view.dead {
+                0.9
+            } else {
+                render::model_height(e.view.kind)
+            };
+            let head = e.pos + Vec3::Y * (h + 0.45);
             project(cam, head).map(|p| (e.pos.distance(cam.position), p, e))
         })
         .collect();
     // Far ones first so near ones draw on top.
     plates.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let my_level = game.my_view().map_or(1, |v| v.level);
+    let my_level = game.level();
     for (dist, p, e) in plates {
         let v = &e.view;
         let targeted = game.target == Some(v.id);
@@ -713,8 +1170,15 @@ fn floating_text(game: &Game, cam: &Camera3D) {
 fn minimap(game: &Game, layout: &Layout) {
     let (c, radius) = layout.minimap;
     let range = 90.0;
+    let in_town = vec2(game.pos.x, game.pos.z).length() < shared::world::TOWN_RADIUS;
+    let place = if in_town {
+        render::TOWN_NAME
+    } else {
+        render::ZONE_NAME
+    };
+    text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
     draw_circle(c.x, c.y, radius + 3.0, BORDER);
-    draw_circle(c.x, c.y, radius, Color::new(0.18, 0.3, 0.16, 0.92));
+    draw_circle(c.x, c.y, radius, Color::new(0.38, 0.32, 0.17, 0.92));
     // Map up is where the camera faces.
     let f = vec2(game.cam_yaw.sin(), game.cam_yaw.cos());
     let r = vec2(-f.y, f.x);
@@ -729,7 +1193,7 @@ fn minimap(game: &Game, layout: &Layout) {
             c.x + town.x,
             c.y + town.y,
             tr,
-            Color::new(0.55, 0.52, 0.45, 0.6),
+            Color::new(0.55, 0.5, 0.42, 0.7),
         );
     }
     for e in game.entities.values() {
@@ -740,7 +1204,9 @@ fn minimap(game: &Game, layout: &Layout) {
         if m.length() > radius - 3.0 {
             continue;
         }
-        let color = if e.view.dead {
+        let color = if e.view.lootable {
+            GOLD
+        } else if e.view.dead {
             Color::new(0.5, 0.5, 0.5, 1.0)
         } else if e.view.kind.is_player() {
             Color::new(0.3, 0.6, 1.0, 1.0)
@@ -790,14 +1256,29 @@ fn chat(game: &Game) {
             Color::new(0.0, 0.0, 0.0, 0.4),
         );
     }
-    let start = game.chat.len().saturating_sub(shown);
-    let mut y = bottom - line_h * (game.chat.len() - start) as f32;
-    for line in &game.chat[start..] {
-        let mut s = line.text.clone();
-        while text_width(&s, 17.0) > w - 10.0 && !s.is_empty() {
-            s.pop();
+    // Wrap long lines, then show the newest ones.
+    let mut lines: Vec<(String, Color)> = Vec::new();
+    for line in &game.chat[game.chat.len().saturating_sub(shown)..] {
+        let mut current = String::new();
+        for word in line.text.split(' ') {
+            let candidate = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+            if text_width(&candidate, 17.0) > w - 10.0 && !current.is_empty() {
+                lines.push((std::mem::take(&mut current), line.color));
+                current = format!("  {word}");
+            } else {
+                current = candidate;
+            }
         }
-        text(&s, x, y, 17.0, line.color);
+        lines.push((current, line.color));
+    }
+    let start = lines.len().saturating_sub(shown);
+    let mut y = bottom - line_h * (lines.len() - start) as f32;
+    for (s, color) in &lines[start..] {
+        text(s, x, y, 17.0, *color);
         y += line_h;
     }
     if let Some(input) = &game.chat_input {
@@ -811,33 +1292,35 @@ fn chat(game: &Game) {
             x,
             bottom + 4.0,
             18.0,
-            Color::new(1.0, 1.0, 1.0, 1.0),
+            WHITE,
         );
     }
 }
 
 fn help() {
     let lines = [
-        ("W A S D / arrows", "Run and turn (Q E strafe)"),
+        ("W S / arrows", "Run forward and back"),
+        ("A D  (Q E)", "Strafe left and right"),
+        ("Left / Right", "Turn"),
         ("Space", "Jump"),
         ("Left drag", "Look around"),
-        ("Right drag", "Steer with the mouse"),
+        ("Right drag", "Steer (cursor locks)"),
         ("Both buttons", "Run forward"),
         ("Mouse wheel", "Zoom"),
         ("Tab", "Target the next enemy"),
         ("Left click", "Target"),
-        ("Right click", "Target and attack"),
-        ("F1", "Target yourself"),
+        ("Right click", "Attack, or loot a corpse"),
         ("1 - 6", "Use abilities"),
-        ("T", "Start / stop attacking"),
-        ("Esc", "Clear target / menu"),
+        ("T  /  F1", "Toggle attack / target self"),
+        ("B  C  K", "Bags, character, crafting"),
+        ("Esc", "Close / clear target / menu"),
         ("Enter", "Chat (/who lists players)"),
         ("H", "Hide this help"),
     ];
     let w = 380.0;
     let h = 40.0 + lines.len() as f32 * 20.0;
     let x = screen_width() - w - 16.0;
-    let y = 220.0;
+    let y = 236.0;
     panel(Rect::new(x, y, w, h));
     text("Controls", x + 12.0, y + 26.0, 22.0, GOLD);
     for (i, (key, what)) in lines.iter().enumerate() {

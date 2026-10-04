@@ -9,7 +9,7 @@ mod render;
 use macroquad::prelude::*;
 
 use game::{Game, Outcome};
-use menu::Menu;
+use menu::{CharacterOutcome, Characters, Login};
 use render::Scene;
 
 fn window_conf() -> macroquad::conf::Conf {
@@ -22,7 +22,6 @@ fn window_conf() -> macroquad::conf::Conf {
             window_resizable: true,
             ..Default::default()
         },
-        // The terrain is one big mesh.
         draw_call_vertex_capacity: 65_000,
         draw_call_index_capacity: 200_000,
         ..Default::default()
@@ -30,23 +29,50 @@ fn window_conf() -> macroquad::conf::Conf {
 }
 
 enum Screen {
-    Menu(Menu),
-    Game(Box<Game>, Menu),
+    Login,
+    Characters(Box<Characters>),
+    /// Playing, plus the account and whether it's solo, to go back to the
+    /// character list on logout.
+    Game(Box<Game>, String, bool),
 }
 
 #[macroquad::main(window_conf)]
 async fn main() {
     let scene = Scene::new();
-    let mut screen = Screen::Menu(Menu::new(None));
+    // The login screen lives for the whole run, so solo play keeps using
+    // the same local server.
+    let mut login = Login::new();
+    let mut screen = Screen::Login;
     loop {
         screen = match screen {
-            Screen::Menu(mut menu) => match menu.frame(&scene) {
-                Some(game) => Screen::Game(Box::new(game), menu),
-                None => Screen::Menu(menu),
+            Screen::Login => match login.frame(&scene) {
+                Some(chars) => Screen::Characters(Box::new(chars)),
+                None => Screen::Login,
             },
-            Screen::Game(mut game, menu) => match game.frame(&scene) {
-                Outcome::Continue => Screen::Game(game, menu),
-                Outcome::Leave(reason) => Screen::Menu(menu.returning(reason)),
+            Screen::Characters(mut chars) => match chars.frame(&scene) {
+                CharacterOutcome::Stay => Screen::Characters(chars),
+                CharacterOutcome::Back(message) => {
+                    if let Some(m) = message {
+                        login = login.with_message(m);
+                    }
+                    Screen::Login
+                }
+                CharacterOutcome::Play(game) => {
+                    let (account, solo) = chars.account();
+                    Screen::Game(game, account.to_string(), solo)
+                }
+            },
+            Screen::Game(mut game, account, solo) => match game.frame(&scene) {
+                Outcome::Continue => Screen::Game(game, account, solo),
+                Outcome::Logout => Screen::Characters(Box::new(Characters::new(
+                    game.into_connection(),
+                    account,
+                    solo,
+                ))),
+                Outcome::Disconnected(reason) => {
+                    login = login.with_message(reason);
+                    Screen::Login
+                }
             },
         };
         next_frame().await;
