@@ -11,9 +11,11 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Race, Slot};
+use crate::talents::Ranks;
+use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -72,6 +74,12 @@ pub enum ClientMsg {
     },
     /// Use the item in a bag slot (drink a potion).
     UseItem(usize),
+    /// Put a point into the talent with this index (see `talents`).
+    LearnTalent(usize),
+    /// Take back every talent point.
+    ResetTalents,
+    /// A sandbox server's cheats. Refused on normal servers.
+    Sandbox(SandboxCmd),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +110,27 @@ pub struct CharacterSummary {
     pub level: u8,
     pub appearance: Appearance,
     pub gear: [Option<ItemId>; 5],
+}
+
+/// What you can do in sandbox mode.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SandboxCmd {
+    SetLevel(u8),
+    AddMoney(u32),
+    GiveItem(ItemId),
+    /// Go to a starting area's town.
+    Teleport(Zone),
+    /// Take no damage and pay nothing for abilities.
+    ToggleGod,
+    /// A mob of your choice appears in front of you.
+    SpawnMob {
+        kind: MobKind,
+        level: u8,
+    },
+    /// Removes every mob you spawned.
+    ClearSpawns,
+    /// Cooldowns, health and power back to full.
+    Refresh,
 }
 
 /// The part of the world a player can see, sent every server tick.
@@ -201,6 +230,12 @@ pub struct SelfView {
     pub money: u32,
     pub bags: Vec<Option<Stack>>,
     pub stats: Stats,
+    /// Ranks in each of your class's talents.
+    pub talents: Ranks,
+    /// The server is in sandbox mode.
+    pub sandbox: bool,
+    /// Sandbox god mode is on.
+    pub god: bool,
 }
 
 /// Totals from worn armor.

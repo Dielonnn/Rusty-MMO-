@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use shared::data::*;
 use shared::protocol::{CharacterSummary, Stack, Stats};
+use shared::talents::{self, Ranks, TALENTS};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Character {
@@ -18,6 +19,8 @@ pub struct Character {
     pub yaw: f32,
     pub bags: Vec<Option<Stack>>,
     pub gear: [Option<ItemId>; 5],
+    #[serde(default)]
+    pub talents: Ranks,
 }
 
 impl Character {
@@ -36,6 +39,7 @@ impl Character {
             yaw: 0.0,
             bags: vec![None; BAG_SLOTS],
             gear: [None; 5],
+            talents: [0; TALENTS],
         }
     }
 
@@ -52,6 +56,7 @@ impl Character {
     /// Repairs anything out of range, e.g. after hand-editing a save file.
     pub fn sanitize(&mut self) {
         self.level = self.level.clamp(1, MAX_LEVEL);
+        self.talents = talents::sanitize(&self.talents, self.level);
         self.appearance = self.appearance.clamped();
         self.bags.resize(BAG_SLOTS, None);
         for slot in &mut self.bags {

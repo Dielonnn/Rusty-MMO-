@@ -35,6 +35,9 @@ pub struct Layout {
     pub craft_buttons: Vec<Rect>,
     pub vendor: Option<Rect>,
     pub vendor_buttons: Vec<Rect>,
+    pub talents: Option<Rect>,
+    pub sandbox: Option<Rect>,
+    pub map: bool,
 }
 
 impl Layout {
@@ -149,6 +152,13 @@ impl Layout {
             craft_buttons,
             vendor: windows.vendor.is_some().then_some(vendor_rect),
             vendor_buttons,
+            talents: windows
+                .talents
+                .then(|| crate::panels::talent_layout().window),
+            sandbox: windows
+                .sandbox
+                .then(|| crate::panels::sandbox_layout(Zone::Amberfall).window),
+            map: windows.map,
         }
     }
 
@@ -159,10 +169,18 @@ impl Layout {
             || (has_target && self.target_frame.contains(mouse))
             || (dead && self.release_button.contains(mouse))
             || self.minimap.0.distance(mouse) < self.minimap.1
-            || [self.bags, self.character, self.crafting, self.vendor]
-                .iter()
-                .flatten()
-                .any(|r| r.contains(mouse))
+            || self.map
+            || [
+                self.bags,
+                self.character,
+                self.crafting,
+                self.vendor,
+                self.talents,
+                self.sandbox,
+            ]
+            .iter()
+            .flatten()
+            .any(|r| r.contains(mouse))
     }
 }
 
@@ -634,6 +652,12 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if let Some(r) = layout.vendor {
         vendor(game, layout, r);
     }
+    if layout.sandbox.is_some() {
+        crate::panels::draw_sandbox(game, me.level);
+    }
+    if layout.talents.is_some() {
+        crate::panels::draw_talents(game, me.level);
+    }
 
     // Errors and banners.
     for (i, (msg, t)) in game.errors.iter().enumerate() {
@@ -702,6 +726,11 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         }
     }
     item_tooltips(game, layout);
+    if layout.map
+        && let Some((_, tex)) = &game.map_texture
+    {
+        crate::panels::draw_map(game, tex);
+    }
 }
 
 fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
@@ -962,7 +991,7 @@ fn item_tooltips(game: &Game, layout: &Layout) {
     }
 }
 
-fn item_icon(r: Rect, id: ItemId, count: u16) {
+pub fn item_icon(r: Rect, id: ItemId, count: u16) {
     let it = item(id);
     let c = Color::new(it.color.0, it.color.1, it.color.2, 1.0);
     draw_rectangle(r.x + 3.0, r.y + 3.0, r.w - 6.0, r.h - 6.0, c);
@@ -1365,6 +1394,7 @@ fn minimap(game: &Game, layout: &Layout) {
         Color::new(1.0, 0.95, 0.4, 1.0),
     );
     let local = zone.to_local(vec2(game.pos.x, game.pos.z));
+    crate::panels::minimap_compass(c, radius, game.cam_yaw);
     let label = format!("{:.0}, {:.0}", local.x, local.y);
     text_centered(
         &label,
@@ -1448,6 +1478,8 @@ fn help() {
         ("1 - 6, E", "Use abilities"),
         ("T  /  F1", "Toggle attack / target self"),
         ("B  C  K", "Bags, character, crafting"),
+        ("N  M", "Talents, world map"),
+        ("P", "Sandbox panel (sandbox mode)"),
         ("Esc", "Close / clear target / menu"),
         ("Enter", "Chat (/who lists players)"),
         ("H", "Hide this help"),

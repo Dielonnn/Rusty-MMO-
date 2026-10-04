@@ -328,10 +328,11 @@ impl Server {
 
 /// Starts a server on a background thread, listening on localhost only and
 /// saving to `save_path`. Used by the client's single-player mode.
-pub fn spawn_local(save_path: PathBuf) -> io::Result<SocketAddr> {
+pub fn spawn_local(save_path: PathBuf, sandbox: bool) -> io::Result<SocketAddr> {
     let store = Store::open(save_path)?;
     let mut server = Server::bind("127.0.0.1:0", store)?;
     server.verbose = false;
+    server.world.sandbox = sandbox;
     let addr = server.local_addr()?;
     thread::Builder::new()
         .name("local-server".into())

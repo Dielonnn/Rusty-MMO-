@@ -1,6 +1,6 @@
 //! Dedicated server.
 //!
-//! Usage: `server [--bind ADDRESS] [--port PORT] [--save FILE]`
+//! Usage: `server [--bind ADDRESS] [--port PORT] [--save FILE] [--sandbox]`
 
 use std::path::PathBuf;
 
@@ -12,6 +12,7 @@ fn main() {
     let mut bind = "0.0.0.0".to_string();
     let mut port = DEFAULT_PORT;
     let mut save = PathBuf::from("characters.json");
+    let mut sandbox = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -23,8 +24,10 @@ fn main() {
                     .expect("--port needs a number")
             }
             "--save" => save = args.next().expect("--save needs a file name").into(),
+            "--sandbox" => sandbox = true,
             "-h" | "--help" => {
-                println!("Usage: server [--bind ADDRESS] [--port PORT] [--save FILE]");
+                println!("Usage: server [--bind ADDRESS] [--port PORT] [--save FILE] [--sandbox]");
+                println!("--sandbox lets every player use the sandbox cheats.");
                 println!("Defaults: --bind 0.0.0.0 --port {DEFAULT_PORT} --save characters.json");
                 return;
             }
@@ -41,13 +44,17 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let server = match Server::bind((bind.as_str(), port), store) {
+    let mut server = match Server::bind((bind.as_str(), port), store) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Couldn't listen on {bind}:{port}: {e}");
             std::process::exit(1);
         }
     };
+    server.world.sandbox = sandbox;
+    if sandbox {
+        println!("Sandbox mode: players can use cheats.");
+    }
     println!(
         "Rusty MMO {} server listening on {}, saving characters to {}",
         shared::VERSION,

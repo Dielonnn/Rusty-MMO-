@@ -2,12 +2,13 @@
 //!
 //! Placement is deterministic, so the client draws the same scenery the
 //! collision checks use. Props are laid out in each zone's local coordinates
-//! (see `world`) and returned in world coordinates.
+//! (see `world` and `layout`) and returned in world coordinates.
 
 use std::collections::HashMap;
 
 use glam::{Vec2, Vec3, vec2};
 
+use crate::layout::SiteKind;
 use crate::world::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,12 @@ pub enum PropKind {
     Lamp,
     Barrel,
     Crate,
+    Well,
+    Cart,
+    /// Points the way out of town.
+    Signpost,
+    /// A tall pole with a flag in the zone's colors.
+    Banner,
     // Wilds
     /// The zone's signature tree.
     Tree,
@@ -35,6 +42,9 @@ pub enum PropKind {
     Crystal,
     Tombstone,
     Bones,
+    Flowers,
+    /// A fallen log.
+    Log,
     // Farms
     /// `variant` 0 or 1 picks which of the two fields it grows in.
     Crop,
@@ -97,21 +107,17 @@ impl Prop {
             Stake => Shape::Circle(0.25),
             Campfire => Shape::Circle(1.0),
             Pillar => Shape::Circle(0.85),
-            Shrub | Mushrooms | Bones | Crop | RuneTile => return None,
+            Well => Shape::Circle(1.3),
+            Cart => Shape::Box(0.9, 1.6),
+            Signpost | Banner => Shape::Circle(0.2),
+            Log => Shape::Box(0.4, 1.6 * s),
+            Shrub | Mushrooms | Bones | Crop | RuneTile | Flowers => return None,
         })
     }
 }
 
 /// Where the merchant stands in every town (local coordinates).
 pub const MERCHANT_SPOT: Vec2 = Vec2::new(6.4, 4.8);
-/// Camp sites in the shared layout. They match the mob camps on the server.
-pub const HUMANOID_CAMPS: [Vec2; 3] = [
-    Vec2::new(92.0, -72.0),
-    Vec2::new(122.0, 92.0),
-    Vec2::new(-120.0, -120.0),
-];
-pub const ELITE_RUINS: Vec2 = Vec2::new(-150.0, -150.0);
-pub const FIELDS: [Vec2; 2] = [Vec2::new(38.0, -30.0), Vec2::new(-36.0, -32.0)];
 
 /// A tiny deterministic random number generator for placing scenery.
 pub struct Scatter(pub u32);
@@ -129,16 +135,21 @@ impl Scatter {
     }
 }
 
-/// Places that should stay clear of random scenery (local coordinates).
-pub fn near_landmark(x: f32, z: f32) -> bool {
+/// Places in a zone that should stay clear of random scenery (local
+/// coordinates).
+pub fn near_landmark(zone: Zone, x: f32, z: f32) -> bool {
     let p = vec2(x, z);
     let d = p.length();
+    let l = zone.layout();
     d < TOWN_RADIUS + 8.0
         || x.abs() < 5.0 && d < 90.0
         || z.abs() < 5.0 && d < 90.0
-        || HUMANOID_CAMPS.iter().any(|c| c.distance(p) < 14.0)
-        || ELITE_RUINS.distance(p) < 16.0
-        || FIELDS.iter().any(|f| f.distance(p) < 15.0)
+        || l.sites.iter().any(|s| match s.kind {
+            SiteKind::Camp => s.center.distance(p) < 14.0,
+            SiteKind::Ruins => s.center.distance(p) < 16.0,
+            SiteKind::Beasts => false,
+        })
+        || l.fields.iter().any(|f| f.distance(p) < 15.0)
 }
 
 struct Builder {
@@ -172,17 +183,25 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         props: Vec::new(),
     };
 
+    let layout = zone.layout();
+
     // The town.
-    for (i, deg) in [28.0f32, 62.0, 118.0, 152.0, 208.0, 242.0, 298.0, 332.0]
+    for (i, h) in layout.houses.iter().enumerate() {
+        b.add(House, h.pos, h.yaw, 1.0, i as u8);
+    }
+    b.add(Centerpiece, Vec2::ZERO, 0.0, 1.0, 0);
+    b.add(Well, layout.well, 0.3, 1.0, 0);
+    b.add(Cart, vec2(-10.5, 9.5), 0.9, 1.0, 0);
+    // Signposts and banners where the roads leave town.
+    for (k, (x, z)) in [(0.0, 31.0), (31.0, 0.0), (0.0, -31.0), (-31.0, 0.0)]
         .into_iter()
         .enumerate()
     {
-        let a = deg.to_radians();
-        let p = vec2(a.cos() * 20.0, a.sin() * 20.0);
-        let yaw = (-p.x).atan2(-p.y);
-        b.add(House, p, yaw, 1.0, i as u8);
+        let p = vec2(x, z);
+        let side = vec2(-z, x).normalize() * 4.0;
+        b.add(Signpost, p + side * 0.9, (-x).atan2(-z), 1.0, k as u8);
+        b.add(Banner, p - side, 0.0, 1.0, k as u8);
     }
-    b.add(Centerpiece, Vec2::ZERO, 0.0, 1.0, 0);
     for (i, p) in [vec2(8.0, 6.0), vec2(-8.0, 6.5)].into_iter().enumerate() {
         b.add(Stall, p, (-p.x).atan2(-p.y), 1.0, i as u8);
     }
@@ -220,7 +239,7 @@ pub fn props(zone: Zone) -> Vec<Prop> {
 
     // Two fields with crops, hay, a scarecrow and fences.
     let mut rng = Scatter(0xFA12 + (zone.index() as u32).wrapping_mul(7919));
-    for (fi, f) in FIELDS.into_iter().enumerate() {
+    for (fi, &f) in layout.fields.iter().enumerate() {
         for i in 0..9 {
             for j in 0..9 {
                 if rng.unit() < 0.45 {
@@ -260,7 +279,7 @@ pub fn props(zone: Zone) -> Vec<Prop> {
     }
 
     // Camps and the elite's ruins.
-    for c in HUMANOID_CAMPS {
+    for c in layout.camps() {
         for i in 0..4 {
             let a = i as f32 * 1.6 + 0.4;
             b.add(Tent, c + vec2(a.cos(), a.sin()) * 7.0, a, 1.0, i as u8);
@@ -271,12 +290,13 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         }
         b.add(Campfire, c, 0.0, 1.0, 0);
     }
+    let ruins = layout.ruins();
     for i in 0..9 {
         let a = i as f32 * std::f32::consts::TAU / 9.0;
         let height = [6.0, 2.5, 5.0, 1.5, 6.5, 3.5, 4.0, 2.0, 5.5][i];
         b.add(
             Pillar,
-            ELITE_RUINS + vec2(a.cos(), a.sin()) * 11.0,
+            ruins + vec2(a.cos(), a.sin()) * 11.0,
             a,
             height,
             i as u8,
@@ -284,13 +304,7 @@ pub fn props(zone: Zone) -> Vec<Prop> {
     }
     for k in 0..6 {
         let a = k as f32 * 1.047;
-        b.add(
-            RuneTile,
-            ELITE_RUINS + vec2(a.cos(), a.sin()) * 5.0,
-            a,
-            1.0,
-            0,
-        );
+        b.add(RuneTile, ruins + vec2(a.cos(), a.sin()) * 5.0, a, 1.0, 0);
     }
 
     // The wilds: each zone has its own mix.
@@ -300,8 +314,10 @@ pub fn props(zone: Zone) -> Vec<Prop> {
             (Tree, 0.42),
             (DeadTree, 0.08),
             (Rock, 0.12),
-            (Shrub, 0.06),
-            (Mushrooms, 0.04),
+            (Shrub, 0.04),
+            (Mushrooms, 0.03),
+            (Flowers, 0.02),
+            (Log, 0.02),
         ],
         Zone::Scorchsand => &[
             (Cactus, 0.35),
@@ -315,8 +331,10 @@ pub fn props(zone: Zone) -> Vec<Prop> {
             (Tree, 0.5),
             (Conifer, 0.1),
             (Rock, 0.1),
-            (Shrub, 0.15),
-            (Mushrooms, 0.15),
+            (Shrub, 0.1),
+            (Mushrooms, 0.1),
+            (Flowers, 0.08),
+            (Log, 0.02),
         ],
         Zone::Grubdeep => &[
             (Stalagmite, 0.4),
@@ -326,14 +344,16 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         ],
         Zone::Frostcog => &[
             (Conifer, 0.55),
-            (Rock, 0.25),
+            (Rock, 0.23),
             (DeadTree, 0.08),
-            (Shrub, 0.12),
+            (Shrub, 0.1),
+            (Log, 0.04),
         ],
         Zone::Witherwood => &[
-            (DeadTree, 0.45),
+            (DeadTree, 0.42),
             (Tombstone, 0.15),
-            (Rock, 0.1),
+            (Rock, 0.08),
+            (Log, 0.05),
             (Shrub, 0.1),
             (Mushrooms, 0.1),
             (Bones, 0.1),
@@ -353,8 +373,8 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         let size = rng.range(0.8, 1.4);
         let yaw = rng.range(0.0, std::f32::consts::TAU);
         let variant = (rng.unit() * 8.0) as u8;
-        let h = layout_height(x, z);
-        if near_landmark(x, z) || !(water + 0.4..=16.0).contains(&h) {
+        let h = layout.terrain.height(x, z);
+        if near_landmark(zone, x, z) || !(water + 0.4..=16.0).contains(&h) {
             continue;
         }
         let mut acc = 0.0;
@@ -497,10 +517,7 @@ mod tests {
     fn every_zone_has_a_town_and_wilds() {
         for zone in Zone::ALL {
             let props = props(zone);
-            assert_eq!(
-                props.iter().filter(|p| p.kind == PropKind::House).count(),
-                8
-            );
+            assert!(props.iter().filter(|p| p.kind == PropKind::House).count() >= 6);
             assert!(props.len() > 400, "{zone:?} has only {} props", props.len());
             assert!(props.iter().all(|p| Zone::at(p.pos) == zone));
         }

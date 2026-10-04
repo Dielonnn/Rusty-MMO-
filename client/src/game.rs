@@ -30,6 +30,10 @@ pub struct Ent {
     walk: f32,
     /// Seconds since the last attack started, for the swing animation.
     swing: f32,
+    /// Attacks so far, to alternate moves.
+    combo: u32,
+    /// Seconds since last hurt.
+    hurt: f32,
 }
 
 impl Ent {
@@ -90,11 +94,21 @@ pub struct Windows {
     pub crafting: bool,
     /// The merchant whose wares are shown.
     pub vendor: Option<EntityId>,
+    pub talents: bool,
+    pub sandbox: bool,
+    /// The world map covers the screen.
+    pub map: bool,
 }
 
 impl Windows {
     pub fn any(&self) -> bool {
-        self.bags || self.character || self.crafting || self.vendor.is_some()
+        self.bags
+            || self.character
+            || self.crafting
+            || self.vendor.is_some()
+            || self.talents
+            || self.sandbox
+            || self.map
     }
 }
 
@@ -143,6 +157,10 @@ pub struct Game {
     colliders: Colliders,
     /// Show the zone name once we know where we are.
     banner_due: bool,
+    /// The world map picture of the current zone.
+    pub map_texture: Option<(Zone, Texture2D)>,
+    /// What the talents add up to (for run speed).
+    bonuses: shared::talents::Bonuses,
 }
 
 pub enum Outcome {
@@ -195,6 +213,8 @@ impl Game {
             zone: Zone::Amberfall,
             colliders: Colliders::for_zone(Zone::Amberfall),
             banner_due: true,
+            map_texture: None,
+            bonuses: Default::default(),
         };
         game.system("Welcome! Press H to show or hide the controls.");
         game
@@ -264,8 +284,16 @@ impl Game {
         self.send_movement(dt);
 
         self.update_zone();
+        if self.windows.map
+            && self
+                .map_texture
+                .as_ref()
+                .is_none_or(|(z, _)| *z != self.zone)
+        {
+            self.map_texture = Some((self.zone, crate::panels::map_texture(self.zone)));
+        }
         let cam = self.camera();
-        render::draw_sky(&cam, self.zone, |p| hud::project(&cam, p));
+        render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
         set_camera(&cam);
         scene.begin_3d(self.zone);
         self.draw_world(scene);
@@ -337,13 +365,21 @@ impl Game {
                                     yaw,
                                     walk: 0.0,
                                     swing: 10.0,
+                                    combo: 0,
+                                    hurt: 10.0,
                                 },
                             );
                         }
                     }
                 }
                 self.entities.retain(|id, _| seen.contains(id));
+                if snap.me.talents != self.me.talents {
+                    self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
+                }
                 self.me = snap.me;
+                if !self.me.sandbox {
+                    self.windows.sandbox = false;
+                }
                 // Our saved position arrives with the first snapshot.
                 if first && let Some(me) = self.my_id.and_then(|id| self.entities.get(&id)) {
                     self.pos = me.view.pos;
@@ -398,6 +434,12 @@ impl Game {
                     && let Some(e) = self.entities.get_mut(&source)
                 {
                     e.swing = 0.0;
+                    e.combo = e.combo.wrapping_add(1);
+                }
+                if amount > 0
+                    && let Some(e) = self.entities.get_mut(&target)
+                {
+                    e.hurt = 0.0;
                 }
                 if Some(source) == me || Some(target) == me {
                     let color = if Some(target) == me {
@@ -476,6 +518,7 @@ impl Game {
                     && let Some(e) = self.entities.get_mut(&caster)
                 {
                     e.swing = 0.0;
+                    e.combo = e.combo.wrapping_add(1);
                 }
                 let soothing = a.effects.iter().any(|e| {
                     matches!(
@@ -762,6 +805,8 @@ impl Game {
         if !typing && is_key_pressed(KeyCode::Escape) {
             if self.menu_open {
                 self.menu_open = false;
+            } else if self.windows.map {
+                self.windows.map = false;
             } else if self.windows.any() {
                 self.windows = Windows::default();
             } else if self.target.is_some() {
@@ -888,6 +933,19 @@ impl Game {
         if is_key_pressed(KeyCode::K) {
             self.windows.crafting = !self.windows.crafting;
         }
+        if is_key_pressed(KeyCode::M) {
+            self.windows.map = !self.windows.map;
+        }
+        if is_key_pressed(KeyCode::N) {
+            self.windows.talents = !self.windows.talents;
+        }
+        if is_key_pressed(KeyCode::P) {
+            if self.me.sandbox {
+                self.windows.sandbox = !self.windows.sandbox;
+            } else {
+                self.error("The sandbox panel only works in sandbox mode.");
+            }
+        }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
             self.chat_input = Some(String::new());
         } else if is_key_pressed(KeyCode::Slash) {
@@ -919,6 +977,25 @@ impl Game {
     }
 
     fn click_ui(&mut self, layout: &Layout, mouse: Vec2, left: bool) {
+        if self.windows.map {
+            return;
+        }
+        let level = self.level();
+        if self.windows.sandbox
+            && left
+            && let Some(cmd) = crate::panels::sandbox_click(self.zone, level, mouse)
+        {
+            self.send(ClientMsg::Sandbox(cmd));
+            return;
+        }
+        if self.windows.talents && layout.talents.is_some_and(|r| r.contains(mouse)) {
+            match crate::panels::talent_click(mouse) {
+                Some(i) if i == shared::talents::TALENTS => self.send(ClientMsg::ResetTalents),
+                Some(i) => self.send(ClientMsg::LearnTalent(i)),
+                None => {}
+            }
+            return;
+        }
         if let Some(slot) = layout.hotbar.iter().position(|r| r.contains(mouse)) {
             self.use_slot(slot);
         } else if left && layout.player_frame.contains(mouse) {
@@ -995,7 +1072,7 @@ impl Game {
                 }
             }
         }
-        factor
+        factor * (1.0 + self.bonuses.speed)
     }
 
     fn simulate(&mut self, dt: f32) {
@@ -1094,6 +1171,7 @@ impl Game {
                 e.walk += before.distance(e.pos) * 1.3;
             }
             e.swing += dt * 2.5;
+            e.hurt += dt;
         }
 
         for f in &mut self.floats {
@@ -1186,12 +1264,21 @@ impl Game {
             b.ground_ring(t.pos, render::model_radius(t.view.kind), 0.14, color);
         }
         for e in self.entities.values() {
+            let mine = Some(e.view.id) == self.my_id;
+            let airborne = if mine {
+                !self.grounded
+            } else {
+                e.pos.y > terrain_height(e.pos.x, e.pos.z) + 0.35
+            };
             let pose = Pose {
                 walk: e.walk,
-                moving: e.view.moving || (Some(e.view.id) == self.my_id && self.moving),
+                moving: e.view.moving || (mine && self.moving),
                 casting: e.view.cast.is_some(),
                 swing: e.swing.min(1.0),
+                combo: e.combo,
                 dead: e.view.dead,
+                airborne,
+                hurt: (1.0 - e.hurt / 0.35).max(0.0),
                 time: self.time + e.view.id as f32,
             };
             render::draw_model(b, &e.look(), e.pos, e.yaw, pose);
@@ -1247,7 +1334,7 @@ impl Game {
                 b.air_ring(e.pos + Vec3::Y * 0.3, r.radius * t.sqrt(), 0.5, color);
             }
         }
-        scene.draw_effects(self.zone, b, self.time);
+        scene.draw_effects(self.zone, b, self.time, self.pos);
         b.flush();
         scene.draw_water(self.zone);
     }

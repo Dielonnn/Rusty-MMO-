@@ -25,6 +25,11 @@ This opens the client. On the login screen, enter an account name, then:
   on macOS).
 - **Join Server** connects to the address in the box (`host` or `host:port`).
   Your characters are saved on that server, under your account name.
+- **Sandbox** starts a private world with cheats, for trying things out. Press
+  `P` in game for the sandbox panel: set your level, add money, give yourself
+  any item, teleport to any starting area, summon any of the area's mobs, turn
+  on god mode (no damage, free abilities), or refresh your cooldowns, health
+  and power. Sandbox characters are kept apart from your solo ones.
 
 Then pick a character or create one: choose a name, race, class, build, skin,
 hair style and hair color, and press **Enter World**. You start in your race's
@@ -35,6 +40,7 @@ To host a game for friends, run the dedicated server:
 ```sh
 cargo run --release -p server                       # listens on 0.0.0.0:7878
 cargo run --release -p server -- --port 9000 --save my_world.json
+cargo run --release -p server -- --sandbox          # everyone may use the cheats
 ```
 
 Characters are saved to `characters.json` (or the `--save` file) every few
@@ -88,6 +94,9 @@ title and on the login screen.
 | `1`-`6`, `E`, or click the action bar | Use an ability |
 | `T` | Start / stop auto attack |
 | `B` / `C` / `K` | Backpack / character / crafting |
+| `N` | Talents |
+| `M` | World map |
+| `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
 | `Enter` | Chat (`/who` lists who's online) |
 | `H` | Show / hide the controls |
@@ -162,6 +171,18 @@ seconds. Health regenerates out of combat. Rogues and Monks build combo points
 and spend them on Eviscerate or Blackout Kick. Backstab only works from behind.
 The Warrior is now the Barbarian; old Warrior characters load as Barbarians.
 
+### Talents
+
+From level 2 you earn a talent point every level (9 at level 10). Press `N`
+to open your class's talent tree: three branches (a Mage has Fire, Frost and
+Arcane, a Rogue Assassination, Combat and Subtlety, and so on) of three
+talents each. The first talent in a branch takes up to 3 points, the second
+2 and the last 1; the second opens once you've spent 2 points in that branch
+and the last once you've spent 4. Talents make your abilities hit harder,
+cast faster or come back sooner, or give you more health, critical strikes,
+speed, toughness, regeneration or life drain. **Reset talents** gives back
+every point.
+
 ### Loot and crafting
 
 Mobs drop money and items. When a corpse sparkles, right-click it to take its
@@ -180,7 +201,9 @@ your character.
 
 ### Merchants
 
-Every town has a merchant in its square. Right-click them to open their wares:
+Every town has a merchant in its square (Tobin Hale in Hearthmere, Joe in
+Kragmaw Hold, Elarion in Aelthas, Migwick in Rustpocket, Nimble Cogsworth in
+Gearhaven and Mortimer Graves in Gravenhold). Right-click them to open their wares:
 Healing and Mana Potions (50 copper each), Light Leather and Linen Cloth. While
 their window is open, right-click items in your bags to sell them for a quarter
 of their price. Right-click a potion in your bags to drink it (potions share a
@@ -188,22 +211,19 @@ of their price. Right-click a potion in your bags to drink it (potions share a
 
 ### The world
 
-Buildings, trees, rocks, fences and other scenery are solid to players. The town in the
-middle of each area is safe. Mob levels rise the further you go from town. Your
-coordinates (relative to the town) are shown under the minimap.
+Buildings, trees, rocks, fences and other scenery are solid to players. The town
+in the middle of each area is safe, with a well, a cart, banners and signposts
+on the roads out. Every area has its own map: its own hills, valleys and lakes,
+its own town layout, and its own places for fields, camps and the elite's
+ruins. Mob levels rise the further you go from town: hunters and grazers
+(levels 1-8) roam the open, two camps of fighters and casters (4-5 and 6-8) and
+a fighters' camp (8-9) sit further out, and the area's **elite** (10) waits in
+its ruins near the edge.
 
-| Near | Mobs | Levels |
-| --- | --- | --- |
-| 50, 25 | The area's hunters (wolves, scorpions, spiders...) | 1-2 |
-| -45, 40 | The area's grazers (boars, hyenas: neutral, they only fight back) | 1-3 |
-| 15, -60 | Hunters | 2-3 |
-| -85, -35 | Grazers | 3-5 |
-| 90, -75 | A camp of fighters and casters | 4-5 |
-| 20, 110 | Hunters | 5-6 |
-| 120, 90 | A camp | 6-8 |
-| 155, -20 | Hunters | 7-8 |
-| -120, -120 | A camp of fighters | 8-9 |
-| -150, -150 | The ruins of the area's **elite** | 10 |
+Press `M` for the world map of your area, with the town, every camp and its
+levels, the elite, and everyone nearby. North is up on the map; the minimap in
+the corner turns with your camera and shows N, E, S and W around its edge. Your
+coordinates (relative to the town) are shown under the minimap.
 
 Killing a mob gives experience. Mobs far below your level give none, and
 everyone who fought a mob shares the kill. The level cap is 10. Mob level
@@ -219,8 +239,9 @@ between them.
 ## How it's built
 
 ```
-shared/   Game data (classes, abilities, mobs, items, recipes, XP curve), the
-          network protocol, message framing and the terrain height function.
+shared/   Game data (classes, abilities, mobs, items, recipes, talents, XP
+          curve), the network protocol, message framing, each area's layout
+          and terrain, and where all the scenery stands.
 server/   The authoritative world simulation (combat, AI, threat, loot, XP),
           character saving, and the TCP server that runs it at 20 ticks per
           second.
@@ -241,22 +262,32 @@ client/   The macroquad client: login, character select and creation,
 - **Data-driven content.** Abilities are lists of effects, and items, recipes
   and loot tables are plain tables in `shared/src/data.rs`, so adding a spell,
   an item or a drop is mostly adding a row.
-- **Shared layout.** Every starting area uses the same layout, turned and
-  mirrored differently (`shared/src/world.rs`). Scenery is placed by a seeded
-  generator in `shared/src/props.rs`, so what the client draws is exactly what
-  players bump into. (Mobs don't collide with scenery yet.)
+- **Layouts.** Each area's terrain, town, fields and camp sites come from
+  `shared/src/layout.rs`; camps are placed by a search for dry, gentle ground.
+  Scenery is placed by a seeded generator in `shared/src/props.rs`, so what the
+  client draws is exactly what players bump into and where the server spawns
+  mobs. (Mobs don't collide with scenery yet.)
 - **Rendering.** Everything is built from shaded boxes, ellipsoids and cones in
-  a custom batcher (`client/src/render.rs`). Each area has its own light, sky
-  and distance fog (a small GLSL shader). Each area's scenery is baked into
-  meshes the first time you see it.
+  a custom batcher (`client/src/render.rs`). Each area has its own light, sky,
+  clouds, weather (falling leaves, blowing sand, fireflies, spores, snow and
+  wisps) and distance fog (a small GLSL shader). Each area's scenery is baked
+  into meshes the first time you see it.
+- **Models and animation.** Characters and creatures (`client/src/models.rs`)
+  are posed each frame from what they're doing. Every class fights and casts
+  in its own way: barbarians chop overhead with both hands, fighters slash
+  behind a raised shield, monks jab and kick from a guard, rogues stab with
+  both daggers, rangers draw their bows, artificers aim and feel the kick,
+  bards strum, clerics raise their arms, druids spread theirs, and warlocks
+  claw at the air. People flinch when hit, tuck their legs when they jump and
+  blink; wolves sniff about and snap their jaws, boars root around, spiders
+  rear up and scorpions sway their tails.
 
 ## Ideas for what's next
 
 - Parties with shared XP and party frames
 - Quests from NPCs in each town
 - Weapons as loot, and more crafting recipes
-- Talents or a skill tree per class
 - Dungeon instances, and roads or portals between the starting areas
 - Account passwords
-- Swimming, mounts and a world map
+- Swimming and mounts
 - UDP networking, interest management and delta snapshots for many players

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use glam::{Vec2, Vec3, vec2};
 use shared::data::*;
 use shared::protocol::*;
+use shared::talents::{self, Bonuses, Ranks};
 use shared::world::*;
 
 use crate::character::{Character, add_item, count_item, gear_stats, remove_item};
@@ -85,6 +86,11 @@ pub struct PlayerData {
     /// Seconds since mana was last spent.
     since_spend: f32,
     potion_cooldown: f32,
+    pub talents: Ranks,
+    /// What the talents add up to.
+    pub bonuses: Bonuses,
+    /// Sandbox god mode: no damage taken, abilities are free.
+    pub god: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +120,8 @@ pub struct MobData {
     respawn_timer: f32,
     spell_timer: f32,
     pub loot: Option<Loot>,
+    /// Who summoned this mob in sandbox mode; it doesn't come back.
+    pub summoner: Option<EntityId>,
 }
 
 /// A townsperson who trades.
@@ -213,6 +221,7 @@ impl Entity {
     /// Movement speed multiplier: the strongest slow times the strongest
     /// speed boost.
     fn move_mult(&self) -> f32 {
+        let talent = 1.0 + self.bonuses().map_or(0.0, |b| b.speed);
         let slow = self
             .auras
             .iter()
@@ -229,7 +238,7 @@ impl Entity {
                 _ => None,
             })
             .fold(1.0, f32::max);
-        slow * fast
+        slow * fast * talent
     }
 
     /// Damage done multiplier from auras like Recklessness and curses.
@@ -261,6 +270,11 @@ impl Entity {
     /// Melee reach, counting the size of big mobs.
     fn reach(&self) -> f32 {
         self.mob().map_or(0.0, |m| m.kind.template().size * 0.5)
+    }
+
+    /// Talent bonuses (none for mobs).
+    fn bonuses(&self) -> Option<&Bonuses> {
+        self.player().map(|p| &p.bonuses)
     }
 
     /// Damage and healing done multiplier from gear.
@@ -342,38 +356,21 @@ struct Camp {
     count: usize,
 }
 
-/// Mob camps in the shared layout (local coordinates), by role: 0 the
-/// aggressive beast, 1 the neutral beast, 2 the fighter, 3 the caster and 4
-/// the elite. Levels rise the further you go from town.
-type CampRow = (f32, f32, f32, usize, (u8, u8), usize);
-const CAMPS: [CampRow; 12] = [
-    (50.0, 25.0, 14.0, 0, (1, 2), 5),
-    (-45.0, 40.0, 16.0, 1, (1, 3), 6),
-    (15.0, -60.0, 14.0, 0, (2, 3), 5),
-    (-85.0, -35.0, 16.0, 1, (3, 5), 6),
-    (90.0, -75.0, 14.0, 2, (4, 5), 4),
-    (95.0, -70.0, 12.0, 3, (4, 5), 2),
-    (20.0, 110.0, 16.0, 0, (5, 6), 6),
-    (120.0, 90.0, 14.0, 2, (6, 8), 5),
-    (125.0, 95.0, 12.0, 3, (6, 8), 3),
-    (155.0, -20.0, 16.0, 0, (7, 8), 6),
-    (-120.0, -120.0, 16.0, 2, (8, 9), 5),
-    (-150.0, -150.0, 4.0, 4, (10, 10), 1),
-];
-
 /// Every zone's camps, in world coordinates, with that zone's mobs.
 fn camps() -> Vec<Camp> {
     let mut camps = Vec::new();
     for zone in Zone::ALL {
         let mobs = MobKind::for_zone(zone);
-        for (x, z, radius, role, levels, count) in CAMPS {
-            camps.push(Camp {
-                center: zone.to_world(vec2(x, z)),
-                radius,
-                kind: mobs[role],
-                levels,
-                count,
-            });
+        for site in &zone.layout().sites {
+            for spawn in &site.spawns {
+                camps.push(Camp {
+                    center: zone.to_world(site.center + spawn.offset),
+                    radius: spawn.radius,
+                    kind: mobs[spawn.role],
+                    levels: spawn.levels,
+                    count: spawn.count,
+                });
+            }
         }
     }
     camps
@@ -392,6 +389,8 @@ pub struct World {
     outbox: Vec<(Audience, ServerMsg)>,
     rng: Rng,
     tick: u64,
+    /// Players may use the sandbox cheats.
+    pub sandbox: bool,
 }
 
 impl World {
@@ -403,6 +402,7 @@ impl World {
             outbox: Vec::new(),
             rng: Rng(seed | 1),
             tick: 0,
+            sandbox: false,
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -490,6 +490,7 @@ impl World {
                 respawn_timer: 0.0,
                 spell_timer: 0.0,
                 loot: None,
+                summoner: None,
             }),
         };
         self.reset_mob(&mut mob);
@@ -535,7 +536,10 @@ impl World {
         let id = self.alloc_id();
         let pos = clamp_to_world(Vec3::from(c.pos));
         let stats = gear_stats(&c.gear);
-        let max_hp = c.class.max_hp(c.level) + stats.stamina * HP_PER_STAMINA;
+        let ranks = talents::sanitize(&c.talents, c.level);
+        let bonuses = Bonuses::new(c.class, &ranks);
+        let max_hp =
+            (c.class.max_hp(c.level) + stats.stamina * HP_PER_STAMINA) * (1.0 + bonuses.health);
         self.entities.insert(
             id,
             Entity {
@@ -571,6 +575,9 @@ impl World {
                     move_budget: 0.0,
                     since_spend: MANA_REGEN_DELAY,
                     potion_cooldown: 0.0,
+                    talents: ranks,
+                    bonuses,
+                    god: false,
                 }),
             },
         );
@@ -597,12 +604,14 @@ impl World {
             yaw: e.yaw,
             bags: p.bags.clone(),
             gear: p.gear,
+            talents: p.talents,
         })
     }
 
     /// Takes a player out of the world, returning their character to save.
     pub fn remove_player(&mut self, id: EntityId) -> Option<Character> {
         let mut c = self.character(id)?;
+        self.clear_spawns(id);
         // Logging out dead brings you back at the graveyard.
         if self.entities[&id].dead {
             c.pos = Zone::at(Vec3::from(c.pos)).graveyard().to_array();
@@ -674,6 +683,9 @@ impl World {
                 money: p.money,
                 bags: p.bags.clone(),
                 stats: p.stats,
+                talents: p.talents,
+                sandbox: self.sandbox,
+                god: p.god,
             },
         })
     }
@@ -741,6 +753,17 @@ impl World {
             }
             ClientMsg::UseItem(slot) => {
                 if let Err(e) = self.use_item(id, slot) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::LearnTalent(index) => {
+                if let Err(e) = self.learn_talent(id, index) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::ResetTalents => self.set_talents(id, [0; talents::TALENTS]),
+            ClientMsg::Sandbox(cmd) => {
+                if let Err(e) = self.sandbox(id, cmd) {
                     self.error(id, e);
                 }
             }
@@ -907,7 +930,8 @@ impl World {
         let level = e.level;
         let p = e.player_mut().unwrap();
         p.stats = gear_stats(&p.gear);
-        let max_hp = p.class.max_hp(level) + p.stats.stamina * HP_PER_STAMINA;
+        let max_hp =
+            (p.class.max_hp(level) + p.stats.stamina * HP_PER_STAMINA) * (1.0 + p.bonuses.health);
         let frac = e.hp / e.max_hp.max(1.0);
         e.max_hp = max_hp;
         if !e.dead {
@@ -981,6 +1005,142 @@ impl World {
     }
 
     /// Checks that a merchant is close enough to trade with.
+    fn learn_talent(&mut self, id: EntityId, index: usize) -> Result<(), &'static str> {
+        let e = &self.entities[&id];
+        let p = e.player().ok_or("Only players have talents.")?;
+        talents::can_learn(&p.talents, e.level, index)?;
+        let mut ranks = p.talents;
+        ranks[index] += 1;
+        let name = talents::tree(p.class).talents[index].name;
+        self.set_talents(id, ranks);
+        self.send(
+            Audience::Only(id),
+            GameEvent::System(format!("You learn {name} (rank {}).", ranks[index])),
+        );
+        Ok(())
+    }
+
+    fn set_talents(&mut self, id: EntityId, ranks: Ranks) {
+        let e = self.entities.get_mut(&id).unwrap();
+        let level = e.level;
+        let Some(p) = e.player_mut() else { return };
+        p.talents = talents::sanitize(&ranks, level);
+        p.bonuses = Bonuses::new(p.class, &p.talents);
+        self.refresh_stats(id);
+    }
+
+    /// Sandbox cheats.
+    fn sandbox(&mut self, id: EntityId, cmd: SandboxCmd) -> Result<(), &'static str> {
+        if !self.sandbox {
+            return Err("Sandbox commands only work in sandbox mode.");
+        }
+        match cmd {
+            SandboxCmd::SetLevel(level) => {
+                let level = level.clamp(1, MAX_LEVEL);
+                let e = self.entities.get_mut(&id).unwrap();
+                let class = e.player().unwrap().class;
+                let old = e.level;
+                e.level = level;
+                e.player_mut().unwrap().xp = 0;
+                e.max_power = class.max_power(level);
+                e.power = class.starting_power(level).max(e.power.min(e.max_power));
+                let ranks = e.player().unwrap().talents;
+                self.set_talents(id, ranks);
+                let e = self.entities.get_mut(&id).unwrap();
+                e.hp = e.max_hp;
+                let pos = e.pos;
+                if level != old {
+                    self.send(Audience::Near(pos), GameEvent::LevelUp { id, level });
+                }
+            }
+            SandboxCmd::AddMoney(copper) => {
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                p.money = p.money.saturating_add(copper);
+            }
+            SandboxCmd::GiveItem(item_id) => {
+                if item_id.0 as usize >= ITEMS.len() {
+                    return Err("No such item.");
+                }
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                if add_item(&mut p.bags, item_id, 1) > 0 {
+                    return Err("Your bags are full.");
+                }
+            }
+            SandboxCmd::Teleport(zone) => {
+                self.clear_spawns(id);
+                let pos = zone.graveyard();
+                let e = self.entities.get_mut(&id).unwrap();
+                e.pos = pos;
+                e.cast = None;
+                e.target = None;
+                e.player_mut().unwrap().auto_attack = false;
+                let yaw = e.yaw;
+                self.forget(id);
+                self.outbox
+                    .push((Audience::Only(id), ServerMsg::SetPosition { pos, yaw }));
+            }
+            SandboxCmd::ToggleGod => {
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                p.god = !p.god;
+                let msg = if p.god {
+                    "God mode on."
+                } else {
+                    "God mode off."
+                };
+                self.send(Audience::Only(id), GameEvent::System(msg.into()));
+            }
+            SandboxCmd::SpawnMob { kind, level } => {
+                let e = &self.entities[&id];
+                let spot = e.pos + forward(e.yaw) * 8.0;
+                let level = level.clamp(1, MAX_LEVEL);
+                self.camps.push(Camp {
+                    center: vec2(spot.x, spot.z),
+                    radius: 0.5,
+                    kind,
+                    levels: (level, level),
+                    count: 0,
+                });
+                let camp = self.camps.len() - 1;
+                let mob = self.spawn_mob(camp);
+                let me = self.pos_of(id);
+                let m = self.entities.get_mut(&mob).unwrap();
+                m.yaw = yaw_towards(m.pos, me);
+                mob_of(&mut m.brain).summoner = Some(id);
+            }
+            SandboxCmd::ClearSpawns => self.clear_spawns(id),
+            SandboxCmd::Refresh => {
+                let e = self.entities.get_mut(&id).unwrap();
+                e.cooldowns.clear();
+                e.gcd = 0.0;
+                e.hp = e.max_hp;
+                e.power = e.max_power;
+                if let Some(p) = e.player_mut() {
+                    p.potion_cooldown = 0.0;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn mob_count(&self) -> usize {
+        self.entities.values().filter(|e| e.mob().is_some()).count()
+    }
+
+    /// Removes the mobs a player summoned in sandbox mode.
+    fn clear_spawns(&mut self, id: EntityId) {
+        let gone: Vec<EntityId> = self
+            .entities
+            .values()
+            .filter(|e| e.mob().is_some_and(|m| m.summoner == Some(id)))
+            .map(|e| e.id)
+            .collect();
+        for mob in gone {
+            self.entities.remove(&mob);
+            self.forget(mob);
+        }
+    }
+
     fn merchant_near(&self, id: EntityId, merchant: EntityId) -> Result<(), &'static str> {
         let me = &self.entities[&id];
         let m = self
@@ -1139,22 +1299,24 @@ impl World {
                 return Err("You must be behind your target.");
             }
         }
-        // Mobs don't pay for their spells.
-        if e.player().is_some() && e.power < a.cost {
+        // Mobs (and sandbox gods) don't pay for their spells.
+        let pays = e.player().is_some_and(|p| !p.god);
+        if pays && e.power < a.cost {
             return Err(match e.player().map(|p| p.class.power_kind()) {
                 Some(PowerKind::Rage) => "Not enough rage.",
                 Some(PowerKind::Energy) => "Not enough energy.",
                 _ => "Not enough mana.",
             });
         }
+        let cast_time = e.bonuses().map_or(a.cast_time, |b| b.cast_time(id));
         let e = self.entities.get_mut(&caster).unwrap();
         e.gcd = GCD;
-        if a.cast_time > 0.0 {
+        if cast_time > 0.0 {
             e.cast = Some(Cast {
                 ability: id,
                 target,
                 elapsed: 0.0,
-                total: a.cast_time,
+                total: cast_time,
             });
         } else {
             self.complete(caster, id, target);
@@ -1229,8 +1391,10 @@ impl World {
         }
     }
 
-    fn roll(&mut self, min: f32, max: f32, scale: f32) -> (f32, bool) {
-        let crit = self.rng.chance(CRIT_CHANCE);
+    /// Rolls an amount between `min` and `max`, maybe a critical hit (with
+    /// `crit` added chance from talents).
+    fn roll_with(&mut self, min: f32, max: f32, scale: f32, crit: f32) -> (f32, bool) {
+        let crit = self.rng.chance(CRIT_CHANCE + crit);
         let amount = self.rng.range(min, max) * scale * if crit { CRIT_MULTIPLIER } else { 1.0 };
         (amount, crit)
     }
@@ -1238,21 +1402,29 @@ impl World {
     /// An ability goes off: pay for it and apply its effects.
     fn complete(&mut self, caster: EntityId, id: AbilityId, target: Option<EntityId>) {
         let a = ability(id);
-        let (pos, scale) = {
+        let (pos, scale, harm_scale, heal_scale, crit) = {
             let e = self.entities.get_mut(&caster).unwrap();
-            if e.player().is_some() {
+            if e.player().is_some_and(|p| !p.god) {
                 e.power = (e.power - a.cost).max(0.0);
             }
-            if a.cooldown > 0.0 {
-                e.cooldowns.insert(id, (a.cooldown, a.cooldown));
+            let bonus = e.bonuses().cloned().unwrap_or_default();
+            let cooldown = bonus.cooldown(id);
+            if cooldown > 0.0 {
+                e.cooldowns.insert(id, (cooldown, cooldown));
             }
-            let scale = level_scale(e.level) * e.power_mult();
+            let scale = level_scale(e.level) * e.power_mult() * (1.0 + bonus.ability(id).power);
             if let Some(p) = e.player_mut()
                 && a.cost > 0.0
             {
                 p.since_spend = 0.0;
             }
-            (e.pos, scale)
+            (
+                e.pos,
+                scale,
+                scale * (1.0 + bonus.damage),
+                scale * (1.0 + bonus.healing),
+                bonus.crit,
+            )
         };
         self.send(
             Audience::Near(pos),
@@ -1303,15 +1475,20 @@ impl World {
                 }
                 match *effect {
                     Effect::Damage { min, max } => {
-                        let (amount, crit) = self.roll(min, max, scale);
+                        let (amount, crit) = self.roll_with(min, max, harm_scale, crit);
                         self.apply_hit(caster, t, Hit::Damage(amount, crit), Some(id));
                     }
                     Effect::Heal { min, max } => {
-                        let (amount, crit) = self.roll(min, max, scale);
+                        let (amount, crit) = self.roll_with(min, max, heal_scale, crit);
                         self.apply_hit(caster, t, Hit::Heal(amount, crit), Some(id));
                     }
                     Effect::Aura { kind, duration } => {
-                        self.apply_aura(caster, t, id, kind, duration, scale)
+                        let s = match kind {
+                            AuraKind::Dot { .. } => harm_scale,
+                            AuraKind::Hot { .. } | AuraKind::Absorb(_) => heal_scale,
+                            _ => scale,
+                        };
+                        self.apply_aura(caster, t, id, kind, duration, s)
                     }
                     Effect::Interrupt => {
                         let target = self.entities.get_mut(&t).unwrap();
@@ -1357,7 +1534,7 @@ impl World {
                         self.relocate(caster, clamp_to_world(ground(dest.x, dest.z)), yaw);
                     }
                     Effect::Drain { min, max } => {
-                        let (amount, crit) = self.roll(min, max, scale);
+                        let (amount, crit) = self.roll_with(min, max, harm_scale, crit);
                         self.apply_hit(caster, t, Hit::Damage(amount, crit), Some(id));
                         self.apply_hit(caster, caster, Hit::Heal(amount, crit), Some(id));
                     }
@@ -1377,10 +1554,11 @@ impl World {
                             .unwrap()
                             .player_mut()
                             .map_or(1, |p| std::mem::take(&mut p.combo_points));
-                        let (amount, crit) = self.roll(
+                        let (amount, crit) = self.roll_with(
                             min + per_point * points as f32,
                             max + per_point * points as f32,
-                            scale,
+                            harm_scale,
+                            crit,
                         );
                         self.apply_hit(caster, t, Hit::Damage(amount, crit), Some(id));
                     }
@@ -1528,12 +1706,20 @@ impl World {
                 let physical = ability_id.is_none_or(|a| ability(a).school == School::Physical);
                 let attacker_level = self.entities.get(&source).map_or(1, |s| s.level);
                 let armor = t.player().map_or(0.0, |p| p.stats.armor);
-                let mut amount = amount * t.damage_taken();
+                let toughness = t.bonuses().map_or(0.0, |b| b.toughness);
+                let mut amount = amount * t.damage_taken() * (1.0 - toughness).max(0.2);
+                if t.player().is_some_and(|p| p.god) {
+                    amount = 0.0;
+                }
                 if physical {
                     amount *= armor_multiplier(armor, attacker_level);
                 }
                 let t = self.entities.get_mut(&target).unwrap();
-                let mut left = amount.round().max(1.0);
+                let mut left = if amount <= 0.0 {
+                    0.0
+                } else {
+                    amount.round().max(1.0)
+                };
                 let mut absorbed = 0.0;
                 for aura in &mut t.auras {
                     if let AuraKind::Absorb(shield) = &mut aura.kind {
@@ -1555,6 +1741,13 @@ impl World {
                     t.power = (t.power + left / level_scale(target_level) * 0.5).min(t.max_power);
                 }
                 let dead = t.hp <= 0.0;
+                // Leeching talents heal the attacker.
+                if let Some(s) = self.entities.get_mut(&source)
+                    && !s.dead
+                    && let Some(leech) = s.bonuses().map(|b| b.leech).filter(|l| *l > 0.0)
+                {
+                    s.hp = (s.hp + left * leech).min(s.max_hp);
+                }
                 if let Some(s) = self.entities.get_mut(&source)
                     && ability_id.is_none()
                     && s.player()
@@ -1817,6 +2010,7 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         let speed = RUN_SPEED * e.move_mult();
         let in_combat = e.in_combat;
+        let regen = 1.0 + e.bonuses().map_or(0.0, |b| b.regen);
         let p = e.player_mut().unwrap();
         p.move_budget = (p.move_budget + speed * 1.25 * dt).min(speed);
         p.since_spend += dt;
@@ -1837,15 +2031,16 @@ impl World {
                 } else {
                     0.006
                 };
-                e.power = (e.power + e.max_power * rate * dt).min(e.max_power);
+                e.power = (e.power + e.max_power * rate * regen * dt).min(e.max_power);
             }
             PowerKind::Rage => {
                 if !in_combat {
-                    e.power = (e.power - 4.0 * dt).max(0.0);
+                    // Talents slow the drain.
+                    e.power = (e.power - 4.0 / regen * dt).max(0.0);
                 }
             }
             PowerKind::Energy => {
-                e.power = (e.power + ENERGY_PER_SECOND * dt).min(e.max_power);
+                e.power = (e.power + ENERGY_PER_SECOND * regen * dt).min(e.max_power);
             }
         }
         // Auto attack.
@@ -1870,8 +2065,9 @@ impl World {
         let ready = e.swing_timer <= 0.0 && e.cast.is_none() && !e.stunned();
         let in_range = e.pos.distance(t.pos) <= aa.range + 1.0 + t.reach();
         if ready && in_range && is_facing(e.pos, e.yaw, t.pos) {
-            let scale = level_scale(e.level) * e.power_mult();
-            let (amount, crit) = self.roll(aa.min, aa.max, scale);
+            let bonus = e.bonuses().cloned().unwrap_or_default();
+            let scale = level_scale(e.level) * e.power_mult() * (1.0 + bonus.damage);
+            let (amount, crit) = self.roll_with(aa.min, aa.max, scale, bonus.crit);
             self.entities.get_mut(&id).unwrap().swing_timer = aa.interval;
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
         }
@@ -1902,6 +2098,11 @@ impl World {
         let t = m.kind.template();
         if e.dead {
             m.respawn_timer -= dt;
+            if m.respawn_timer <= 0.0 && m.summoner.is_some() {
+                self.entities.remove(&id);
+                self.forget(id);
+                return;
+            }
             if m.respawn_timer <= 0.0 {
                 let mut mob = self.entities.remove(&id).unwrap();
                 self.reset_mob(&mut mob);
@@ -3010,5 +3211,92 @@ mod tests {
                 .iter()
                 .any(|a| a.ability == ids::FROSTBOLT)
         );
+    }
+
+    #[test]
+    fn talents_are_learned_saved_and_change_combat() {
+        let mut w = World::new(31);
+        let p = join(&mut w, "Tal", Class::Fighter, 10);
+        let base_hp = w.entities[&p].max_hp;
+        // Last Stand needs points in Toughness and Shield Mastery first.
+        w.handle(p, ClientMsg::LearnTalent(5));
+        assert_eq!(w.entities[&p].player().unwrap().talents[5], 0);
+        for i in [3, 3, 3, 4, 4, 5] {
+            w.handle(p, ClientMsg::LearnTalent(i));
+        }
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(pd.talents, [0, 0, 0, 3, 2, 1, 0, 0, 0]);
+        assert!(w.entities[&p].max_hp > base_hp * 1.09);
+        // Toughness: less damage taken.
+        assert!((pd.bonuses.toughness - 0.09).abs() < 1e-5);
+        let c = w.character(p).unwrap();
+        assert_eq!(c.talents, [0, 0, 0, 3, 2, 1, 0, 0, 0]);
+        // Points run out at nine.
+        for _ in 0..5 {
+            w.handle(p, ClientMsg::LearnTalent(0));
+        }
+        assert_eq!(talents::spent(&w.entities[&p].player().unwrap().talents), 9);
+        w.handle(p, ClientMsg::ResetTalents);
+        assert_eq!(talents::spent(&w.entities[&p].player().unwrap().talents), 0);
+        assert!((w.entities[&p].max_hp - base_hp).abs() < 0.01);
+    }
+
+    #[test]
+    fn talents_shorten_cooldowns_and_casts() {
+        let mut w = World::new(32);
+        let p = join(&mut w, "Ice", Class::Mage, 10);
+        w.handle(p, ClientMsg::LearnTalent(3));
+        w.handle(p, ClientMsg::LearnTalent(3));
+        w.handle(p, ClientMsg::LearnTalent(4));
+        let mob = engage(&mut w, p, MobKind::Wolf);
+        sturdy(&mut w, mob);
+        assert_eq!(w.try_use(p, ids::FROSTBOLT), Ok(()));
+        let total = w.entities[&p].cast.as_ref().unwrap().total;
+        assert!((total - (ability(ids::FROSTBOLT).cast_time - 0.25)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn sandbox_cheats_only_work_in_sandbox_mode() {
+        let mut w = World::new(33);
+        let p = join(&mut w, "Box", Class::Rogue, 1);
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::SetLevel(10)));
+        assert_eq!(w.entities[&p].level, 1);
+        w.sandbox = true;
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::SetLevel(10)));
+        assert_eq!(w.entities[&p].level, 10);
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::AddMoney(5000)));
+        assert_eq!(w.entities[&p].player().unwrap().money, 5000);
+        w.handle(
+            p,
+            ClientMsg::Sandbox(SandboxCmd::GiveItem(items::HEALING_POTION)),
+        );
+        assert_eq!(
+            count_item(
+                &w.entities[&p].player().unwrap().bags,
+                items::HEALING_POTION
+            ),
+            1
+        );
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::Teleport(Zone::Frostcog)));
+        assert_eq!(Zone::at(w.entities[&p].pos), Zone::Frostcog);
+        // Out in the wilds, a summoned mob attacks, but god mode takes no damage.
+        let wilds = Zone::Frostcog.ground_local(Zone::Frostcog.layout().fields[0]);
+        w.entities.get_mut(&p).unwrap().pos = wilds;
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::ToggleGod));
+        let before = w.mob_count();
+        w.handle(
+            p,
+            ClientMsg::Sandbox(SandboxCmd::SpawnMob {
+                kind: MobKind::Yeti,
+                level: 10,
+            }),
+        );
+        assert_eq!(w.mob_count(), before + 1);
+        let hp = w.entities[&p].hp;
+        run(&mut w, 6.0);
+        assert!(w.entities[&p].in_combat);
+        assert_eq!(w.entities[&p].hp, hp);
+        w.handle(p, ClientMsg::Sandbox(SandboxCmd::ClearSpawns));
+        assert_eq!(w.mob_count(), before);
     }
 }

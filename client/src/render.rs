@@ -7,12 +7,13 @@ use std::cell::OnceCell;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
 use macroquad::models::{Mesh, Vertex, draw_mesh};
 use macroquad::prelude::*;
-use shared::data::{
-    Appearance, Class, GiantStyle, HumanoidStyle, ItemId, MobModel, Race, Slot, item, items,
-};
 use shared::props::{self, Prop, PropKind, Scatter};
-use shared::protocol::EntityKind;
 use shared::world::*;
+
+use crate::models::{BONE, GOLD, WOOD};
+pub use crate::models::{
+    Look, Pose, draw_model, hair_color, model_height, model_radius, skin_color,
+};
 
 const MAX_VERTICES: usize = 60_000;
 const MAX_INDICES: usize = 180_000;
@@ -47,7 +48,7 @@ pub struct Theme {
     pub sun_disc: Option<Color>,
 }
 
-const fn c(r: f32, g: f32, b: f32) -> Color {
+pub(crate) const fn c(r: f32, g: f32, b: f32) -> Color {
     Color::new(r, g, b, 1.0)
 }
 
@@ -179,7 +180,7 @@ fn shade(light: &Light, color: Color, normal: Vec3) -> [u8; 4] {
 }
 
 /// Full brightness, for things that glow.
-fn glow(color: Color) -> [u8; 4] {
+pub(crate) fn glow(color: Color) -> [u8; 4] {
     [
         (color.r * 255.0).clamp(0.0, 255.0) as u8,
         (color.g * 255.0).clamp(0.0, 255.0) as u8,
@@ -198,12 +199,12 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-fn rgb((r, g, b): (f32, f32, f32)) -> Color {
+pub(crate) fn rgb((r, g, b): (f32, f32, f32)) -> Color {
     Color::new(r, g, b, 1.0)
 }
 
 /// Darker (or, above 1, lighter) version of a color.
-fn dark(c: Color, f: f32) -> Color {
+pub(crate) fn dark(c: Color, f: f32) -> Color {
     Color::new(
         (c.r * f).min(1.0),
         (c.g * f).min(1.0),
@@ -213,7 +214,7 @@ fn dark(c: Color, f: f32) -> Color {
 }
 
 /// Two axes perpendicular to `axis`, the first as close to `reference` as possible.
-fn basis(axis: Vec3, reference: Vec3) -> (Vec3, Vec3) {
+pub(crate) fn basis(axis: Vec3, reference: Vec3) -> (Vec3, Vec3) {
     let up = axis.normalize_or_zero();
     let mut u = reference - up * reference.dot(up);
     if u.length_squared() < 1e-6 {
@@ -546,7 +547,7 @@ impl Batch {
     }
 
     /// Draws something unlit.
-    fn lit<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+    pub(crate) fn lit<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let was = self.glowing;
         self.glowing = true;
         let r = f(self);
@@ -559,6 +560,7 @@ impl Batch {
 
 /// A local coordinate frame for building a model out of parts. Every part
 /// is built along the frame's own axes, so the whole model turns together.
+#[derive(Clone, Copy)]
 pub struct Frame {
     origin: Vec3,
     r: Vec3,
@@ -601,11 +603,50 @@ impl Frame {
         }
     }
 
-    fn dir(&self, l: Vec3) -> Vec3 {
+    /// Upright, but leaning forward by `pitch` (back if negative) from the
+    /// feet.
+    pub fn leaning(pos: Vec3, yaw: f32, scale: f32, pitch: f32) -> Self {
+        let up = Self::upright(pos, yaw, scale);
+        let (sn, cs) = pitch.sin_cos();
+        Self {
+            origin: pos,
+            r: up.r,
+            u: up.u * cs + up.f * sn,
+            f: up.f * cs - up.u * sn,
+            scale,
+        }
+    }
+
+    pub(crate) fn dir(&self, l: Vec3) -> Vec3 {
         self.r * l.x + self.u * l.y + self.f * l.z
     }
 
-    fn p(&self, l: Vec3) -> Vec3 {
+    /// A limb from `joint` along local direction `d`. Returns where it ends.
+    pub fn segment(
+        &self,
+        b: &mut Batch,
+        joint: Vec3,
+        d: Vec3,
+        half_width: f32,
+        length: f32,
+        color: Color,
+    ) -> Vec3 {
+        let s = self.scale;
+        let wd = self.dir(d).normalize_or_zero();
+        let (u, v) = basis(wd, self.r);
+        b.cuboid(
+            self.p(joint + d * length * 0.5),
+            [
+                u * half_width * s,
+                wd * length * 0.5 * s,
+                v * half_width * s,
+            ],
+            color,
+        );
+        joint + d * length
+    }
+
+    pub(crate) fn p(&self, l: Vec3) -> Vec3 {
         self.origin + self.dir(l) * self.scale
     }
 
@@ -750,1971 +791,6 @@ impl Frame {
     }
 }
 
-/// How a character is moving, for animation.
-#[derive(Clone, Copy, Default)]
-pub struct Pose {
-    /// Walk cycle phase in radians.
-    pub walk: f32,
-    pub moving: bool,
-    pub casting: bool,
-    /// Attack animation progress, 0 (start) to 1 (done).
-    pub swing: f32,
-    pub dead: bool,
-    pub time: f32,
-}
-
-/// Everything needed to draw a character or creature.
-#[derive(Clone, Copy)]
-pub struct Look {
-    pub kind: EntityKind,
-    pub appearance: Appearance,
-    pub gear: [Option<ItemId>; 5],
-    /// Varies small details between individuals.
-    pub seed: u32,
-}
-
-/// Size and build of each race.
-struct RaceShape {
-    scale: f32,
-    head: f32,
-    /// Limb thickness.
-    limbs: f32,
-}
-
-fn race_shape(race: Race) -> RaceShape {
-    match race {
-        Race::Human => RaceShape {
-            scale: 1.0,
-            head: 1.0,
-            limbs: 1.0,
-        },
-        Race::Orc => RaceShape {
-            scale: 1.1,
-            head: 1.05,
-            limbs: 1.2,
-        },
-        Race::Elf => RaceShape {
-            scale: 1.05,
-            head: 0.97,
-            limbs: 0.9,
-        },
-        Race::Goblin => RaceShape {
-            scale: 0.72,
-            head: 1.35,
-            limbs: 0.9,
-        },
-        Race::Gnome => RaceShape {
-            scale: 0.66,
-            head: 1.35,
-            limbs: 1.0,
-        },
-        Race::Undead => RaceShape {
-            scale: 0.98,
-            head: 0.95,
-            limbs: 0.8,
-        },
-    }
-}
-
-/// How tall something is, for nameplates and picking.
-pub fn model_height(kind: EntityKind, appearance: Appearance) -> f32 {
-    match kind {
-        EntityKind::Player(_) | EntityKind::Merchant(_) => 2.1 * race_shape(appearance.race).scale,
-        EntityKind::Mob { kind, .. } => match kind.template().model {
-            MobModel::Wolf => 1.3,
-            MobModel::Boar => 1.25,
-            MobModel::Spider => 1.1,
-            MobModel::Scorpion => 1.3,
-            MobModel::Humanoid(_) => 2.1,
-            MobModel::Giant(_) => 2.1 * 2.2,
-        },
-    }
-}
-
-/// Radius of the selection circle.
-pub fn model_radius(kind: EntityKind) -> f32 {
-    match kind {
-        EntityKind::Mob { kind, .. } => match kind.template().model {
-            MobModel::Giant(_) => 2.2,
-            MobModel::Humanoid(_) => 0.9,
-            _ => 1.2,
-        },
-        _ => 0.9,
-    }
-}
-
-pub fn draw_model(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
-    match look.kind {
-        EntityKind::Player(class) => humanoid(b, pos, yaw, Outfit::Class(class), look, pose),
-        EntityKind::Merchant(_) => humanoid(b, pos, yaw, Outfit::Merchant, look, pose),
-        EntityKind::Mob { kind, .. } => {
-            let t = kind.template();
-            let colors = t.colors.map(rgb);
-            match t.model {
-                MobModel::Wolf => wolf(b, pos, yaw, colors, look.seed, pose),
-                MobModel::Boar => boar(b, pos, yaw, colors, look.seed, pose),
-                MobModel::Spider => spider(b, pos, yaw, colors, pose),
-                MobModel::Scorpion => scorpion(b, pos, yaw, colors, pose),
-                MobModel::Humanoid(style) => {
-                    humanoid(b, pos, yaw, Outfit::Mob(style, colors), look, pose)
-                }
-                MobModel::Giant(style) => {
-                    humanoid(b, pos, yaw, Outfit::Giant(style, colors), look, pose)
-                }
-            }
-        }
-    }
-}
-
-pub fn skin_color(race: Race, i: u8) -> Color {
-    let palette = match race {
-        Race::Human => [
-            c(0.98, 0.84, 0.72),
-            c(0.93, 0.74, 0.58),
-            c(0.8, 0.6, 0.44),
-            c(0.6, 0.42, 0.3),
-            c(0.4, 0.27, 0.19),
-        ],
-        Race::Orc => [
-            c(0.45, 0.6, 0.3),
-            c(0.38, 0.52, 0.26),
-            c(0.5, 0.56, 0.32),
-            c(0.33, 0.45, 0.28),
-            c(0.55, 0.47, 0.3),
-        ],
-        Race::Elf => [
-            c(0.98, 0.89, 0.82),
-            c(0.92, 0.8, 0.7),
-            c(0.8, 0.68, 0.6),
-            c(0.72, 0.64, 0.8),
-            c(0.52, 0.5, 0.65),
-        ],
-        Race::Goblin => [
-            c(0.5, 0.7, 0.3),
-            c(0.42, 0.62, 0.28),
-            c(0.62, 0.74, 0.36),
-            c(0.35, 0.55, 0.32),
-            c(0.58, 0.64, 0.25),
-        ],
-        Race::Gnome => [
-            c(0.98, 0.83, 0.76),
-            c(0.95, 0.75, 0.65),
-            c(0.85, 0.65, 0.5),
-            c(0.7, 0.5, 0.38),
-            c(0.98, 0.88, 0.84),
-        ],
-        Race::Undead => [
-            c(0.62, 0.66, 0.62),
-            c(0.56, 0.6, 0.64),
-            c(0.62, 0.56, 0.64),
-            c(0.5, 0.52, 0.44),
-            c(0.72, 0.72, 0.7),
-        ],
-    };
-    palette[i as usize % 5]
-}
-
-pub fn hair_color(i: u8) -> Color {
-    [
-        c(0.12, 0.09, 0.07),
-        c(0.38, 0.22, 0.12),
-        c(0.85, 0.68, 0.35),
-        c(0.62, 0.22, 0.1),
-        c(0.75, 0.75, 0.75),
-        c(0.95, 0.92, 0.85),
-    ][i as usize % 6]
-}
-
-/// What a humanoid wears and carries.
-#[derive(Clone, Copy)]
-enum Outfit {
-    Class(Class),
-    Merchant,
-    Mob(HumanoidStyle, [Color; 3]),
-    Giant(GiantStyle, [Color; 3]),
-}
-
-const STEEL: Color = c(0.72, 0.74, 0.78);
-const GOLD: Color = c(0.92, 0.74, 0.3);
-const WOOD: Color = c(0.42, 0.28, 0.16);
-const LEATHER: Color = c(0.42, 0.28, 0.17);
-const BONE: Color = c(0.88, 0.85, 0.76);
-
-/// Colors of a class's clothes: torso, legs, sleeves, boots, cape (if any).
-fn class_colors(class: Class) -> (Color, Color, Color, Color, Option<Color>) {
-    match class {
-        Class::Barbarian => (
-            c(0.55, 0.38, 0.24),
-            c(0.35, 0.25, 0.17),
-            c(0.55, 0.38, 0.24),
-            c(0.3, 0.2, 0.13),
-            None,
-        ),
-        Class::Fighter => (
-            c(0.6, 0.62, 0.66),
-            c(0.3, 0.28, 0.27),
-            STEEL,
-            c(0.3, 0.22, 0.16),
-            Some(c(0.18, 0.3, 0.6)),
-        ),
-        Class::Paladin => (
-            c(0.85, 0.85, 0.88),
-            c(0.75, 0.75, 0.8),
-            c(0.85, 0.85, 0.88),
-            c(0.6, 0.55, 0.45),
-            Some(c(0.9, 0.88, 0.8)),
-        ),
-        Class::Monk => (
-            c(0.92, 0.55, 0.15),
-            c(0.85, 0.48, 0.12),
-            c(0.92, 0.55, 0.15),
-            c(0.3, 0.22, 0.15),
-            None,
-        ),
-        Class::Rogue => (
-            c(0.2, 0.2, 0.22),
-            c(0.17, 0.17, 0.19),
-            c(0.2, 0.2, 0.22),
-            c(0.14, 0.12, 0.11),
-            None,
-        ),
-        Class::Ranger => (
-            c(0.3, 0.42, 0.22),
-            c(0.4, 0.3, 0.2),
-            c(0.3, 0.42, 0.22),
-            c(0.32, 0.22, 0.14),
-            Some(c(0.22, 0.32, 0.18)),
-        ),
-        Class::Artificer => (
-            c(0.5, 0.36, 0.22),
-            c(0.3, 0.26, 0.22),
-            c(0.82, 0.78, 0.7),
-            c(0.25, 0.2, 0.16),
-            None,
-        ),
-        Class::Bard => (
-            c(0.15, 0.55, 0.6),
-            c(0.6, 0.18, 0.45),
-            c(0.15, 0.55, 0.6),
-            c(0.4, 0.26, 0.15),
-            Some(c(0.6, 0.18, 0.45)),
-        ),
-        Class::Cleric => (
-            c(0.95, 0.93, 0.86),
-            c(0.9, 0.88, 0.8),
-            c(0.95, 0.93, 0.86),
-            c(0.55, 0.45, 0.3),
-            Some(c(0.9, 0.8, 0.45)),
-        ),
-        Class::Druid => (
-            c(0.36, 0.48, 0.25),
-            c(0.32, 0.4, 0.22),
-            c(0.45, 0.35, 0.22),
-            c(0.35, 0.25, 0.15),
-            Some(c(0.3, 0.42, 0.22)),
-        ),
-        Class::Mage => (
-            c(0.34, 0.24, 0.72),
-            c(0.28, 0.2, 0.62),
-            c(0.34, 0.24, 0.72),
-            c(0.25, 0.18, 0.4),
-            Some(c(0.24, 0.14, 0.5)),
-        ),
-        Class::Sorcerer => (
-            c(0.62, 0.12, 0.16),
-            c(0.5, 0.1, 0.14),
-            c(0.62, 0.12, 0.16),
-            c(0.25, 0.1, 0.1),
-            Some(c(0.35, 0.06, 0.1)),
-        ),
-        Class::Warlock => (
-            c(0.16, 0.1, 0.2),
-            c(0.12, 0.08, 0.16),
-            c(0.16, 0.1, 0.2),
-            c(0.1, 0.08, 0.1),
-            Some(c(0.28, 0.08, 0.3)),
-        ),
-    }
-}
-
-/// Classes that wear a long robe.
-fn robed(class: Class) -> bool {
-    matches!(
-        class,
-        Class::Mage | Class::Cleric | Class::Sorcerer | Class::Warlock | Class::Druid
-    )
-}
-
-fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pose: Pose) {
-    let a = look.appearance;
-    let seed = look.seed;
-    let person = matches!(outfit, Outfit::Class(_) | Outfit::Merchant);
-    let (race, scale) = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => (a.race, race_shape(a.race).scale),
-        Outfit::Giant(..) => (Race::Human, 2.2),
-        Outfit::Mob(..) => (Race::Human, 1.0),
-    };
-    let shape = race_shape(race);
-    let fr = if pose.dead {
-        Frame::fallen(pos, yaw, scale, false)
-    } else {
-        Frame::upright(pos, yaw, scale)
-    };
-    let skin = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => skin_color(race, a.skin),
-        Outfit::Mob(style, colors) => match style {
-            HumanoidStyle::Bandit
-            | HumanoidStyle::Mystic
-            | HumanoidStyle::Raider
-            | HumanoidStyle::Necromancer => skin_color(Race::Human, (seed % 4) as u8),
-            HumanoidStyle::Shaman => skin_color(Race::Orc, (seed % 5) as u8),
-            HumanoidStyle::Skeleton => BONE,
-            _ => colors[0],
-        },
-        Outfit::Giant(_, colors) => colors[1],
-    };
-    let hair = if person {
-        hair_color(a.hair_color)
-    } else {
-        hair_color((seed / 3 % 4) as u8)
-    };
-    let slender = a.body == 1 && person;
-
-    // Clothes.
-    let (mut torso, mut legs, mut arms, mut boots, cape) = match outfit {
-        Outfit::Class(class) => class_colors(class),
-        Outfit::Merchant => (
-            c(0.5, 0.3, 0.2),
-            c(0.35, 0.28, 0.22),
-            c(0.85, 0.82, 0.72),
-            c(0.3, 0.2, 0.14),
-            None,
-        ),
-        Outfit::Mob(style, colors) => match style {
-            HumanoidStyle::Skeleton => (BONE, BONE, BONE, BONE, None),
-            HumanoidStyle::Satyr | HumanoidStyle::Trickster => {
-                (skin, colors[1], skin, c(0.15, 0.12, 0.1), None)
-            }
-            HumanoidStyle::Trogg | HumanoidStyle::Troll => (skin, colors[1], skin, colors[1], None),
-            _ => (colors[0], colors[1], colors[0], dark(colors[1], 0.8), None),
-        },
-        Outfit::Giant(_, colors) => (colors[0], colors[1], dark(colors[0], 0.95), colors[1], None),
-    };
-    if let Outfit::Mob(HumanoidStyle::Bandit | HumanoidStyle::Raider, _) = outfit {
-        // Fighters go bare-armed.
-        arms = skin;
-    }
-    // Worn armor shows on the body.
-    let worn = |s: Slot| look.gear[s.index()].map(|id| rgb(item(id).color));
-    let bare_skin = matches!(
-        outfit,
-        Outfit::Giant(..) | Outfit::Mob(HumanoidStyle::Skeleton, _)
-    );
-    let mut hands = if bare_skin { legs } else { skin };
-    if let Some(cc) = worn(Slot::Chest) {
-        torso = cc;
-        arms = dark(cc, 0.92);
-    }
-    if let Some(cc) = worn(Slot::Legs) {
-        legs = cc;
-    }
-    if let Some(cc) = worn(Slot::Feet) {
-        boots = cc;
-    }
-    if let Some(cc) = worn(Slot::Hands) {
-        hands = cc;
-    }
-    let is_robed = match outfit {
-        Outfit::Class(class) => robed(class) && worn(Slot::Chest).is_none(),
-        Outfit::Mob(style, _) => matches!(
-            style,
-            HumanoidStyle::Mystic | HumanoidStyle::Necromancer | HumanoidStyle::TrollShaman
-        ),
-        _ => false,
-    };
-    let goat_legs = matches!(
-        outfit,
-        Outfit::Mob(HumanoidStyle::Satyr | HumanoidStyle::Trickster, _)
-    );
-    let skeletal = matches!(
-        outfit,
-        Outfit::Mob(HumanoidStyle::Skeleton, _) | Outfit::Giant(GiantStyle::Bone, _)
-    );
-    let limb = shape.limbs * if skeletal { 0.55 } else { 1.0 };
-
-    let moving = pose.moving && !pose.dead;
-    let stride = if moving { pose.walk.sin() * 0.65 } else { 0.0 };
-    // Legs: thigh, shin with a bending knee, and a boot (or hoof).
-    for (side, phase) in [(-1.0f32, 0.0f32), (1.0, std::f32::consts::PI)] {
-        let swing = if moving {
-            (pose.walk + phase).sin() * 0.65
-        } else {
-            0.0
-        };
-        let bend = if moving {
-            (pose.walk + phase + 1.2).sin().max(0.0) * 0.9
-        } else {
-            0.0
-        };
-        let hip = vec3(0.13 * side * if slender { 1.1 } else { 1.0 }, 0.95, 0.0);
-        let knee = fr.limb(b, hip, swing, 0.1 * limb, 0.46, legs);
-        let hoof = if goat_legs { 0.6 } else { 0.0 };
-        let ankle = fr.limb(b, knee, swing - bend + hoof, 0.085 * limb, 0.45, legs);
-        if goat_legs {
-            fr.cube(b, ankle, vec3(0.07, 0.06, 0.08), c(0.12, 0.1, 0.08));
-        } else {
-            fr.cube(
-                b,
-                ankle + vec3(0.0, -0.01, 0.07),
-                vec3(0.085, 0.06, 0.15),
-                boots,
-            );
-        }
-    }
-    if is_robed {
-        let sway = stride * 0.15;
-        fr.tilted(b, vec3(0.0, 0.6, 0.0), vec3(0.27, 0.36, 0.2), sway, legs);
-        fr.tilted(
-            b,
-            vec3(0.0, 0.3, 0.0),
-            vec3(0.3, 0.08, 0.23),
-            sway * 1.5,
-            dark(legs, 0.85),
-        );
-    }
-    if goat_legs {
-        fr.cube(
-            b,
-            vec3(0.0, 0.85, 0.0),
-            vec3(0.28, 0.16, 0.18),
-            dark(legs, 0.85),
-        );
-    }
-
-    // Body.
-    let y = if moving {
-        (pose.walk * 2.0).sin().abs() * 0.03
-    } else {
-        0.0
-    };
-    let breathe = (pose.time * 1.6).sin() * 0.01;
-    let hips_w = if slender { 0.25 } else { 0.24 } * shape.limbs.max(0.9);
-    let chest_w = if slender { 0.25 } else { 0.3 } * shape.limbs.max(0.85);
-    if skeletal {
-        fr.cube(b, vec3(0.0, 1.0 + y, 0.0), vec3(0.2, 0.06, 0.1), BONE);
-        fr.cube(b, vec3(0.0, 1.25 + y, -0.05), vec3(0.04, 0.22, 0.04), BONE);
-        for k in 0..4 {
-            let yy = 1.28 + k as f32 * 0.07;
-            fr.cube(
-                b,
-                vec3(0.0, yy + y, 0.02),
-                vec3(0.2 - k as f32 * 0.01, 0.018, 0.12),
-                BONE,
-            );
-        }
-    } else {
-        fr.cube(b, vec3(0.0, 1.0 + y, 0.0), vec3(hips_w, 0.1, 0.15), legs);
-        fr.cube(
-            b,
-            vec3(0.0, 1.18 + y, 0.0),
-            vec3(hips_w - 0.02, 0.1, 0.14),
-            torso,
-        );
-        fr.cube(
-            b,
-            vec3(0.0, 1.4 + y + breathe, 0.0),
-            vec3(chest_w, 0.15, 0.17),
-            torso,
-        );
-        fr.cube(
-            b,
-            vec3(0.0, 1.07 + y, 0.0),
-            vec3(hips_w + 0.01, 0.04, 0.155),
-            c(0.25, 0.17, 0.1),
-        );
-        fr.cube(b, vec3(0.0, 1.07 + y, 0.16), vec3(0.045, 0.035, 0.01), GOLD);
-    }
-    if let Some(cc) = cape.filter(|_| worn(Slot::Chest).is_none()) {
-        fr.tilted(
-            b,
-            vec3(0.0, 1.13 + y, -0.21),
-            vec3(0.25, 0.44, 0.02),
-            -0.08 - stride.abs() * 0.14,
-            cc,
-        );
-    }
-
-    // Neck and head.
-    let hs = shape.head;
-    fr.cylinder(
-        b,
-        vec3(0.0, 1.53 + y, 0.0),
-        0.1,
-        0.075 * limb.max(0.8),
-        skin,
-    );
-    let head = vec3(0.0, 1.55 + 0.21 * hs + y, 0.01);
-    match outfit {
-        Outfit::Giant(style, colors) => giant_head(b, &fr, head, style, colors, pose),
-        _ => face(b, &fr, head, hs, race, skin, hair, outfit, skeletal),
-    }
-
-    // Hair (players pick a style; mobs vary by seed).
-    let style = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => a.hair_style,
-        Outfit::Mob(HumanoidStyle::Bandit | HumanoidStyle::Raider, _) => 1 + (seed % 2) as u8,
-        _ => 0,
-    };
-    let headgear = worn(Slot::Head);
-    if headgear.is_none() && !matches!(outfit, Outfit::Giant(..)) {
-        hair_style(b, &fr, head, hs, style, hair, pose, stride);
-        // Gnomes with a broad build grow a beard.
-        if person && race == Race::Gnome && a.body == 0 {
-            fr.ellipsoid(
-                b,
-                head + vec3(0.0, -0.17, 0.12) * hs,
-                vec3(0.13, 0.12, 0.08) * hs,
-                hair,
-            );
-        }
-    }
-    match headgear {
-        Some(cc) => {
-            if look.gear[Slot::Head.index()] == Some(items::LINEN_HOOD) {
-                fr.cube(
-                    b,
-                    head + vec3(0.0, 0.08, -0.03) * hs,
-                    vec3(0.23, 0.18, 0.21) * hs,
-                    cc,
-                );
-                fr.cone(
-                    b,
-                    head + vec3(0.0, 0.2, -0.06) * hs,
-                    0.22 * hs,
-                    0.16 * hs,
-                    cc,
-                );
-            } else {
-                fr.cube(
-                    b,
-                    head + vec3(0.0, 0.15, 0.0) * hs,
-                    vec3(0.215, 0.08, 0.215) * hs,
-                    cc,
-                );
-                fr.cube(
-                    b,
-                    head + vec3(0.0, 0.09, 0.2) * hs,
-                    vec3(0.2, 0.025, 0.04) * hs,
-                    dark(cc, 0.8),
-                );
-            }
-        }
-        None => headwear(b, &fr, head, hs, outfit, pose),
-    }
-
-    // Arms: swing while walking, raise while casting, chop when attacking.
-    let mut left = -stride * 0.8;
-    let mut right = stride * 0.8;
-    let mut l_elbow = 0.25;
-    let mut r_elbow = 0.25;
-    if pose.casting {
-        let wobble = (pose.time * 6.0).sin() * 0.1;
-        left = 1.0 + wobble;
-        right = 1.0 - wobble;
-        l_elbow = 0.5;
-        r_elbow = 0.5;
-    }
-    if pose.swing > 0.0 && pose.swing < 1.0 {
-        let t = pose.swing;
-        right = if t < 0.35 {
-            2.7 * (t / 0.35)
-        } else {
-            2.7 * (1.0 - (t - 0.35) / 0.65) + 0.3
-        };
-        r_elbow = if t < 0.35 { 0.9 } else { 0.2 };
-    }
-    let shoulder_y = 1.53 + y;
-    let sw = chest_w + 0.08;
-    let mut hand_pos = [Vec3::ZERO; 2];
-    for (i, (side, angle, elbow)) in [(-1.0f32, left, l_elbow), (1.0, right, r_elbow)]
-        .into_iter()
-        .enumerate()
-    {
-        let shoulder = vec3(sw * side, shoulder_y, 0.0);
-        fr.sphere(b, shoulder, 0.1 * limb.max(0.7), arms);
-        let el = fr.limb(b, shoulder, angle, 0.08 * limb, 0.34, arms);
-        let wrist = fr.limb(
-            b,
-            el,
-            angle + elbow,
-            0.07 * limb,
-            0.32,
-            if is_robed { arms } else { dark(arms, 0.95) },
-        );
-        fr.sphere(
-            b,
-            wrist + vec3(0.0, -0.04, 0.0),
-            0.075 * limb.max(0.8),
-            hands,
-        );
-        hand_pos[i] = wrist + vec3(0.0, -0.05, 0.0);
-    }
-    let hands = Hands {
-        left: hand_pos[0],
-        right: hand_pos[1],
-        left_angle: left + l_elbow + 1.55,
-        right_angle: right + r_elbow + 1.55,
-        shoulder_y,
-        sw,
-        y,
-        chest_w,
-    };
-    gear_and_weapons(b, &fr, outfit, &hands, look, pose, legs);
-    if look.gear[Slot::Chest.index()] == Some(items::HEARTSTONE_CHESTGUARD) {
-        fr.glow(b, vec3(0.0, 1.42 + y, 0.18), 0.06, c(0.35, 0.9, 1.0));
-        for sx in [-1.0, 1.0] {
-            fr.ellipsoid(
-                b,
-                vec3(sw * sx, shoulder_y + 0.06, 0.0),
-                vec3(0.15, 0.09, 0.15),
-                c(0.45, 0.47, 0.52),
-            );
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn face(
-    b: &mut Batch,
-    fr: &Frame,
-    head: Vec3,
-    hs: f32,
-    race: Race,
-    skin: Color,
-    hair: Color,
-    outfit: Outfit,
-    skeletal: bool,
-) {
-    let person = matches!(outfit, Outfit::Class(_) | Outfit::Merchant);
-    let undead = (person && race == Race::Undead) || skeletal;
-    if skeletal {
-        fr.ellipsoid(b, head, vec3(0.17, 0.2, 0.18) * hs, BONE);
-        fr.cube(
-            b,
-            head + vec3(0.0, -0.15, 0.06) * hs,
-            vec3(0.12, 0.05, 0.1) * hs,
-            dark(BONE, 0.85),
-        );
-    } else {
-        let jaw = if race == Race::Orc { 1.1 } else { 1.0 };
-        fr.ellipsoid(b, head, vec3(0.19 * jaw, 0.21, 0.2) * hs, skin);
-    }
-    let eye_glow = match outfit {
-        Outfit::Mob(
-            HumanoidStyle::Skeleton | HumanoidStyle::Necromancer | HumanoidStyle::Trickster,
-            colors,
-        ) => Some(colors[2]),
-        _ if undead => Some(c(0.95, 0.9, 0.55)),
-        _ => None,
-    };
-    let tusks = (person && race == Race::Orc)
-        || matches!(
-            outfit,
-            Outfit::Mob(
-                HumanoidStyle::Troll | HumanoidStyle::TrollShaman | HumanoidStyle::Trogg,
-                _
-            )
-        );
-    for sx in [-1.0, 1.0] {
-        let eye = head + vec3(0.07 * sx, 0.03, 0.17) * hs;
-        match eye_glow {
-            Some(g) => {
-                fr.sphere(b, eye, 0.04 * hs, c(0.08, 0.06, 0.08));
-                fr.glow(b, eye + vec3(0.0, 0.0, 0.02) * hs, 0.022 * hs, g);
-            }
-            None => {
-                fr.sphere(b, eye, 0.035 * hs, c(0.95, 0.95, 0.95));
-                fr.sphere(
-                    b,
-                    eye + vec3(0.0, 0.0, 0.025) * hs,
-                    0.018 * hs,
-                    c(0.12, 0.1, 0.1),
-                );
-            }
-        }
-        if !skeletal {
-            fr.cube(
-                b,
-                head + vec3(0.07 * sx, 0.085, 0.18) * hs,
-                vec3(0.04, 0.012, 0.012) * hs,
-                dark(hair, 0.9),
-            );
-        }
-        // Ears.
-        let ear = head + vec3(0.18 * sx, 0.02, -0.02) * hs;
-        match race {
-            _ if !person => {
-                if !skeletal {
-                    fr.sphere(b, head + vec3(0.19 * sx, 0.0, 0.0) * hs, 0.04 * hs, skin);
-                }
-            }
-            Race::Elf => fr.cone_dir(b, ear, vec3(0.2 * sx, 0.12, -0.08) * hs, 0.045 * hs, skin),
-            Race::Goblin => fr.cone_dir(b, ear, vec3(0.3 * sx, 0.06, -0.04) * hs, 0.07 * hs, skin),
-            Race::Orc => fr.cone_dir(b, ear, vec3(0.1 * sx, 0.06, -0.03) * hs, 0.05 * hs, skin),
-            _ => fr.sphere(b, head + vec3(0.19 * sx, 0.0, 0.0) * hs, 0.04 * hs, skin),
-        }
-        if tusks {
-            fr.cone_dir(
-                b,
-                head + vec3(0.06 * sx, -0.12, 0.15) * hs,
-                vec3(0.01 * sx, 0.09, 0.02) * hs,
-                0.02 * hs,
-                c(0.96, 0.94, 0.85),
-            );
-        }
-    }
-    if skeletal {
-        fr.cube(
-            b,
-            head + vec3(0.0, -0.06, 0.17) * hs,
-            vec3(0.02, 0.03, 0.01) * hs,
-            c(0.1, 0.08, 0.08),
-        );
-        return;
-    }
-    // Nose and mouth.
-    match race {
-        Race::Goblin if person => fr.cone_dir(
-            b,
-            head + vec3(0.0, -0.01, 0.18) * hs,
-            vec3(0.0, -0.02, 0.14) * hs,
-            0.04 * hs,
-            dark(skin, 0.9),
-        ),
-        Race::Gnome if person => fr.sphere(
-            b,
-            head + vec3(0.0, -0.02, 0.2) * hs,
-            0.05 * hs,
-            dark(skin, 0.95),
-        ),
-        _ => fr.cube(
-            b,
-            head + vec3(0.0, -0.015, 0.205) * hs,
-            vec3(0.022, 0.04, 0.025) * hs,
-            dark(skin, 0.9),
-        ),
-    }
-    let mouth = if undead {
-        c(0.2, 0.12, 0.15)
-    } else {
-        c(0.55, 0.28, 0.25)
-    };
-    let w = if race == Race::Goblin && person {
-        0.07
-    } else {
-        0.045
-    };
-    fr.cube(
-        b,
-        head + vec3(0.0, -0.09, 0.18) * hs,
-        vec3(w, 0.01, 0.01) * hs,
-        mouth,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn hair_style(
-    b: &mut Batch,
-    fr: &Frame,
-    head: Vec3,
-    hs: f32,
-    style: u8,
-    hair: Color,
-    pose: Pose,
-    stride: f32,
-) {
-    let top = head + vec3(0.0, 0.17, -0.01) * hs;
-    match style {
-        1 => {
-            fr.cube(b, top, vec3(0.2, 0.06, 0.2) * hs, hair);
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.05, -0.13) * hs,
-                vec3(0.2, 0.13, 0.08) * hs,
-                hair,
-            );
-        }
-        2 => {
-            fr.cube(b, top, vec3(0.21, 0.06, 0.21) * hs, hair);
-            fr.cube(
-                b,
-                head + vec3(0.0, -0.08, -0.14) * hs,
-                vec3(0.21, 0.26, 0.07) * hs,
-                hair,
-            );
-            for sx in [-1.0, 1.0] {
-                fr.cube(
-                    b,
-                    head + vec3(0.19 * sx, -0.04, -0.03) * hs,
-                    vec3(0.03, 0.2, 0.09) * hs,
-                    hair,
-                );
-            }
-        }
-        3 => {
-            fr.cube(b, top, vec3(0.2, 0.06, 0.2) * hs, hair);
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.05, -0.14) * hs,
-                vec3(0.19, 0.12, 0.07) * hs,
-                hair,
-            );
-            let sway = (pose.time * 2.0).sin() * 0.1 + stride * 0.2;
-            let tie = head + vec3(0.0, 0.05, -0.21) * hs;
-            fr.sphere(b, tie, 0.05 * hs, dark(hair, 0.8));
-            fr.limb(b, tie, -0.35 + sway, 0.045 * hs, 0.32 * hs, hair);
-        }
-        4 => {
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.2, -0.02) * hs,
-                vec3(0.035, 0.08, 0.19) * hs,
-                hair,
-            );
-        }
-        _ => {}
-    }
-}
-
-fn headwear(b: &mut Batch, fr: &Frame, head: Vec3, hs: f32, outfit: Outfit, pose: Pose) {
-    let h = |v: Vec3| head + v * hs;
-    match outfit {
-        Outfit::Class(class) => match class {
-            Class::Barbarian => {
-                // War paint and a leather headband.
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.1, 0.0)),
-                    vec3(0.205, 0.025, 0.205) * hs,
-                    c(0.45, 0.32, 0.2),
-                );
-                for sx in [-1.0, 1.0] {
-                    fr.cube(
-                        b,
-                        h(vec3(0.09 * sx, 0.0, 0.19)),
-                        vec3(0.015, 0.05, 0.01) * hs,
-                        c(0.75, 0.12, 0.1),
-                    );
-                }
-            }
-            Class::Fighter => {
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.16, 0.0)),
-                    vec3(0.22, 0.07, 0.22) * hs,
-                    STEEL,
-                );
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.1, 0.0)),
-                    vec3(0.225, 0.02, 0.225) * hs,
-                    dark(STEEL, 0.8),
-                );
-            }
-            Class::Paladin | Class::Cleric => {
-                fr.cylinder(b, h(vec3(0.0, 0.17, 0.0)), 0.04 * hs, 0.21 * hs, GOLD);
-                fr.glow(b, h(vec3(0.0, 0.2, 0.2)), 0.03 * hs, c(1.0, 0.95, 0.6));
-            }
-            Class::Monk => {
-                let red = c(0.85, 0.15, 0.12);
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.1, 0.0)),
-                    vec3(0.205, 0.03, 0.205) * hs,
-                    red,
-                );
-                fr.limb(
-                    b,
-                    h(vec3(0.0, 0.1, -0.21)),
-                    -0.6 + (pose.time * 3.0).sin() * 0.1,
-                    0.03 * hs,
-                    0.25 * hs,
-                    red,
-                );
-            }
-            Class::Rogue => {
-                fr.cube(
-                    b,
-                    h(vec3(0.0, -0.075, 0.12)),
-                    vec3(0.195, 0.065, 0.1) * hs,
-                    c(0.12, 0.12, 0.14),
-                );
-            }
-            Class::Ranger => {
-                // A hood thrown back over the shoulders.
-                fr.cube(
-                    b,
-                    h(vec3(0.0, -0.12, -0.17)),
-                    vec3(0.2, 0.1, 0.08) * hs,
-                    c(0.22, 0.32, 0.18),
-                );
-            }
-            Class::Artificer => {
-                // Goggles pushed up on the forehead.
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.1, 0.0)),
-                    vec3(0.205, 0.025, 0.205) * hs,
-                    LEATHER,
-                );
-                for sx in [-1.0, 1.0] {
-                    fr.cylinder_dir(
-                        b,
-                        h(vec3(0.07 * sx, 0.1, 0.18)),
-                        vec3(0.0, 0.0, 0.05) * hs,
-                        0.05 * hs,
-                        c(0.7, 0.55, 0.25),
-                    );
-                    b.lit(|b| {
-                        fr.cylinder_dir(
-                            b,
-                            h(vec3(0.07 * sx, 0.1, 0.23)),
-                            vec3(0.0, 0.0, 0.01) * hs,
-                            0.04 * hs,
-                            c(0.5, 0.85, 1.0),
-                        )
-                    });
-                }
-            }
-            Class::Bard => {
-                // A wide hat with a feather.
-                let hat = c(0.6, 0.18, 0.45);
-                fr.cylinder(b, h(vec3(0.0, 0.14, 0.0)), 0.04 * hs, 0.3 * hs, hat);
-                fr.ellipsoid(b, h(vec3(0.0, 0.22, 0.0)), vec3(0.2, 0.08, 0.2) * hs, hat);
-                fr.beam(
-                    b,
-                    h(vec3(0.15, 0.2, -0.05)),
-                    h(vec3(0.3, 0.55, -0.25)),
-                    0.02 * hs,
-                    c(0.95, 0.85, 0.3),
-                );
-            }
-            Class::Druid => {
-                let antler = c(0.6, 0.5, 0.35);
-                for sx in [-1.0, 1.0] {
-                    let base = h(vec3(0.12 * sx, 0.15, 0.0));
-                    let tip = h(vec3(0.28 * sx, 0.45, -0.05));
-                    fr.beam(b, base, tip, 0.025 * hs, antler);
-                    fr.beam(
-                        b,
-                        base.lerp(tip, 0.5),
-                        h(vec3(0.3 * sx, 0.3, 0.1)),
-                        0.02 * hs,
-                        antler,
-                    );
-                }
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.11, 0.0)),
-                    vec3(0.205, 0.02, 0.205) * hs,
-                    c(0.3, 0.5, 0.2),
-                );
-            }
-            Class::Mage => {
-                // The pointed hat is built in the head's frame, so it turns with it.
-                let hat = c(0.27, 0.17, 0.6);
-                fr.cylinder(b, h(vec3(0.0, 0.14, 0.0)), 0.04 * hs, 0.38 * hs, hat);
-                fr.cone(b, h(vec3(0.0, 0.17, 0.0)), 0.65 * hs, 0.23 * hs, hat);
-                fr.cylinder(b, h(vec3(0.0, 0.18, 0.0)), 0.05 * hs, 0.235 * hs, GOLD);
-            }
-            Class::Sorcerer => {
-                fr.cylinder(b, h(vec3(0.0, 0.17, 0.0)), 0.04 * hs, 0.21 * hs, GOLD);
-                fr.cone_dir(
-                    b,
-                    h(vec3(0.0, 0.21, 0.14)),
-                    vec3(0.0, 0.12, 0.03) * hs,
-                    0.03 * hs,
-                    GOLD,
-                );
-            }
-            Class::Warlock => {
-                // A deep hood with small horns.
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.07, -0.04)),
-                    vec3(0.22, 0.18, 0.2) * hs,
-                    c(0.12, 0.08, 0.14),
-                );
-                for sx in [-1.0, 1.0] {
-                    fr.cone_dir(
-                        b,
-                        h(vec3(0.12 * sx, 0.2, 0.05)),
-                        vec3(0.08 * sx, 0.18, -0.08) * hs,
-                        0.04 * hs,
-                        c(0.2, 0.15, 0.15),
-                    );
-                }
-            }
-        },
-        Outfit::Merchant => {
-            // A feathered cap.
-            fr.cylinder(
-                b,
-                h(vec3(0.0, 0.15, 0.0)),
-                0.07 * hs,
-                0.21 * hs,
-                c(0.2, 0.42, 0.3),
-            );
-            fr.beam(
-                b,
-                h(vec3(0.15, 0.2, 0.0)),
-                h(vec3(0.25, 0.42, -0.2)),
-                0.02 * hs,
-                c(0.9, 0.3, 0.2),
-            );
-        }
-        Outfit::Mob(style, colors) => match style {
-            HumanoidStyle::Bandit => {
-                fr.cube(
-                    b,
-                    h(vec3(0.0, -0.06, 0.15)),
-                    vec3(0.19, 0.07, 0.07) * hs,
-                    colors[2],
-                );
-            }
-            HumanoidStyle::Mystic | HumanoidStyle::Necromancer => {
-                let hood = dark(colors[0], 0.7);
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.06, -0.04)),
-                    vec3(0.23, 0.2, 0.21) * hs,
-                    hood,
-                );
-                fr.cone(b, h(vec3(0.0, 0.22, -0.08)), 0.32 * hs, 0.17 * hs, hood);
-            }
-            HumanoidStyle::Raider => {
-                // A turban and face wrap.
-                fr.ellipsoid(
-                    b,
-                    h(vec3(0.0, 0.15, -0.01)),
-                    vec3(0.23, 0.12, 0.23) * hs,
-                    c(0.92, 0.88, 0.78),
-                );
-                fr.cube(
-                    b,
-                    h(vec3(0.0, -0.07, 0.14)),
-                    vec3(0.19, 0.07, 0.07) * hs,
-                    colors[2],
-                );
-            }
-            HumanoidStyle::Shaman | HumanoidStyle::TrollShaman | HumanoidStyle::TroggShaman => {
-                // A feathered headdress.
-                for k in 0..5 {
-                    let a = (k as f32 - 2.0) * 0.35;
-                    let col = if k % 2 == 0 {
-                        colors[2]
-                    } else {
-                        c(0.95, 0.92, 0.85)
-                    };
-                    fr.beam(
-                        b,
-                        h(vec3(a * 0.3, 0.15, -0.05)),
-                        h(vec3(a * 0.6, 0.5, -0.15)),
-                        0.025 * hs,
-                        col,
-                    );
-                }
-            }
-            HumanoidStyle::Satyr | HumanoidStyle::Trickster => {
-                let horn = c(0.85, 0.8, 0.7);
-                for sx in [-1.0, 1.0] {
-                    let bend = h(vec3(0.2 * sx, 0.32, -0.05));
-                    fr.beam(b, h(vec3(0.1 * sx, 0.15, 0.03)), bend, 0.035 * hs, horn);
-                    fr.beam(b, bend, h(vec3(0.26 * sx, 0.3, -0.2)), 0.025 * hs, horn);
-                }
-            }
-            HumanoidStyle::Troll => {
-                fr.cube(
-                    b,
-                    h(vec3(0.0, 0.2, -0.02)),
-                    vec3(0.04, 0.09, 0.18) * hs,
-                    c(0.85, 0.3, 0.2),
-                );
-            }
-            HumanoidStyle::Trogg | HumanoidStyle::Skeleton => {}
-        },
-        Outfit::Giant(..) => {}
-    }
-}
-
-fn giant_head(
-    b: &mut Batch,
-    fr: &Frame,
-    head: Vec3,
-    style: GiantStyle,
-    colors: [Color; 3],
-    pose: Pose,
-) {
-    let glow_c = Color::new(
-        colors[2].r,
-        colors[2].g,
-        colors[2].b,
-        0.7 + 0.3 * (pose.time * 2.0).sin().abs(),
-    );
-    match style {
-        GiantStyle::Yeti => {
-            fr.ellipsoid(b, head, vec3(0.24, 0.24, 0.24), colors[0]);
-            fr.ellipsoid(
-                b,
-                head + vec3(0.0, -0.03, 0.16),
-                vec3(0.14, 0.12, 0.08),
-                c(0.55, 0.65, 0.8),
-            );
-            for sx in [-1.0, 1.0] {
-                fr.cone_dir(
-                    b,
-                    head + vec3(0.17 * sx, 0.14, 0.0),
-                    vec3(0.15 * sx, 0.12, 0.1),
-                    0.05,
-                    c(0.75, 0.7, 0.62),
-                );
-                fr.glow(b, head + vec3(0.07 * sx, 0.03, 0.22), 0.035, glow_c);
-            }
-        }
-        GiantStyle::Bone => {
-            fr.ellipsoid(b, head, vec3(0.2, 0.22, 0.22), colors[0]);
-            fr.cube(
-                b,
-                head + vec3(0.0, -0.17, 0.06),
-                vec3(0.14, 0.05, 0.12),
-                dark(colors[0], 0.85),
-            );
-            for sx in [-1.0, 1.0] {
-                fr.sphere(
-                    b,
-                    head + vec3(0.08 * sx, 0.03, 0.18),
-                    0.05,
-                    c(0.08, 0.06, 0.08),
-                );
-                fr.glow(b, head + vec3(0.08 * sx, 0.03, 0.2), 0.03, glow_c);
-                fr.cone_dir(
-                    b,
-                    head + vec3(0.15 * sx, 0.15, 0.0),
-                    vec3(0.12 * sx, 0.25, -0.05),
-                    0.04,
-                    colors[0],
-                );
-            }
-        }
-        GiantStyle::Treant => {
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.03, 0.0),
-                vec3(0.2, 0.22, 0.19),
-                colors[0],
-            );
-            // A leafy crown.
-            for k in 0..5 {
-                let a = k as f32 * 1.26;
-                fr.sphere(
-                    b,
-                    head + vec3(a.cos() * 0.2, 0.3, a.sin() * 0.2),
-                    0.2,
-                    colors[2],
-                );
-            }
-            for sx in [-1.0, 1.0] {
-                fr.glow(b, head + vec3(0.08 * sx, 0.05, 0.2), 0.04, c(0.6, 1.0, 0.4));
-            }
-        }
-        _ => {
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.03, 0.0),
-                vec3(0.2, 0.19, 0.19),
-                colors[0],
-            );
-            fr.cube(
-                b,
-                head + vec3(0.0, 0.17, -0.02),
-                vec3(0.16, 0.05, 0.15),
-                dark(colors[0], 0.85),
-            );
-            for sx in [-1.0, 1.0] {
-                fr.glow(b, head + vec3(0.08 * sx, 0.05, 0.19), 0.045, glow_c);
-            }
-            if style == GiantStyle::Crystal {
-                for k in 0..3 {
-                    let x = k as f32 - 1.0;
-                    fr.cone_dir(
-                        b,
-                        head + vec3(x * 0.1, 0.2, -0.05),
-                        vec3(x * 0.08, 0.3, -0.05),
-                        0.05,
-                        colors[2],
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Where the hands ended up, and other measurements gear hangs off.
-struct Hands {
-    left: Vec3,
-    right: Vec3,
-    left_angle: f32,
-    right_angle: f32,
-    shoulder_y: f32,
-    sw: f32,
-    y: f32,
-    chest_w: f32,
-}
-
-fn sword(b: &mut Batch, fr: &Frame, hand: Vec3, angle: f32, length: f32) {
-    let guard = fr.limb(b, hand, angle, 0.025, 0.12, WOOD);
-    fr.limb(b, guard, angle, 0.13, 0.04, GOLD);
-    fr.limb(b, guard, angle, 0.04, length, STEEL);
-}
-
-fn shield(b: &mut Batch, fr: &Frame, hand: Vec3, face: Color, trim: Color) {
-    fr.cube(
-        b,
-        hand + vec3(-0.07, 0.05, 0.13),
-        vec3(0.04, 0.33, 0.27),
-        face,
-    );
-    fr.cube(
-        b,
-        hand + vec3(-0.11, 0.05, 0.13),
-        vec3(0.015, 0.34, 0.03),
-        trim,
-    );
-    fr.cube(
-        b,
-        hand + vec3(-0.11, 0.05, 0.13),
-        vec3(0.015, 0.03, 0.28),
-        trim,
-    );
-}
-
-fn gear_and_weapons(
-    b: &mut Batch,
-    fr: &Frame,
-    outfit: Outfit,
-    h: &Hands,
-    look: &Look,
-    pose: Pose,
-    legs: Color,
-) {
-    let (rhand, lhand) = (h.right, h.left);
-    let (wa, la) = (h.right_angle, h.left_angle);
-    let y = h.y;
-    match outfit {
-        Outfit::Class(class) => match class {
-            Class::Barbarian => {
-                // A fur mantle and a great two-handed axe.
-                for sx in [-1.0, 1.0] {
-                    fr.ellipsoid(
-                        b,
-                        vec3(h.sw * sx, h.shoulder_y + 0.05, -0.02),
-                        vec3(0.17, 0.1, 0.17),
-                        c(0.55, 0.45, 0.35),
-                    );
-                }
-                fr.cube(
-                    b,
-                    vec3(0.0, 1.4 + y, 0.175),
-                    vec3(0.03, 0.15, 0.01),
-                    LEATHER,
-                );
-                let haft = fr.limb(b, rhand, wa, 0.035, 1.2, WOOD);
-                fr.cube(
-                    b,
-                    haft + vec3(0.0, 0.05, 0.0),
-                    vec3(0.03, 0.18, 0.14),
-                    STEEL,
-                );
-            }
-            Class::Fighter => {
-                for sx in [-1.0, 1.0] {
-                    fr.ellipsoid(
-                        b,
-                        vec3(h.sw * sx, h.shoulder_y + 0.06, 0.0),
-                        vec3(0.15, 0.08, 0.15),
-                        STEEL,
-                    );
-                }
-                fr.cube(
-                    b,
-                    vec3(0.0, 1.25 + y, 0.175),
-                    vec3(0.14, 0.32, 0.01),
-                    c(0.18, 0.3, 0.6),
-                );
-                sword(b, fr, rhand, wa, 0.85);
-                shield(b, fr, lhand, c(0.18, 0.3, 0.6), STEEL);
-            }
-            Class::Paladin => {
-                for sx in [-1.0, 1.0] {
-                    fr.ellipsoid(
-                        b,
-                        vec3(h.sw * sx, h.shoulder_y + 0.06, 0.0),
-                        vec3(0.16, 0.09, 0.16),
-                        c(0.88, 0.88, 0.92),
-                    );
-                    fr.ellipsoid(
-                        b,
-                        vec3(h.sw * sx, h.shoulder_y + 0.04, 0.0),
-                        vec3(0.17, 0.04, 0.17),
-                        GOLD,
-                    );
-                }
-                fr.cube(b, vec3(0.0, 1.3 + y, 0.175), vec3(0.04, 0.2, 0.01), GOLD);
-                fr.cube(b, vec3(0.0, 1.38 + y, 0.18), vec3(0.12, 0.035, 0.01), GOLD);
-                let head = fr.limb(b, rhand, wa, 0.03, 0.7, WOOD);
-                fr.cube(b, head, vec3(0.1, 0.1, 0.16), STEEL);
-                shield(b, fr, lhand, c(0.9, 0.88, 0.8), GOLD);
-            }
-            Class::Monk => {
-                // A sash, and wrapped fists.
-                let red = c(0.85, 0.15, 0.12);
-                fr.cube(
-                    b,
-                    vec3(0.0, 1.07 + y, 0.0),
-                    vec3(h.chest_w - 0.04, 0.05, 0.16),
-                    red,
-                );
-                fr.tilted(
-                    b,
-                    vec3(0.12, 0.9 + y, 0.15),
-                    vec3(0.04, 0.15, 0.01),
-                    0.1,
-                    red,
-                );
-                fr.sphere(b, rhand, 0.085, c(0.9, 0.88, 0.8));
-                fr.sphere(b, lhand, 0.085, c(0.9, 0.88, 0.8));
-            }
-            Class::Rogue => {
-                fr.cube(
-                    b,
-                    vec3(0.0, 1.36 + y, 0.0),
-                    vec3(h.chest_w + 0.01, 0.025, 0.175),
-                    LEATHER,
-                );
-                for (hand, angle) in [(rhand, wa), (lhand, la)] {
-                    let hilt = fr.limb(b, hand, angle, 0.025, 0.1, c(0.2, 0.12, 0.08));
-                    fr.limb(b, hilt, angle, 0.08, 0.03, STEEL);
-                    fr.limb(b, hilt, angle, 0.03, 0.42, c(0.82, 0.84, 0.88));
-                }
-            }
-            Class::Ranger => {
-                // A longbow in the left hand and a quiver on the back.
-                let top = lhand + vec3(-0.02, 0.75, 0.05);
-                let bottom = lhand + vec3(-0.02, -0.75, 0.05);
-                let bend = lhand + vec3(-0.02, 0.0, 0.22);
-                fr.beam(b, top, bend, 0.025, WOOD);
-                fr.beam(b, bend, bottom, 0.025, WOOD);
-                fr.beam(b, top, bottom, 0.006, c(0.9, 0.9, 0.85));
-                fr.tilted(
-                    b,
-                    vec3(0.12, 1.35 + y, -0.22),
-                    vec3(0.07, 0.25, 0.06),
-                    -0.35,
-                    LEATHER,
-                );
-                for k in 0..3 {
-                    let x = 0.08 + k as f32 * 0.04;
-                    fr.tilted(
-                        b,
-                        vec3(x, 1.65 + y, -0.32),
-                        vec3(0.012, 0.08, 0.012),
-                        -0.35,
-                        c(0.85, 0.2, 0.15),
-                    );
-                }
-            }
-            Class::Artificer => {
-                // A backpack of pipes and a rifle.
-                fr.cube(
-                    b,
-                    vec3(0.0, 1.32 + y, -0.27),
-                    vec3(0.2, 0.22, 0.1),
-                    c(0.45, 0.35, 0.22),
-                );
-                for sx in [-1.0, 1.0] {
-                    fr.cylinder(
-                        b,
-                        vec3(0.12 * sx, 1.5 + y, -0.3),
-                        0.3,
-                        0.04,
-                        c(0.7, 0.55, 0.25),
-                    );
-                }
-                fr.glow(b, vec3(0.0, 1.35 + y, -0.38), 0.06, c(0.5, 0.85, 1.0));
-                let stock = fr.limb(b, rhand, wa, 0.05, 0.25, WOOD);
-                fr.limb(b, stock, wa, 0.03, 0.55, c(0.35, 0.35, 0.38));
-            }
-            Class::Bard => {
-                // A lute held across the body.
-                fr.ellipsoid(
-                    b,
-                    lhand + vec3(0.1, 0.0, 0.15),
-                    vec3(0.16, 0.2, 0.06),
-                    c(0.6, 0.38, 0.18),
-                );
-                fr.beam(
-                    b,
-                    lhand + vec3(0.1, 0.15, 0.15),
-                    lhand + vec3(0.25, 0.6, 0.15),
-                    0.025,
-                    c(0.35, 0.22, 0.12),
-                );
-                fr.cube(b, vec3(0.0, 1.3 + y, 0.175), vec3(0.04, 0.2, 0.01), GOLD);
-            }
-            Class::Cleric => {
-                fr.cube(b, vec3(0.0, 1.27 + y, 0.175), vec3(0.07, 0.3, 0.01), GOLD);
-                fr.cube(b, vec3(0.0, 1.38 + y, 0.18), vec3(0.14, 0.035, 0.01), GOLD);
-                let head = fr.limb(b, rhand, wa, 0.03, 0.6, WOOD);
-                fr.sphere(b, head, 0.11, c(0.82, 0.82, 0.85));
-            }
-            Class::Druid => {
-                fr.cube(
-                    b,
-                    rhand + vec3(0.0, 0.25, 0.0),
-                    vec3(0.035, 0.95, 0.035),
-                    c(0.45, 0.32, 0.2),
-                );
-                for k in 0..4 {
-                    let a = k as f32 * 1.57;
-                    fr.sphere(
-                        b,
-                        rhand + vec3(a.cos() * 0.08, 1.2, a.sin() * 0.08),
-                        0.07,
-                        c(0.35, 0.65, 0.25),
-                    );
-                }
-                fr.glow(b, rhand + vec3(0.0, 1.25, 0.0), 0.04, c(0.8, 1.0, 0.6));
-            }
-            Class::Mage => {
-                fr.cube(b, vec3(0.0, 1.27 + y, 0.175), vec3(0.04, 0.27, 0.01), GOLD);
-                fr.cube(b, rhand + vec3(0.0, 0.3, 0.0), vec3(0.03, 0.95, 0.03), WOOD);
-                fr.glow(b, rhand + vec3(0.0, 1.32, 0.0), 0.1, c(0.55, 0.85, 1.0));
-            }
-            Class::Sorcerer => {
-                fr.cube(b, vec3(0.0, 1.27 + y, 0.175), vec3(0.04, 0.27, 0.01), GOLD);
-                // Orbs of wild magic circling.
-                for k in 0..3 {
-                    let a = pose.time * 2.0 + k as f32 * 2.09;
-                    let p = vec3(
-                        a.cos() * 0.55,
-                        1.5 + y + (a * 2.0).sin() * 0.1,
-                        a.sin() * 0.55,
-                    );
-                    let col = [c(1.0, 0.4, 0.2), c(0.6, 0.4, 1.0), c(0.3, 0.9, 1.0)][k];
-                    fr.glow(b, p, 0.07, col);
-                }
-            }
-            Class::Warlock => {
-                // A skull at the belt and fel fire in the hands.
-                fr.cube(b, vec3(0.18, 1.0 + y, 0.13), vec3(0.06, 0.07, 0.06), BONE);
-                let flame = Color::new(0.4, 1.0, 0.3, 0.9);
-                fr.glow(
-                    b,
-                    rhand + vec3(0.0, 0.05, 0.1),
-                    0.08 + (pose.time * 7.0).sin().abs() * 0.02,
-                    flame,
-                );
-                fr.glow(b, lhand + vec3(0.0, 0.05, 0.1), 0.06, flame);
-            }
-        },
-        Outfit::Merchant => {
-            // An apron and a coin purse.
-            fr.cube(
-                b,
-                vec3(0.0, 1.05 + y, 0.17),
-                vec3(0.2, 0.3, 0.01),
-                c(0.88, 0.85, 0.75),
-            );
-            fr.sphere(b, vec3(0.2, 1.0 + y, 0.12), 0.07, c(0.55, 0.4, 0.2));
-        }
-        Outfit::Mob(style, colors) => match style {
-            HumanoidStyle::Bandit | HumanoidStyle::Raider | HumanoidStyle::Trogg => {
-                let hilt = fr.limb(b, rhand, wa, 0.025, 0.1, WOOD);
-                if style == HumanoidStyle::Trogg || look.seed.is_multiple_of(2) {
-                    fr.limb(b, hilt, wa, 0.07, 0.6, c(0.35, 0.24, 0.14));
-                } else {
-                    fr.limb(b, hilt, wa, 0.03, 0.5, STEEL);
-                }
-            }
-            HumanoidStyle::Satyr => {
-                let hilt = fr.limb(b, rhand, wa, 0.025, 0.1, WOOD);
-                fr.limb(b, hilt, wa, 0.03, 0.55, STEEL);
-                fr.limb(b, lhand, la, 0.025, 0.4, STEEL);
-            }
-            HumanoidStyle::Troll => {
-                let haft = fr.limb(b, rhand, wa, 0.03, 0.9, WOOD);
-                fr.cube(b, haft, vec3(0.03, 0.15, 0.12), c(0.75, 0.85, 0.95));
-            }
-            HumanoidStyle::Skeleton => {
-                let hilt = fr.limb(b, rhand, wa, 0.025, 0.1, WOOD);
-                fr.limb(b, hilt, wa, 0.035, 0.6, c(0.55, 0.42, 0.3));
-                shield(b, fr, lhand, c(0.35, 0.3, 0.28), c(0.55, 0.42, 0.3));
-            }
-            HumanoidStyle::Mystic
-            | HumanoidStyle::Trickster
-            | HumanoidStyle::Necromancer
-            | HumanoidStyle::Shaman
-            | HumanoidStyle::TrollShaman
-            | HumanoidStyle::TroggShaman => {
-                let pulse = 0.08 + (pose.time * 3.0).sin().abs() * 0.03;
-                let g = colors[2];
-                fr.glow(b, rhand + vec3(0.0, 0.05, 0.12), pulse, g);
-                if matches!(
-                    style,
-                    HumanoidStyle::Necromancer | HumanoidStyle::Shaman | HumanoidStyle::TrollShaman
-                ) {
-                    fr.cube(b, lhand + vec3(0.0, 0.3, 0.0), vec3(0.03, 0.95, 0.03), WOOD);
-                    let top = if style == HumanoidStyle::Necromancer {
-                        BONE
-                    } else {
-                        g
-                    };
-                    fr.sphere(b, lhand + vec3(0.0, 1.3, 0.0), 0.1, top);
-                } else {
-                    fr.glow(b, lhand + vec3(0.0, 0.05, 0.12), pulse * 0.7, g);
-                }
-            }
-        },
-        Outfit::Giant(style, colors) => {
-            fr.cube(b, lhand, vec3(0.16, 0.16, 0.16), legs);
-            fr.cube(b, rhand, vec3(0.16, 0.16, 0.16), legs);
-            for sx in [-1.0, 1.0] {
-                fr.cube(
-                    b,
-                    vec3(h.sw * sx, h.shoulder_y + 0.08, 0.0),
-                    vec3(0.16, 0.12, 0.16),
-                    dark(legs, 0.9),
-                );
-            }
-            let accent = colors[2];
-            match style {
-                GiantStyle::Stone | GiantStyle::Sandstone => {
-                    let moss = if style == GiantStyle::Stone {
-                        c(0.32, 0.45, 0.2)
-                    } else {
-                        dark(colors[0], 0.8)
-                    };
-                    fr.cube(
-                        b,
-                        vec3(-0.15, h.shoulder_y + 0.21, -0.05),
-                        vec3(0.12, 0.03, 0.1),
-                        moss,
-                    );
-                    let rune = Color::new(
-                        accent.r,
-                        accent.g,
-                        accent.b,
-                        0.6 + 0.4 * (pose.time * 2.0).sin().abs(),
-                    );
-                    fr.glow(b, vec3(0.0, 1.4 + y, 0.18), 0.07, rune);
-                    for (x, yy) in [(-0.15, 1.25), (0.15, 1.25), (0.0, 1.17)] {
-                        b.lit(|b| {
-                            fr.cube(b, vec3(x, yy + y, 0.172), vec3(0.03, 0.03, 0.005), rune)
-                        });
-                    }
-                }
-                GiantStyle::Treant => {
-                    // Branches growing from the shoulders.
-                    for sx in [-1.0, 1.0] {
-                        let from = vec3(h.sw * sx, h.shoulder_y, 0.0);
-                        let to = vec3(h.sw * sx * 1.8, h.shoulder_y + 0.5, -0.1);
-                        fr.beam(b, from, to, 0.04, colors[0]);
-                        fr.sphere(b, to + vec3(0.03 * sx, 0.1, 0.0), 0.15, accent);
-                    }
-                }
-                GiantStyle::Crystal => {
-                    b.lit(|b| {
-                        for k in 0..5 {
-                            let x = (k as f32 - 2.0) * 0.12;
-                            fr.cone_dir(
-                                b,
-                                vec3(x, 1.45 + y, -0.15),
-                                vec3(x * 0.5, 0.35, -0.2),
-                                0.06,
-                                accent,
-                            );
-                        }
-                        for sx in [-1.0, 1.0] {
-                            fr.cone_dir(
-                                b,
-                                vec3(h.sw * sx, h.shoulder_y + 0.15, 0.0),
-                                vec3(0.1 * sx, 0.3, 0.0),
-                                0.07,
-                                accent,
-                            );
-                        }
-                    });
-                }
-                GiantStyle::Yeti => {
-                    // Shaggy fur.
-                    fr.ellipsoid(
-                        b,
-                        vec3(0.0, 1.35 + y, 0.0),
-                        vec3(0.36, 0.3, 0.24),
-                        colors[0],
-                    );
-                    for sx in [-1.0, 1.0] {
-                        fr.ellipsoid(
-                            b,
-                            vec3(h.sw * sx, h.shoulder_y + 0.05, 0.0),
-                            vec3(0.2, 0.15, 0.2),
-                            colors[0],
-                        );
-                    }
-                }
-                GiantStyle::Bone => {
-                    for k in 0..4 {
-                        fr.cone_dir(
-                            b,
-                            vec3(0.0, 1.55 - k as f32 * 0.12 + y, -0.1),
-                            vec3(0.0, 0.05, -0.2),
-                            0.04,
-                            colors[0],
-                        );
-                    }
-                    fr.glow(b, vec3(0.0, 1.3 + y, 0.05), 0.08, accent);
-                }
-            }
-        }
-    }
-}
-
-fn wolf(b: &mut Batch, pos: Vec3, yaw: f32, colors: [Color; 3], seed: u32, pose: Pose) {
-    let fr = if pose.dead {
-        Frame::fallen(pos, yaw, 1.0, true)
-    } else {
-        Frame::upright(pos, yaw, 1.0)
-    };
-    let tint = (seed % 3) as f32 * 0.04;
-    let fur = Color::new(colors[0].r + tint, colors[0].g + tint, colors[0].b, 1.0);
-    let back = colors[1];
-    let belly = mix(colors[0], c(0.85, 0.82, 0.78), 0.5);
-    let moving = pose.moving && !pose.dead;
-    let gait = if moving { pose.walk } else { 0.0 };
-    let lunge = if pose.swing > 0.0 && pose.swing < 1.0 {
-        (pose.swing * std::f32::consts::PI).sin() * 0.3
-    } else {
-        0.0
-    };
-    let y = 0.78
-        + if moving {
-            (gait * 2.0).sin().abs() * 0.04
-        } else {
-            0.0
-        };
-    fr.cube(b, vec3(0.0, y, 0.22), vec3(0.23, 0.24, 0.32), fur);
-    fr.cube(b, vec3(0.0, y + 0.02, -0.32), vec3(0.19, 0.2, 0.28), fur);
-    fr.cube(b, vec3(0.0, y + 0.23, -0.05), vec3(0.17, 0.05, 0.55), back);
-    fr.cube(b, vec3(0.0, y - 0.2, 0.15), vec3(0.17, 0.06, 0.3), belly);
-    fr.cube(b, vec3(0.0, y + 0.08, 0.5), vec3(0.25, 0.25, 0.1), back);
-    for (x, z, phase) in [
-        (-1.0, 1.0, 0.0),
-        (1.0, 1.0, 3.1),
-        (-1.0, -1.0, 3.1),
-        (1.0, -1.0, 0.0),
-    ] {
-        let swing = if moving {
-            (gait + phase).sin() * 0.55
-        } else {
-            0.0
-        };
-        let bend = if moving {
-            (gait + phase + 1.0).sin().max(0.0) * 0.6
-        } else {
-            0.0
-        };
-        let hip = vec3(x * 0.15, y - 0.12, z * 0.4);
-        let knee = fr.limb(b, hip, swing, 0.07, 0.36, fur);
-        let ankle = fr.limb(b, knee, swing - bend * z, 0.055, 0.32, back);
-        fr.cube(
-            b,
-            ankle + vec3(0.0, 0.0, 0.04),
-            vec3(0.06, 0.035, 0.08),
-            back,
-        );
-    }
-    let head = vec3(0.0, y + 0.22, 0.72 + lunge);
-    fr.cube(b, head, vec3(0.16, 0.15, 0.17), fur);
-    fr.cube(
-        b,
-        head + vec3(0.0, -0.05, 0.24),
-        vec3(0.08, 0.07, 0.13),
-        fur,
-    );
-    fr.cube(
-        b,
-        head + vec3(0.0, -0.1, 0.22),
-        vec3(0.07, 0.025, 0.12),
-        belly,
-    );
-    fr.sphere(b, head + vec3(0.0, -0.01, 0.38), 0.04, c(0.08, 0.07, 0.07));
-    for sx in [-1.0, 1.0] {
-        fr.glow(b, head + vec3(0.08 * sx, 0.05, 0.16), 0.032, colors[2]);
-        fr.cone_dir(
-            b,
-            head + vec3(0.09 * sx, 0.12, -0.04),
-            vec3(0.03 * sx, 0.17, -0.03),
-            0.06,
-            back,
-        );
-        fr.cone_dir(
-            b,
-            head + vec3(0.05 * sx, -0.11, 0.33),
-            vec3(0.0, -0.06, 0.0),
-            0.015,
-            c(0.95, 0.94, 0.88),
-        );
-    }
-    let wag = (pose.time * 4.0).sin() * 0.2;
-    let t1 = fr.limb(b, vec3(0.0, y + 0.12, -0.58), 2.2 + wag, 0.07, 0.25, fur);
-    let t2 = fr.limb(b, t1, 2.6 + wag, 0.09, 0.25, back);
-    fr.sphere(b, t2, 0.07, belly);
-}
-
-fn boar(b: &mut Batch, pos: Vec3, yaw: f32, colors: [Color; 3], seed: u32, pose: Pose) {
-    let fr = if pose.dead {
-        Frame::fallen(pos, yaw, 1.0, true)
-    } else {
-        Frame::upright(pos, yaw, 1.0)
-    };
-    let tint = (seed % 3) as f32 * 0.03;
-    let hide = Color::new(colors[0].r + tint, colors[0].g, colors[0].b, 1.0);
-    let dark_hide = colors[1];
-    let snout = mix(hide, c(0.85, 0.55, 0.5), 0.6);
-    let tusk = colors[2];
-    let moving = pose.moving && !pose.dead;
-    let gait = if moving { pose.walk * 1.3 } else { 0.0 };
-    let lunge = if pose.swing > 0.0 && pose.swing < 1.0 {
-        (pose.swing * std::f32::consts::PI).sin() * 0.3
-    } else {
-        0.0
-    };
-    let y = 0.68
-        + if moving {
-            (gait * 2.0).sin().abs() * 0.03
-        } else {
-            0.0
-        };
-    // The body is built along the boar's own axes, so it turns with the boar.
-    fr.ellipsoid(b, vec3(0.0, y, 0.0), vec3(0.34, 0.33, 0.62), hide);
-    fr.ellipsoid(b, vec3(0.0, y + 0.05, 0.38), vec3(0.32, 0.33, 0.3), hide);
-    for i in 0..6 {
-        let z = 0.45 - i as f32 * 0.17;
-        let top = y + 0.3 - (i as f32 - 2.0).abs() * 0.02;
-        fr.cone_dir(
-            b,
-            vec3(0.0, top, z),
-            vec3(0.0, 0.14, -0.06),
-            0.06,
-            dark_hide,
-        );
-    }
-    for (x, z, phase) in [
-        (-1.0, 1.0, 0.0),
-        (1.0, 1.0, 3.1),
-        (-1.0, -1.0, 3.1),
-        (1.0, -1.0, 0.0),
-    ] {
-        let swing = if moving {
-            (gait + phase).sin() * 0.5
-        } else {
-            0.0
-        };
-        let hip = vec3(x * 0.2, y - 0.18, z * 0.38);
-        let ankle = fr.limb(b, hip, swing, 0.08, 0.36, hide);
-        fr.cube(b, ankle, vec3(0.07, 0.04, 0.07), c(0.15, 0.12, 0.1));
-    }
-    let head = vec3(0.0, y - 0.02, 0.72 + lunge);
-    fr.cube(b, head, vec3(0.19, 0.18, 0.2), hide);
-    fr.cylinder_dir(
-        b,
-        head + vec3(0.0, -0.04, 0.2),
-        vec3(0.0, 0.0, 0.1),
-        0.09,
-        snout,
-    );
-    for sx in [-1.0, 1.0] {
-        fr.sphere(
-            b,
-            head + vec3(0.035 * sx, -0.04, 0.3),
-            0.02,
-            c(0.2, 0.1, 0.1),
-        );
-        fr.sphere(
-            b,
-            head + vec3(0.12 * sx, 0.07, 0.17),
-            0.03,
-            c(0.08, 0.06, 0.05),
-        );
-        fr.cone_dir(
-            b,
-            head + vec3(0.13 * sx, 0.15, -0.05),
-            vec3(0.06 * sx, 0.12, -0.05),
-            0.06,
-            dark_hide,
-        );
-        fr.cone_dir(
-            b,
-            head + vec3(0.12 * sx, -0.12, 0.2),
-            vec3(0.05 * sx, 0.1, 0.1),
-            0.03,
-            tusk,
-        );
-    }
-    let t = fr.limb(b, vec3(0.0, y + 0.15, -0.6), 2.5, 0.025, 0.12, dark_hide);
-    fr.limb(
-        b,
-        t,
-        1.3 + (pose.time * 5.0).sin() * 0.3,
-        0.025,
-        0.1,
-        dark_hide,
-    );
-}
-
-fn spider(b: &mut Batch, pos: Vec3, yaw: f32, colors: [Color; 3], pose: Pose) {
-    let fr = if pose.dead {
-        Frame::fallen(pos, yaw, 1.0, true)
-    } else {
-        Frame::upright(pos, yaw, 1.0)
-    };
-    let moving = pose.moving && !pose.dead;
-    let lunge = if pose.swing > 0.0 && pose.swing < 1.0 {
-        (pose.swing * std::f32::consts::PI).sin() * 0.25
-    } else {
-        0.0
-    };
-    let y = 0.6;
-    fr.ellipsoid(
-        b,
-        vec3(0.0, y, 0.15 + lunge),
-        vec3(0.3, 0.22, 0.32),
-        colors[0],
-    );
-    fr.ellipsoid(
-        b,
-        vec3(0.0, y + 0.15, -0.5),
-        vec3(0.45, 0.38, 0.55),
-        colors[1],
-    );
-    // Markings on the abdomen.
-    fr.ellipsoid(
-        b,
-        vec3(0.0, y + 0.5, -0.5),
-        vec3(0.12, 0.04, 0.2),
-        colors[2],
-    );
-    for k in 0..4 {
-        for sx in [-1.0f32, 1.0] {
-            let phase = k as f32 * 1.6 + if sx > 0.0 { 3.1 } else { 0.0 };
-            let lift = if moving {
-                (pose.walk * 1.5 + phase).sin().max(0.0) * 0.2
-            } else {
-                0.0
-            };
-            let z = 0.35 - k as f32 * 0.22;
-            let hip = vec3(0.22 * sx, y, z + lunge);
-            let knee = vec3(0.75 * sx, y + 0.45 + lift, z * 1.4 + 0.05);
-            let foot = vec3(1.05 * sx, 0.0, z * 1.7 + 0.1);
-            fr.beam(b, hip, knee, 0.045, colors[0]);
-            fr.beam(b, knee, foot, 0.035, colors[1]);
-        }
-    }
-    for sx in [-1.0, 1.0] {
-        fr.glow(b, vec3(0.08 * sx, y + 0.12, 0.45 + lunge), 0.04, colors[2]);
-        fr.glow(b, vec3(0.16 * sx, y + 0.08, 0.4 + lunge), 0.03, colors[2]);
-        fr.cone_dir(
-            b,
-            vec3(0.07 * sx, y - 0.05, 0.45 + lunge),
-            vec3(0.0, -0.15, 0.08),
-            0.03,
-            c(0.1, 0.08, 0.08),
-        );
-    }
-}
-
-fn scorpion(b: &mut Batch, pos: Vec3, yaw: f32, colors: [Color; 3], pose: Pose) {
-    let fr = if pose.dead {
-        Frame::fallen(pos, yaw, 1.0, true)
-    } else {
-        Frame::upright(pos, yaw, 1.0)
-    };
-    let moving = pose.moving && !pose.dead;
-    let strike = if pose.swing > 0.0 && pose.swing < 1.0 {
-        (pose.swing * std::f32::consts::PI).sin()
-    } else {
-        0.0
-    };
-    let y = 0.45;
-    fr.ellipsoid(b, vec3(0.0, y, 0.0), vec3(0.35, 0.16, 0.55), colors[0]);
-    for k in 0..3 {
-        let kf = k as f32;
-        fr.cube(
-            b,
-            vec3(0.0, y + 0.12, 0.3 - kf * 0.3),
-            vec3(0.3 - kf * 0.03, 0.04, 0.1),
-            colors[1],
-        );
-    }
-    for k in 0..3 {
-        for sx in [-1.0f32, 1.0] {
-            let phase = k as f32 * 1.9 + if sx > 0.0 { 3.1 } else { 0.0 };
-            let lift = if moving {
-                (pose.walk * 1.5 + phase).sin().max(0.0) * 0.15
-            } else {
-                0.0
-            };
-            let z = 0.25 - k as f32 * 0.25;
-            let knee = vec3(0.65 * sx, y + 0.2 + lift, z);
-            fr.beam(b, vec3(0.3 * sx, y, z), knee, 0.035, colors[0]);
-            fr.beam(b, knee, vec3(0.85 * sx, 0.0, z - 0.05), 0.03, colors[1]);
-        }
-    }
-    // Pincers.
-    for sx in [-1.0f32, 1.0] {
-        let elbow = vec3(0.4 * sx, y + 0.1, 0.65);
-        let claw = vec3(0.3 * sx, y + 0.1, 1.0 + strike * 0.2);
-        fr.beam(b, vec3(0.25 * sx, y, 0.45), elbow, 0.05, colors[0]);
-        fr.beam(b, elbow, claw, 0.05, colors[0]);
-        fr.ellipsoid(
-            b,
-            claw + vec3(0.0, 0.0, 0.1),
-            vec3(0.1, 0.07, 0.16),
-            colors[1],
-        );
-        fr.cone_dir(
-            b,
-            claw + vec3(0.04 * sx, 0.0, 0.22),
-            vec3(-0.04 * sx, 0.0, 0.15),
-            0.04,
-            colors[1],
-        );
-    }
-    // A tail curling up over the back, with a stinger.
-    let mut p = vec3(0.0, y + 0.05, -0.5);
-    for k in 0..6 {
-        let a = 0.2 + k as f32 * 0.42 + strike * 0.3;
-        let next = p + vec3(0.0, a.sin() * 0.22, -a.cos() * 0.22);
-        let col = if k % 2 == 0 { colors[0] } else { colors[1] };
-        fr.sphere(b, next, 0.11 - k as f32 * 0.008, col);
-        p = next;
-    }
-    fr.cone_dir(b, p, vec3(0.0, -0.05, 0.25), 0.05, colors[2]);
-    for sx in [-1.0, 1.0] {
-        fr.sphere(b, vec3(0.08 * sx, y + 0.12, 0.5), 0.03, c(0.05, 0.05, 0.05));
-    }
-}
-
 // ---- Scenery ----
 
 const FOG_VERTEX: &str = r#"#version 100
@@ -2768,6 +844,17 @@ struct ZoneScene {
     chimneys: Vec<Vec3>,
     lamps: Vec<Glow>,
     fires: Vec<Glow>,
+    flags: Vec<Flag>,
+}
+
+/// A banner's cloth, which waves in the wind.
+#[derive(Clone, Copy)]
+struct Flag {
+    /// Where the cloth hangs from the pole.
+    top: Vec3,
+    /// The direction the cloth streams out.
+    yaw: f32,
+    color: Color,
 }
 
 /// Static scenery for every zone (built the first time it's seen) and the
@@ -2836,8 +923,12 @@ impl Scene {
     }
 
     /// Smoke, flickering fires and lamp glows.
-    pub fn draw_effects(&self, zone: Zone, b: &mut Batch, time: f32) {
+    pub fn draw_effects(&self, zone: Zone, b: &mut Batch, time: f32, around: Vec3) {
         let z = self.get(zone);
+        for f in &z.flags {
+            flag(b, f, time);
+        }
+        weather(b, zone, time, around);
         let smoke = if zone == Zone::Frostcog {
             c(0.85, 0.87, 0.9)
         } else {
@@ -2885,8 +976,140 @@ impl Scene {
     }
 }
 
+/// A banner's cloth: a grid of quads rippling along its length.
+fn flag(b: &mut Batch, f: &Flag, time: f32) {
+    let out = forward(f.yaw);
+    let side = vec3(-out.z, 0.0, out.x);
+    let cols = 6;
+    let len = 1.3;
+    let drop = 1.6;
+    let wave = |k: usize| {
+        let t = k as f32 / cols as f32;
+        side * ((time * 3.0 - t * 4.0 + f.top.x).sin() * 0.18 * t)
+    };
+    for k in 0..cols {
+        let (t0, t1) = (k as f32 / cols as f32, (k + 1) as f32 / cols as f32);
+        let a = f.top + out * len * t0 + wave(k);
+        let e = f.top + out * len * t1 + wave(k + 1);
+        // A swallowtail: the bottom edge rises at the tip.
+        let d0 = drop * (1.0 - (t0 - 0.7).max(0.0));
+        let d1 = drop * (1.0 - (t1 - 0.7).max(0.0));
+        let n = side;
+        let col = if k % 2 == 0 {
+            f.color
+        } else {
+            dark(f.color, 0.9)
+        };
+        b.quad([a, e, e - Vec3::Y * d1, a - Vec3::Y * d0], n, col);
+        b.quad([e, a, a - Vec3::Y * d0, e - Vec3::Y * d1], -n, col);
+        if k == cols / 2 {
+            b.lit(|b| b.sphere(a - Vec3::Y * drop * 0.45 + side * 0.02, 0.1, GOLD));
+        }
+    }
+}
+
+/// Small things drifting through the air around the camera: falling
+/// leaves, blowing sand, fireflies, spores, snow and ghostly wisps. Each
+/// particle has a fixed home in a tile that repeats across the world, so
+/// they stay put as you walk through them.
+fn weather(b: &mut Batch, zone: Zone, time: f32, around: Vec3) {
+    const TILE: f32 = 70.0;
+    let mut rng = Scatter(0x5EED + zone.index() as u32 * 977);
+    let (count, height) = match zone {
+        Zone::Amberfall => (110, 14.0),
+        Zone::Scorchsand => (160, 3.0),
+        Zone::Silverbough => (90, 5.0),
+        Zone::Grubdeep => (110, 12.0),
+        Zone::Frostcog => (320, 16.0),
+        Zone::Witherwood => (70, 6.0),
+    };
+    let place = |base: f32, drift: f32, center: f32| {
+        center + ((base * TILE + drift - center).rem_euclid(TILE) - TILE * 0.5)
+    };
+    for i in 0..count {
+        let (bx, bz, by, phase) = (
+            rng.unit(),
+            rng.unit(),
+            rng.unit(),
+            rng.unit() * std::f32::consts::TAU,
+        );
+        let speed = 0.6 + rng.unit() * 0.8;
+        match zone {
+            Zone::Amberfall => {
+                // Leaves tumbling down on a breeze.
+                let x = place(bx, time * 0.8, around.x);
+                let z = place(bz, time * 0.3, around.z);
+                let fall = (by * height - time * speed).rem_euclid(height);
+                let ground_y = terrain_height(x, z);
+                let p = vec3(x + (time * 1.3 + phase).sin() * 0.6, ground_y + fall, z);
+                let spin = time * 2.0 + phase;
+                let u = vec3(spin.cos(), (spin * 0.7).sin() * 0.5, spin.sin()) * 0.12;
+                let v = vec3(-spin.sin(), 0.3, spin.cos()) * 0.08;
+                let col = [c(0.9, 0.46, 0.12), c(0.75, 0.2, 0.1), c(0.93, 0.72, 0.2)][i % 3];
+                b.quad([p - u, p - v, p + u, p + v], Vec3::Y, col);
+            }
+            Zone::Scorchsand => {
+                // Sand streaming low over the dunes.
+                let x = place(bx, time * 7.0 * speed, around.x);
+                let z = place(bz, time * 2.0 * speed, around.z);
+                let y = terrain_height(x, z) + 0.2 + by * height + (time * 3.0 + phase).sin() * 0.1;
+                let col = Color::new(0.95, 0.85, 0.62, 0.55);
+                let streak = vec3(0.35, 0.0, 0.1);
+                b.beam(vec3(x, y, z) - streak, vec3(x, y, z), 0.025, Vec3::Y, col);
+            }
+            Zone::Silverbough => {
+                // Fireflies wandering and pulsing.
+                let x = place(bx, (time * 0.3 + phase).sin() * 2.0, around.x);
+                let z = place(bz, (time * 0.25 + phase).cos() * 2.0, around.z);
+                let y = terrain_height(x, z) + 0.6 + by * height + (time * 0.9 + phase).sin() * 0.4;
+                let pulse = 0.5 + 0.5 * (time * 2.5 + phase).sin();
+                b.glow_sphere(
+                    vec3(x, y, z),
+                    0.05 + pulse * 0.03,
+                    Color::new(0.75, 1.0, 0.55, 0.4 + pulse * 0.6),
+                );
+            }
+            Zone::Grubdeep => {
+                // Glowing spores rising slowly.
+                let x = place(bx, (time * 0.2 + phase).sin(), around.x);
+                let z = place(bz, 0.0, around.z);
+                let rise = (by * height + time * speed * 0.5).rem_euclid(height);
+                let y = terrain_height(x, z) + rise;
+                let col = if i % 2 == 0 {
+                    Color::new(0.45, 1.0, 0.6, 0.7)
+                } else {
+                    Color::new(0.75, 0.5, 1.0, 0.7)
+                };
+                b.glow_sphere(vec3(x, y, z), 0.04, col);
+            }
+            Zone::Frostcog => {
+                // Snowfall.
+                let x = place(bx, (time * 0.5 + phase).sin() * 0.8 + time * 0.4, around.x);
+                let z = place(bz, 0.0, around.z);
+                let fall = (by * height - time * speed * 1.6).rem_euclid(height);
+                let y = terrain_height(x, z) + fall;
+                b.block(vec3(x, y, z), Vec3::splat(0.045), phase, c(1.0, 1.0, 1.0));
+            }
+            Zone::Witherwood => {
+                // Pale green wisps drifting and fading in and out.
+                let x = place(bx, time * 0.6 * speed, around.x);
+                let z = place(bz, (time * 0.4 + phase).sin() * 3.0, around.z);
+                let y = terrain_height(x, z) + 0.8 + by * height + (time + phase).sin() * 0.5;
+                let fade = (0.5 + 0.5 * (time * 0.7 + phase).sin()).powi(2);
+                let col = Color::new(0.55, 1.0, 0.55, 0.15 + fade * 0.5);
+                b.glow_sphere(vec3(x, y, z), 0.12, col);
+                b.glow_sphere(
+                    vec3(x - 0.25, y - 0.05, z),
+                    0.07,
+                    Color::new(col.r, col.g, col.b, col.a * 0.5),
+                );
+            }
+        }
+    }
+}
+
 /// The sky, drawn in screen space before the 3D pass.
-pub fn draw_sky(cam: &Camera3D, zone: Zone, project: impl Fn(Vec3) -> Option<Vec2>) {
+pub fn draw_sky(cam: &Camera3D, zone: Zone, time: f32, project: impl Fn(Vec3) -> Option<Vec2>) {
     let t = theme(zone);
     // Also clears the depth buffer for the 3D pass.
     clear_background(t.fog);
@@ -2936,6 +1159,41 @@ pub fn draw_sky(cam: &Camera3D, zone: Zone, project: impl Fn(Vec3) -> Option<Vec
             );
         }
         draw_circle(p.x, p.y, 26.0, disc);
+    }
+    // Clouds drifting slowly across the sky.
+    if !t.cave {
+        let cloud = match zone {
+            Zone::Witherwood => Color::new(0.3, 0.25, 0.35, 0.55),
+            Zone::Silverbough => Color::new(0.55, 0.6, 0.85, 0.35),
+            Zone::Scorchsand => Color::new(1.0, 1.0, 1.0, 0.45),
+            Zone::Frostcog => Color::new(1.0, 1.0, 1.0, 0.7),
+            _ => mix(t.sky_horizon, Color::new(1.0, 0.85, 0.8, 1.0), 0.5),
+        };
+        let cloud = Color::new(cloud.r, cloud.g, cloud.b, cloud.a.min(0.6));
+        let mut rng = Scatter(91 + zone.index() as u32);
+        for _ in 0..16 {
+            let az = rng.range(0.0, std::f32::consts::TAU) + time * 0.006;
+            let el = rng.range(0.06, 0.32);
+            let size = rng.range(0.6, 1.4);
+            let dir = vec3(az.cos() * el.cos(), el.sin(), az.sin() * el.cos());
+            let Some(p) = project(cam.position + dir * 1000.0) else {
+                continue;
+            };
+            // Closer to the horizon looks further away: smaller and flatter.
+            let r = 34.0 * size * (0.5 + el * 2.5);
+            for k in 0..5 {
+                let o = (k as f32 - 2.0) * r * 0.55;
+                let rr = r * (1.0 - (k as f32 - 2.0).abs() * 0.18);
+                draw_ellipse(
+                    p.x + o,
+                    p.y - (k % 2) as f32 * r * 0.15,
+                    rr,
+                    rr * 0.45,
+                    0.0,
+                    cloud,
+                );
+            }
+        }
     }
 }
 
@@ -3030,6 +1288,46 @@ fn ground_colors(zone: Zone) -> Ground {
     }
 }
 
+/// The color of a spot on the world map (world XZ position).
+pub fn map_color(zone: Zone, world: Vec2) -> Color {
+    let local = zone.to_local(world);
+    let h = terrain_height(world.x, world.y);
+    let e = 1.0;
+    let normal = vec3(
+        terrain_height(world.x - e, world.y) - terrain_height(world.x + e, world.y),
+        2.0 * e,
+        terrain_height(world.x, world.y - e) - terrain_height(world.x, world.y + e),
+    )
+    .normalize();
+    let g = ground_colors(zone);
+    let mut col = terrain_color(zone, &g, local, h, 1.0 - normal.y);
+    // Hill shading from the north-west.
+    let lit = 0.75 + normal.dot(vec3(0.5, 0.75, 0.45).normalize()) * 0.35;
+    col = dark(col, lit);
+    let water = zone.water_level();
+    if h < water {
+        let t = theme(zone).water;
+        col = mix(
+            Color::new(t.r, t.g, t.b, 1.0),
+            dark(Color::new(t.r, t.g, t.b, 1.0), 0.6),
+            (water - h) / 4.0,
+        );
+    }
+    col
+}
+
+/// The main leaf color of a zone, for the map.
+pub fn foliage(zone: Zone) -> Color {
+    match zone {
+        Zone::Amberfall => c(0.85, 0.42, 0.12),
+        Zone::Scorchsand => c(0.3, 0.52, 0.28),
+        Zone::Silverbough => c(0.3, 0.62, 0.45),
+        Zone::Grubdeep => c(0.4, 0.38, 0.45),
+        Zone::Frostcog => c(0.16, 0.3, 0.24),
+        Zone::Witherwood => c(0.2, 0.17, 0.16),
+    }
+}
+
 fn terrain_color(zone: Zone, g: &Ground, local: Vec2, h: f32, slope: f32) -> Color {
     let (x, z) = (local.x, local.y);
     let n = noise(x, z);
@@ -3043,7 +1341,7 @@ fn terrain_color(zone: Zone, g: &Ground, local: Vec2, h: f32, slope: f32) -> Col
     let road = (1.0 - x.abs().min(z.abs()) / 3.0).clamp(0.0, 1.0)
         * (1.0 - (d - 70.0) / 20.0).clamp(0.0, 1.0);
     col = mix(col, g.road, road * 0.85);
-    for f in props::FIELDS {
+    for &f in &zone.layout().fields {
         let inside = (1.0 - (local.distance(f) - 11.0) / 2.0).clamp(0.0, 1.0);
         let rows = ((x - f.x) * 1.6).sin() * 0.5 + 0.5;
         col = mix(col, mix(g.field, dark(g.field, 1.25), rows), inside);
@@ -3061,10 +1359,19 @@ fn build_zone(zone: Zone) -> ZoneScene {
     let mut chimneys = Vec::new();
     let mut lamps = Vec::new();
     let mut fires = Vec::new();
+    let mut flags = Vec::new();
     terrain(&mut b, zone);
     ground_cover(&mut b, zone);
     for p in props::props(zone) {
-        draw_prop(&mut b, zone, &p, &mut chimneys, &mut lamps, &mut fires);
+        draw_prop(
+            &mut b,
+            zone,
+            &p,
+            &mut chimneys,
+            &mut lamps,
+            &mut fires,
+            &mut flags,
+        );
     }
     if t.cave {
         cave_ceiling(&mut b, zone);
@@ -3087,6 +1394,7 @@ fn build_zone(zone: Zone) -> ZoneScene {
         chimneys,
         lamps,
         fires,
+        flags,
     }
 }
 
@@ -3319,6 +1627,7 @@ fn draw_prop(
     chimneys: &mut Vec<Vec3>,
     lamps: &mut Vec<Glow>,
     fires: &mut Vec<Glow>,
+    flags: &mut Vec<Flag>,
 ) {
     let pos = p.pos;
     let yaw = p.yaw;
@@ -3743,6 +2052,255 @@ fn draw_prop(
             };
             b.lit(|b| b.block(pos + Vec3::Y * 0.06, vec3(0.5, 0.04, 0.12), yaw, col));
         }
+        PropKind::Well => {
+            let stone = match zone {
+                Zone::Silverbough => c(0.88, 0.88, 0.92),
+                Zone::Scorchsand => c(0.7, 0.5, 0.35),
+                Zone::Frostcog => c(0.62, 0.64, 0.7),
+                _ => c(0.5, 0.48, 0.46),
+            };
+            // A round stone wall with a roof on two posts and a bucket.
+            b.cone_ref(pos, Vec3::Y * 0.9, forward(yaw), 1.2, 1.2, 14, stone);
+            b.cone_ref(
+                pos + Vec3::Y * 0.9,
+                Vec3::Y * 0.12,
+                forward(yaw),
+                1.28,
+                1.28,
+                14,
+                dark(stone, 0.8),
+            );
+            let water = theme(zone).water;
+            b.cylinder(
+                pos + Vec3::Y * 0.8,
+                Vec3::Y * 0.12,
+                1.0,
+                14,
+                Color::new(water.r, water.g, water.b, 1.0),
+            );
+            let r = vec3(-forward(yaw).z, 0.0, forward(yaw).x);
+            for sx in [-1.0, 1.0] {
+                b.block(
+                    pos + r * sx * 1.05 + Vec3::Y * 1.6,
+                    vec3(0.08, 1.6, 0.08),
+                    yaw,
+                    WOOD,
+                );
+            }
+            b.beam(
+                pos - r * 1.1 + Vec3::Y * 2.2,
+                pos + r * 1.1 + Vec3::Y * 2.2,
+                0.06,
+                Vec3::Y,
+                WOOD,
+            );
+            let roof = match zone {
+                Zone::Amberfall => c(0.62, 0.22, 0.15),
+                Zone::Frostcog => c(0.95, 0.97, 1.0),
+                _ => dark(WOOD, 1.2),
+            };
+            let f = forward(yaw);
+            for sz in [-1.0, 1.0] {
+                let a = pos + Vec3::Y * 3.1;
+                let e = pos + f * sz * 1.4 + Vec3::Y * 2.3;
+                b.quad(
+                    [a - r * 1.4, a + r * 1.4, e + r * 1.4, e - r * 1.4],
+                    (Vec3::Y + f * sz).normalize(),
+                    roof,
+                );
+            }
+            b.beam(
+                pos + Vec3::Y * 2.2,
+                pos + Vec3::Y * 1.5,
+                0.01,
+                Vec3::X,
+                c(0.6, 0.55, 0.45),
+            );
+            b.cone(pos + Vec3::Y * 1.2, Vec3::Y * 0.3, 0.16, 0.2, 8, WOOD);
+        }
+        PropKind::Cart => {
+            let f = forward(yaw);
+            let r = vec3(-f.z, 0.0, f.x);
+            let wood = dark(WOOD, 1.15);
+            b.block(pos + Vec3::Y * 0.85, vec3(0.8, 0.12, 1.4), yaw, wood);
+            for sx in [-1.0, 1.0] {
+                b.block(
+                    pos + r * sx * 0.78 + Vec3::Y * 1.15,
+                    vec3(0.04, 0.25, 1.4),
+                    yaw,
+                    wood,
+                );
+                // Wheels.
+                let hub = pos + r * sx * 0.95 + Vec3::Y * 0.6 - f * 0.4;
+                b.cone_ref(
+                    hub - r * sx * 0.05,
+                    r * sx * 0.1,
+                    Vec3::Y,
+                    0.6,
+                    0.6,
+                    12,
+                    dark(WOOD, 0.8),
+                );
+                for k in 0..4 {
+                    let a = k as f32 * 0.785;
+                    let d = Vec3::Y * a.sin() + f * a.cos();
+                    b.beam(
+                        hub + r * sx * 0.06 - d * 0.55,
+                        hub + r * sx * 0.06 + d * 0.55,
+                        0.03,
+                        r,
+                        WOOD,
+                    );
+                }
+            }
+            // Shafts and a load of sacks.
+            for sx in [-1.0, 1.0] {
+                b.beam(
+                    pos + r * sx * 0.4 + f * 1.3 + Vec3::Y * 0.8,
+                    pos + r * sx * 0.4 + f * 2.6 + Vec3::Y * 0.3,
+                    0.05,
+                    Vec3::Y,
+                    WOOD,
+                );
+            }
+            for k in 0..3 {
+                let at = pos
+                    + Vec3::Y * 1.2
+                    + f * (-0.7 + k as f32 * 0.6)
+                    + r * ((k % 2) as f32 * 0.3 - 0.15);
+                b.ellipsoid(at, vec3(0.35, 0.28, 0.3), c(0.78, 0.68, 0.48));
+            }
+        }
+        PropKind::Signpost => {
+            b.block(pos + Vec3::Y * 1.3, vec3(0.08, 1.3, 0.08), 0.0, WOOD);
+            // Two arms pointing along the road.
+            let f = forward(yaw);
+            let r = vec3(-f.z, 0.0, f.x);
+            for (k, sx) in [(0.0f32, 1.0f32), (1.0, -1.0)] {
+                let at = pos + Vec3::Y * (2.1 - k * 0.45) + r * sx * 0.45;
+                b.block(
+                    at,
+                    vec3(0.45, 0.13, 0.03),
+                    yaw + std::f32::consts::FRAC_PI_2,
+                    dark(WOOD, 1.25),
+                );
+                b.cone_ref(
+                    at + r * sx * 0.45,
+                    r * sx * 0.2,
+                    Vec3::Y,
+                    0.14,
+                    0.0,
+                    4,
+                    dark(WOOD, 1.25),
+                );
+            }
+            b.cone(
+                pos + Vec3::Y * 2.6,
+                Vec3::Y * 0.25,
+                0.12,
+                0.0,
+                4,
+                dark(WOOD, 0.8),
+            );
+        }
+        PropKind::Banner => {
+            let color = banner_color(zone);
+            b.cylinder(pos, Vec3::Y * 5.0, 0.07, 6, c(0.25, 0.2, 0.18));
+            b.sphere(pos + Vec3::Y * 5.05, 0.12, GOLD);
+            b.beam(
+                pos + Vec3::Y * 4.8,
+                pos + Vec3::Y * 4.8 + forward(yaw + 0.6) * 1.3,
+                0.035,
+                Vec3::Y,
+                c(0.25, 0.2, 0.18),
+            );
+            flags.push(Flag {
+                top: pos + Vec3::Y * 4.8,
+                yaw: yaw + 0.6,
+                color,
+            });
+        }
+        PropKind::Flowers => {
+            let palette: [Color; 3] = match zone {
+                Zone::Silverbough => [c(0.75, 0.8, 1.0), c(0.95, 0.95, 1.0), c(0.6, 0.5, 0.95)],
+                _ => [c(0.95, 0.75, 0.2), c(0.85, 0.25, 0.2), c(0.9, 0.55, 0.85)],
+            };
+            for k in 0..9 {
+                let a = k as f32 * 2.4 + rng.unit();
+                let r = 0.2 + rng.unit() * 0.9;
+                let at = pos + vec3(a.cos() * r, 0.0, a.sin() * r);
+                let at = vec3(at.x, terrain_height(at.x, at.z), at.z);
+                let h = 0.25 + rng.unit() * 0.25;
+                b.cylinder(at, Vec3::Y * h, 0.015, 3, c(0.3, 0.55, 0.25));
+                let col = palette[k % 3];
+                if zone == Zone::Silverbough {
+                    b.glow_sphere(at + Vec3::Y * h, 0.06, col);
+                } else {
+                    b.ellipsoid(at + Vec3::Y * h, vec3(0.08, 0.035, 0.08), col);
+                }
+            }
+        }
+        PropKind::Log => {
+            let bark = match zone {
+                Zone::Witherwood => c(0.18, 0.15, 0.14),
+                Zone::Frostcog => c(0.36, 0.3, 0.26),
+                _ => c(0.36, 0.25, 0.16),
+            };
+            let f = forward(yaw);
+            let half = 1.6 * s;
+            let a = pos - f * half + Vec3::Y * 0.35;
+            b.cone_ref(a, f * half * 2.0, Vec3::Y, 0.38, 0.33, 8, bark);
+            // Cut rings at both ends, moss or snow on top.
+            b.cone_ref(
+                a - f * 0.02,
+                f * 0.02,
+                Vec3::Y,
+                0.32,
+                0.32,
+                8,
+                c(0.75, 0.6, 0.4),
+            );
+            let top = match zone {
+                Zone::Frostcog => c(0.96, 0.97, 1.0),
+                Zone::Scorchsand => dark(bark, 1.2),
+                _ => c(0.32, 0.45, 0.2),
+            };
+            b.cone_ref(
+                a + Vec3::Y * 0.3 + f * half * 0.3,
+                f * half * 1.0,
+                Vec3::Y,
+                0.18,
+                0.15,
+                6,
+                top,
+            );
+            if zone != Zone::Scorchsand {
+                b.cylinder(
+                    pos + f * half * 0.3 + Vec3::Y * 0.6,
+                    Vec3::Y * 0.12,
+                    0.04,
+                    5,
+                    c(0.9, 0.86, 0.78),
+                );
+                b.ellipsoid(
+                    pos + f * half * 0.3 + Vec3::Y * 0.74,
+                    vec3(0.12, 0.05, 0.12),
+                    c(0.75, 0.25, 0.12),
+                );
+            }
+        }
+    }
+}
+
+/// The color of a zone's banners.
+fn banner_color(zone: Zone) -> Color {
+    match zone {
+        Zone::Amberfall => c(0.2, 0.32, 0.65),
+        Zone::Scorchsand => c(0.75, 0.15, 0.1),
+        Zone::Silverbough => c(0.25, 0.55, 0.45),
+        Zone::Grubdeep => c(0.85, 0.6, 0.15),
+        Zone::Frostcog => c(0.85, 0.2, 0.25),
+        Zone::Witherwood => c(0.35, 0.15, 0.45),
     }
 }
 

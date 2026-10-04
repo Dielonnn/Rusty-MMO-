@@ -4,12 +4,14 @@
 mod game;
 mod hud;
 mod menu;
+mod models;
+mod panels;
 mod render;
 
 use macroquad::prelude::*;
 
 use game::{Game, Outcome};
-use menu::{CharacterOutcome, Characters, Login};
+use menu::{CharacterOutcome, Characters, Login, Mode};
 use render::Scene;
 
 fn window_conf() -> macroquad::conf::Conf {
@@ -31,9 +33,9 @@ fn window_conf() -> macroquad::conf::Conf {
 enum Screen {
     Login,
     Characters(Box<Characters>),
-    /// Playing, plus the account and whether it's solo, to go back to the
+    /// Playing, plus the account and how you're playing, to go back to the
     /// character list on logout.
-    Game(Box<Game>, String, bool),
+    Game(Box<Game>, String, Mode),
 }
 
 #[macroquad::main(window_conf)]

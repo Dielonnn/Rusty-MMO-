@@ -5,6 +5,39 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v4.0
+
+Commit: the one titled "v4.0: talents, sandbox mode, world map, new layouts and animations".
+
+- **Talent trees** for all 13 classes (`N`): three branches of three talents
+  each, a point per level from 2, deeper talents opening as you spend points
+  in a branch, and a reset button. Talents are saved with your character
+- **Sandbox mode** from the login screen (or `server --sandbox`): a private
+  world with a cheat panel (`P`) to set your level, add money, give items,
+  teleport between starting areas, summon mobs, turn on god mode and refresh
+  cooldowns. Sandbox characters are saved separately
+- **World map** (`M`) of your starting area, with its town, camps, levels, the
+  elite and everyone nearby
+- **Compass** on the minimap: N, E, S and W turn with the camera
+- **Every starting area has its own layout**: its own hills and lakes, town
+  arrangement (rings of huts, a crescent of towers, a goblin street, a tight
+  gnome village, a crooked undead lane), and places for fields, camps and the
+  elite's ruins. Amberfall Vale keeps its original map
+- **More detail**: wells, carts, signposts, waving banners, flower patches and
+  fallen logs; clouds; weather in every area (falling leaves, blowing sand,
+  fireflies, glowing spores, snow, ghostly wisps); belts, pouches, bracers,
+  boot cuffs, capes with clasps, plate knee and elbow guards and more on
+  characters; manes, claws, hooves, jaws and bristles on creatures
+- **Animations, unique to each class**: their own idle stance, attack and
+  casting pose (two-handed overhead chops, shield-and-sword slashes,
+  alternating monk jabs and kicks, twin dagger stabs, drawing a bow, aiming a
+  rifle, strumming a lute, raised arms, spread arms, fel claws and more), spell
+  light in the hands, flinching when hit, jumping poses and blinking. Creatures
+  sniff, root, twitch, bite, rear up and strike
+- The goblin merchant Fizzwick is now **Migwick**, and the orc merchant Grukka
+  is now **Joe**
+- Protocol version 4: v3 clients and servers can't connect to v4 ones
+
 ## v3.0
 
 Commit: the one titled "v3.0: races, six starting areas, nine new classes, merchants, collision".

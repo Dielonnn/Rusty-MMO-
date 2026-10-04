@@ -83,7 +83,7 @@ fn draw_backdrop(
         z_far: 1500.0,
         ..Default::default()
     };
-    render::draw_sky(&cam, zone, |p| hud::project(&cam, p));
+    render::draw_sky(&cam, zone, time, |p| hud::project(&cam, p));
     set_camera(&cam);
     scene.begin_3d(zone);
     scene.draw(zone);
@@ -95,7 +95,7 @@ fn draw_backdrop(
         };
         render::draw_model(batch, look, ground, zone.yaw_to_world(yaw), pose);
     }
-    scene.draw_effects(zone, batch, time);
+    scene.draw_effects(zone, batch, time, target);
     batch.flush();
     scene.draw_water(zone);
     scene.end_3d();
@@ -173,6 +173,17 @@ fn type_into(field: &mut String, max: usize, allow: impl Fn(char) -> bool) {
 
 // ---- Login ----
 
+/// How you're playing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// A private world on this computer.
+    Solo,
+    /// A private world with cheats, and its own characters.
+    Sandbox,
+    /// Someone's server.
+    Online,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Field {
     Account,
@@ -185,8 +196,8 @@ pub struct Login {
     focus: Field,
     message: Option<String>,
     time: f32,
-    /// The single-player server, once started.
-    local: Option<SocketAddr>,
+    /// The single-player servers, once started: solo and sandbox.
+    local: [Option<SocketAddr>; 2],
     batch: Batch,
 }
 
@@ -199,7 +210,7 @@ impl Login {
             focus: Field::Account,
             message: None,
             time: 0.0,
-            local: None,
+            local: [None; 2],
             batch: Batch::new(),
         }
     }
@@ -226,7 +237,8 @@ impl Login {
         let address_box = Rect::new(inner, p.y + 212.0, iw, 36.0);
         let solo = Rect::new(inner, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
         let join = Rect::new(inner + iw * 0.5 + 6.0, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
-        let quit = Rect::new(inner + iw * 0.25, p.y + 334.0, iw * 0.5, 40.0);
+        let sandbox = Rect::new(inner, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
+        let quit = Rect::new(inner + iw * 0.5 + 6.0, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
 
         match self.focus {
             Field::Account => type_into(&mut self.account, 24, |c| !c.is_control()),
@@ -249,15 +261,21 @@ impl Login {
             } else if address_box.contains(m) {
                 self.focus = Field::Address;
             } else if solo.contains(m) {
-                start = Some(true);
+                start = Some(Mode::Solo);
             } else if join.contains(m) {
-                start = Some(false);
+                start = Some(Mode::Online);
+            } else if sandbox.contains(m) {
+                start = Some(Mode::Sandbox);
             } else if quit.contains(m) {
                 std::process::exit(0);
             }
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-            start = Some(self.focus == Field::Account);
+            start = Some(if self.focus == Field::Account {
+                Mode::Solo
+            } else {
+                Mode::Online
+            });
         }
 
         panel(p);
@@ -300,9 +318,10 @@ impl Login {
         );
         button(solo, "Play Solo");
         button(join, "Join Server");
+        button(sandbox, "Sandbox");
         button(quit, "Quit");
         text_centered(
-            "Solo characters are saved on this computer.",
+            "Solo and sandbox characters are saved on this computer.",
             cx,
             p.bottom() - 18.0,
             16.0,
@@ -320,8 +339,8 @@ impl Login {
             }
         }
 
-        let solo = start?;
-        match self.connect(solo) {
+        let mode = start?;
+        match self.connect(mode) {
             Ok(screen) => Some(screen),
             Err(e) => {
                 self.message = Some(e);
@@ -330,26 +349,30 @@ impl Login {
         }
     }
 
-    fn connect(&mut self, solo: bool) -> Result<Characters, String> {
+    fn connect(&mut self, mode: Mode) -> Result<Characters, String> {
         let account = if self.account.trim().is_empty() {
             "Player".to_string()
         } else {
             self.account.trim().to_string()
         };
         save_settings(&account, &self.address);
-        let addr = if solo {
-            match self.local {
+        let addr = if mode == Mode::Online {
+            self.address.clone()
+        } else {
+            let (slot, file, sandbox) = match mode {
+                Mode::Sandbox => (1, "sandbox_characters.json", true),
+                _ => (0, "solo_characters.json", false),
+            };
+            match self.local[slot] {
                 Some(a) => a.to_string(),
                 None => {
-                    let save = data_dir().join("solo_characters.json");
-                    let a = server::spawn_local(save)
+                    let save = data_dir().join(file);
+                    let a = server::spawn_local(save, sandbox)
                         .map_err(|e| format!("Couldn't start the local server: {e}"))?;
-                    self.local = Some(a);
+                    self.local[slot] = Some(a);
                     a.to_string()
                 }
             }
-        } else {
-            self.address.clone()
         };
         let mut conn = Connection::connect(&addr, DEFAULT_PORT)
             .map_err(|e| format!("Couldn't connect to {addr}: {e}"))?;
@@ -358,7 +381,7 @@ impl Login {
             account: account.clone(),
         })
         .map_err(|e| format!("Couldn't talk to {addr}: {e}"))?;
-        Ok(Characters::new(conn, account, solo))
+        Ok(Characters::new(conn, account, mode))
     }
 }
 
@@ -374,7 +397,7 @@ pub struct Characters {
     /// Moves into the game when a character enters the world.
     conn: Option<Connection>,
     account: String,
-    solo: bool,
+    mode: Mode,
     list: Option<Vec<CharacterSummary>>,
     selected: usize,
     create: Option<Create>,
@@ -400,11 +423,11 @@ fn new_character() -> Create {
 }
 
 impl Characters {
-    pub fn new(conn: Connection, account: String, solo: bool) -> Self {
+    pub fn new(conn: Connection, account: String, mode: Mode) -> Self {
         Self {
             conn: Some(conn),
             account,
-            solo,
+            mode,
             list: None,
             selected: 0,
             create: None,
@@ -416,8 +439,8 @@ impl Characters {
         }
     }
 
-    pub fn account(&self) -> (&str, bool) {
-        (&self.account, self.solo)
+    pub fn account(&self) -> (&str, Mode) {
+        (&self.account, self.mode)
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -542,10 +565,10 @@ impl Characters {
         let p = Rect::new(w - 380.0, 30.0, 350.0, h - 60.0);
         panel(p);
         text_centered("Characters", p.x + p.w / 2.0, p.y + 36.0, 30.0, GOLD);
-        let where_ = if self.solo {
-            "Solo".to_string()
-        } else {
-            format!("Account: {}", self.account)
+        let where_ = match self.mode {
+            Mode::Solo => "Solo".to_string(),
+            Mode::Sandbox => "Sandbox: press P in game for cheats".to_string(),
+            Mode::Online => format!("Account: {}", self.account),
         };
         text_centered(
             &where_,

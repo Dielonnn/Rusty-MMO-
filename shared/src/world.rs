@@ -2,9 +2,8 @@
 //! terrain, bounds and a few geometry helpers.
 //!
 //! The zones sit side by side along X, `ZONE_SPACING` apart, and nobody can
-//! walk between them. Every zone shares one base layout (hills, lakes, camp
-//! sites, the town), turned and mirrored differently per zone so no two look
-//! alike. "Local" coordinates are in that shared layout, with the town at the
+//! walk between them. Each zone has its own layout (see `layout`), and is
+//! also turned and mirrored differently. "Local" coordinates are in that shared layout, with the town at the
 //! origin; "world" coordinates are where things really are.
 //!
 //! Both sides use the same terrain function, so the server can put mobs on
@@ -100,9 +99,9 @@ impl Zone {
     pub fn merchant_name(self) -> &'static str {
         match self {
             Zone::Amberfall => "Tobin Hale",
-            Zone::Scorchsand => "Grukka",
+            Zone::Scorchsand => "Joe",
             Zone::Silverbough => "Elarion",
-            Zone::Grubdeep => "Fizzwick",
+            Zone::Grubdeep => "Migwick",
             Zone::Frostcog => "Nimble Cogsworth",
             Zone::Witherwood => "Mortimer Graves",
         }
@@ -214,32 +213,11 @@ pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Height of the shared layout at a local position.
-pub fn layout_height(x: f32, z: f32) -> f32 {
-    let d = (x * x + z * z).sqrt();
-    let outside_town = smoothstep(TOWN_RADIUS, TOWN_RADIUS + 30.0, d);
-    let mut hills = (x * 0.031).sin() * 3.5
-        + (z * 0.027).cos() * 3.0
-        + ((x + z) * 0.071).sin() * 1.1
-        + ((x - 0.6 * z) * 0.013).sin() * 6.0;
-    // Shallow valleys: only the deepest hold lakes.
-    if hills < 0.0 {
-        hills *= 0.45;
-    }
-    // Mountains rise along the edge of the map.
-    let edge = smoothstep(
-        WORLD_HALF_SIZE - 30.0,
-        WORLD_HALF_SIZE,
-        x.abs().max(z.abs()),
-    );
-    hills * outside_town + edge * 22.0
-}
-
 /// Height of the ground at world `(x, z)`.
 pub fn terrain_height(x: f32, z: f32) -> f32 {
     let zone = Zone::at(vec3(x, 0.0, z));
     let l = zone.to_local(vec2(x, z));
-    let mut h = layout_height(l.x, l.y);
+    let mut h = crate::layout::terrain(zone).height(l.x, l.y);
     if zone == Zone::Scorchsand {
         // Wind-blown ripples on the dunes.
         let d = l.length();
@@ -314,7 +292,11 @@ mod tests {
                 assert_eq!(Zone::at(vec3(w.x, 0.0, w.y)), zone);
                 assert!(zone.to_local(w).distance(p) < 1e-3, "{zone:?}");
                 // Heights follow the shared layout.
-                assert!((terrain_height(w.x, w.y) - layout_height(p.x, p.y)).abs() < 0.3);
+                assert!(
+                    (terrain_height(w.x, w.y) - crate::layout::terrain(zone).height(p.x, p.y))
+                        .abs()
+                        < 0.3
+                );
             }
             // Facing turns with the layout.
             let dir = zone.to_world(vec2(0.0, 1.0)) - zone.center();

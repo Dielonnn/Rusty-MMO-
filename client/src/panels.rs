@@ -1,0 +1,625 @@
+//! Bigger windows: the world map (M), the talent tree (N) and the sandbox
+//! panel. Each has a layout function used both to draw it and to work out
+//! what a click hit.
+
+use macroquad::prelude::*;
+use shared::data::*;
+use shared::props::{self, PropKind};
+use shared::protocol::{EntityKind, SandboxCmd};
+use shared::talents::{self, TALENTS, TIER_RANKS, TIER_REQUIRES};
+use shared::world::*;
+
+use crate::game::Game;
+use crate::hud::{
+    BORDER, GOLD, PANEL, button, button_ex, class_color, panel, reaction_color, text,
+    text_centered, text_width, wrap,
+};
+use crate::render;
+
+// ---- Compass ----
+
+/// The four directions in world space (x, z): north is +Z, and since the
+/// world is seen from above with north up, east is -X.
+pub const COMPASS: [(&str, Vec2); 4] = [
+    ("N", Vec2::new(0.0, 1.0)),
+    ("E", Vec2::new(-1.0, 0.0)),
+    ("S", Vec2::new(0.0, -1.0)),
+    ("W", Vec2::new(1.0, 0.0)),
+];
+
+// ---- World map ----
+
+const MAP_PIXELS: u16 = 320;
+
+/// A picture of a zone, seen from above with north up.
+pub fn map_texture(zone: Zone) -> Texture2D {
+    let n = MAP_PIXELS as usize;
+    let mut img = Image::gen_image_color(MAP_PIXELS, MAP_PIXELS, BLACK);
+    let center = zone.center();
+    let to_world = |i: f32, j: f32| {
+        // Column 0 is the west edge (+X), row 0 the north edge (+Z).
+        let x = center.x + WORLD_HALF_SIZE - (i + 0.5) / n as f32 * 2.0 * WORLD_HALF_SIZE;
+        let z = center.y + WORLD_HALF_SIZE - (j + 0.5) / n as f32 * 2.0 * WORLD_HALF_SIZE;
+        vec2(x, z)
+    };
+    for j in 0..n {
+        for i in 0..n {
+            let w = to_world(i as f32, j as f32);
+            img.set_pixel(i as u32, j as u32, render::map_color(zone, w));
+        }
+    }
+    // Buildings and other landmarks.
+    let to_pixel = |p: Vec3| {
+        let rel = vec2(p.x - center.x, p.z - center.y);
+        vec2(
+            (WORLD_HALF_SIZE - rel.x) / (2.0 * WORLD_HALF_SIZE) * n as f32,
+            (WORLD_HALF_SIZE - rel.y) / (2.0 * WORLD_HALF_SIZE) * n as f32,
+        )
+    };
+    let mut dot = |p: Vec2, r: f32, c: Color| {
+        let (x0, x1) = ((p.x - r).floor() as i32, (p.x + r).ceil() as i32);
+        let (y0, y1) = ((p.y - r).floor() as i32, (p.y + r).ceil() as i32);
+        for y in y0.max(0)..=y1.min(n as i32 - 1) {
+            for x in x0.max(0)..=x1.min(n as i32 - 1) {
+                if vec2(x as f32 + 0.5, y as f32 + 0.5).distance(p) <= r {
+                    img.set_pixel(x as u32, y as u32, c);
+                }
+            }
+        }
+    };
+    for prop in props::props(zone) {
+        let p = to_pixel(prop.pos);
+        match prop.kind {
+            PropKind::House => dot(p, 2.6, Color::new(0.25, 0.18, 0.14, 1.0)),
+            PropKind::Centerpiece | PropKind::Well => dot(p, 1.6, Color::new(0.6, 0.6, 0.65, 1.0)),
+            PropKind::Tent => dot(p, 1.5, Color::new(0.45, 0.3, 0.2, 1.0)),
+            PropKind::Pillar => dot(p, 1.0, Color::new(0.75, 0.75, 0.78, 1.0)),
+            PropKind::Mesa => dot(p, 3.0, Color::new(0.55, 0.32, 0.2, 1.0)),
+            PropKind::Tree | PropKind::Conifer | PropKind::DeadTree | PropKind::Cactus => {
+                let g = render::mix(render::foliage(zone), BLACK, 0.35);
+                dot(p, 0.9, g)
+            }
+            _ => {}
+        }
+    }
+    let tex = Texture2D::from_image(&img);
+    tex.set_filter(FilterMode::Linear);
+    tex
+}
+
+/// "Gray Wolf" to "Gray Wolves", "Wild Boar" to "Wild Boars".
+fn plural(name: &str) -> String {
+    match name.strip_suffix("Wolf") {
+        Some(stem) => format!("{stem}Wolves"),
+        None => format!("{name}s"),
+    }
+}
+
+pub fn map_rect() -> Rect {
+    let (w, h) = (screen_width(), screen_height());
+    let size = (w.min(h) - 120.0).max(300.0);
+    Rect::new((w - size) / 2.0, (h - size) / 2.0 + 10.0, size, size)
+}
+
+pub fn draw_map(game: &Game, tex: &Texture2D) {
+    let r = map_rect();
+    let zone = game.zone;
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::new(0.0, 0.0, 0.0, 0.55),
+    );
+    panel(Rect::new(r.x - 12.0, r.y - 44.0, r.w + 24.0, r.h + 56.0));
+    text_centered(
+        &format!("{}  -  {}", zone.name(), zone.subtitle()),
+        r.x + r.w / 2.0,
+        r.y - 16.0,
+        24.0,
+        GOLD,
+    );
+    draw_texture_ex(
+        tex,
+        r.x,
+        r.y,
+        WHITE,
+        DrawTextureParams {
+            dest_size: Some(vec2(r.w, r.h)),
+            ..Default::default()
+        },
+    );
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BORDER);
+    let center = zone.center();
+    let to_screen = |p: Vec2| {
+        let rel = p - center;
+        vec2(
+            r.x + (WORLD_HALF_SIZE - rel.x) / (2.0 * WORLD_HALF_SIZE) * r.w,
+            r.y + (WORLD_HALF_SIZE - rel.y) / (2.0 * WORLD_HALF_SIZE) * r.h,
+        )
+    };
+    // Labels: the town, the camps and the elite.
+    let layout = zone.layout();
+    let mobs = MobKind::for_zone(zone);
+    let town = to_screen(center);
+    text_centered(zone.town_name(), town.x, town.y - 22.0, 20.0, WHITE);
+    for site in &layout.sites {
+        let p = to_screen(zone.to_world(site.center));
+        let spawn = site.spawns[0];
+        let name = mobs[spawn.role].template().name;
+        let (lo, hi) = spawn.levels;
+        let levels = if lo == hi {
+            format!("{lo}")
+        } else {
+            format!("{lo}-{hi}")
+        };
+        let label = match site.kind {
+            shared::layout::SiteKind::Ruins => format!("{name} (Elite {levels})"),
+            shared::layout::SiteKind::Camp => format!("{name} camp ({levels})"),
+            shared::layout::SiteKind::Beasts => format!("{} ({levels})", plural(name)),
+        };
+        draw_circle(p.x, p.y, 4.0, Color::new(0.9, 0.3, 0.2, 0.9));
+        text_centered(
+            &label,
+            p.x,
+            p.y - 8.0,
+            15.0,
+            Color::new(1.0, 0.9, 0.75, 1.0),
+        );
+    }
+    // Everyone you can see.
+    for e in game.entities.values() {
+        if Some(e.view.id) == game.my_id || e.view.dead {
+            continue;
+        }
+        let p = to_screen(vec2(e.pos.x, e.pos.z));
+        if !r.contains(p) {
+            continue;
+        }
+        let c = match e.view.kind {
+            EntityKind::Player(class) => class_color(class),
+            EntityKind::Merchant(_) => GOLD,
+            _ => reaction_color(&e.view, game.class),
+        };
+        draw_circle(p.x, p.y, 3.0, c);
+    }
+    // You, as an arrow.
+    let me = to_screen(vec2(game.pos.x, game.pos.z));
+    let f = forward(game.yaw);
+    // On the map, +Z is up and +X is left.
+    let dir = vec2(-f.x, -f.z);
+    let side = vec2(-dir.y, dir.x);
+    draw_triangle(
+        me + dir * 11.0,
+        me - dir * 7.0 + side * 7.0,
+        me - dir * 7.0 - side * 7.0,
+        Color::new(1.0, 0.95, 0.4, 1.0),
+    );
+    draw_triangle_lines(
+        me + dir * 11.0,
+        me - dir * 7.0 + side * 7.0,
+        me - dir * 7.0 - side * 7.0,
+        1.5,
+        BLACK,
+    );
+    // Compass.
+    let c = vec2(r.right() - 46.0, r.y + 46.0);
+    draw_circle(c.x, c.y, 34.0, Color::new(0.0, 0.0, 0.0, 0.55));
+    draw_circle_lines(c.x, c.y, 34.0, 2.0, BORDER);
+    for (label, d) in COMPASS {
+        let p = c + vec2(-d.x, -d.y) * 22.0;
+        let color = if label == "N" {
+            Color::new(1.0, 0.35, 0.3, 1.0)
+        } else {
+            WHITE
+        };
+        text_centered(label, p.x, p.y + 7.0, 20.0, color);
+    }
+    text_centered(
+        "M or Esc to close",
+        r.x + r.w / 2.0,
+        r.bottom() + 0.0 - 8.0,
+        16.0,
+        Color::new(0.85, 0.85, 0.85, 0.9),
+    );
+}
+
+// ---- Talents ----
+
+pub struct TalentLayout {
+    pub window: Rect,
+    /// Indexed like `talents::Ranks`.
+    pub boxes: [Rect; TALENTS],
+    pub reset: Rect,
+}
+
+pub fn talent_layout() -> TalentLayout {
+    let (w, h) = (screen_width(), screen_height());
+    let window = Rect::new(
+        (w - 690.0) / 2.0,
+        ((h - 470.0) / 2.0).max(20.0),
+        690.0,
+        470.0,
+    );
+    let boxes = std::array::from_fn(|i| {
+        let (branch, tier) = (i / 3, i % 3);
+        Rect::new(
+            window.x + 20.0 + branch as f32 * 222.0,
+            window.y + 96.0 + tier as f32 * 104.0,
+            206.0,
+            88.0,
+        )
+    });
+    let reset = Rect::new(window.right() - 150.0, window.bottom() - 46.0, 130.0, 32.0);
+    TalentLayout {
+        window,
+        boxes,
+        reset,
+    }
+}
+
+pub fn draw_talents(game: &Game, level: u8) {
+    let l = talent_layout();
+    let tree = talents::tree(game.class);
+    let ranks = game.me.talents;
+    let spent = talents::spent(&ranks);
+    let points = talents::points(level);
+    panel(l.window);
+    draw_rectangle(
+        l.window.x + 2.0,
+        l.window.y + 2.0,
+        l.window.w - 4.0,
+        26.0,
+        Color::new(0.25, 0.17, 0.08, 0.9),
+    );
+    text(
+        &format!("{} Talents (N)", game.class.name()),
+        l.window.x + 10.0,
+        l.window.y + 21.0,
+        20.0,
+        GOLD,
+    );
+    let left = points.saturating_sub(spent);
+    let summary = format!("Points to spend: {left}   (one per level from 2)");
+    text(
+        &summary,
+        l.window.x + 20.0,
+        l.window.y + 52.0,
+        18.0,
+        if left > 0 {
+            Color::new(0.4, 1.0, 0.4, 1.0)
+        } else {
+            WHITE
+        },
+    );
+    for b in 0..3 {
+        let x = l.boxes[b * 3].x;
+        let in_branch = talents::spent_in_branch(&ranks, b);
+        text(
+            &format!("{} ({in_branch})", tree.branches[b]),
+            x,
+            l.window.y + 84.0,
+            20.0,
+            class_color(game.class),
+        );
+    }
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let mut hover = None;
+    for (i, r) in l.boxes.iter().enumerate() {
+        let (branch, tier) = (i / 3, i % 3);
+        let talent = &tree.talents[i];
+        let rank = ranks[i];
+        let max = TIER_RANKS[tier];
+        let open = talents::spent_in_branch(&ranks, branch) >= TIER_REQUIRES[tier];
+        let learnable = talents::can_learn(&ranks, level, i).is_ok();
+        let bg = if rank == max {
+            Color::new(0.32, 0.25, 0.08, 0.95)
+        } else if rank > 0 {
+            Color::new(0.2, 0.25, 0.12, 0.95)
+        } else if open {
+            Color::new(0.14, 0.14, 0.17, 0.95)
+        } else {
+            Color::new(0.08, 0.08, 0.09, 0.95)
+        };
+        draw_rectangle(r.x, r.y, r.w, r.h, bg);
+        let edge = if r.contains(mouse) {
+            GOLD
+        } else if learnable {
+            Color::new(0.4, 1.0, 0.4, 1.0)
+        } else {
+            BORDER
+        };
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, edge);
+        let name_color = if open {
+            WHITE
+        } else {
+            Color::new(0.5, 0.5, 0.5, 1.0)
+        };
+        text(talent.name, r.x + 8.0, r.y + 22.0, 18.0, name_color);
+        let rank_s = format!("{rank}/{max}");
+        text(
+            &rank_s,
+            r.right() - 8.0 - text_width(&rank_s, 18.0),
+            r.bottom() - 8.0,
+            18.0,
+            if rank > 0 {
+                GOLD
+            } else {
+                Color::new(0.7, 0.7, 0.7, 1.0)
+            },
+        );
+        for (k, line) in wrap(&talent.describe(rank.max(1)), 30)
+            .iter()
+            .take(3)
+            .enumerate()
+        {
+            text(
+                line,
+                r.x + 8.0,
+                r.y + 40.0 + k as f32 * 15.0,
+                14.0,
+                Color::new(0.85, 0.82, 0.7, 1.0),
+            );
+        }
+        if r.contains(mouse) {
+            hover = Some(i);
+        }
+    }
+    if let Some(i) = hover {
+        let tier = i % 3;
+        let talent = &tree.talents[i];
+        let rank = ranks[i];
+        let mut lines = vec![(talent.name.to_string(), WHITE)];
+        lines.push((
+            format!("Rank {rank} of {}", TIER_RANKS[tier]),
+            Color::new(0.8, 0.8, 0.8, 1.0),
+        ));
+        if rank > 0 {
+            lines.push((talent.describe(rank), GOLD));
+        }
+        if rank < TIER_RANKS[tier] {
+            lines.push((
+                format!("Next rank: {}", talent.describe(rank + 1)),
+                Color::new(0.6, 1.0, 0.6, 1.0),
+            ));
+        }
+        if let Err(why) = talents::can_learn(&ranks, level, i)
+            && rank < TIER_RANKS[tier]
+        {
+            lines.push((why.to_string(), Color::new(1.0, 0.4, 0.35, 1.0)));
+        } else if rank < TIER_RANKS[tier] {
+            lines.push(("Click to learn".into(), Color::new(0.6, 0.8, 1.0, 1.0)));
+        }
+        let r = l.boxes[i];
+        let w = 330.0;
+        let mut all = Vec::new();
+        for (line, c) in lines {
+            for (k, part) in wrap(&line, 38).into_iter().enumerate() {
+                let part = if k > 0 { format!("  {part}") } else { part };
+                all.push((part, c));
+            }
+        }
+        let h = 14.0 + all.len() as f32 * 19.0;
+        let x = (r.right() + 8.0).min(screen_width() - w - 4.0);
+        let y = r.y.min(screen_height() - h - 4.0);
+        draw_rectangle(x, y, w, h, PANEL);
+        draw_rectangle_lines(x, y, w, h, 2.0, BORDER);
+        for (k, (line, c)) in all.iter().enumerate() {
+            text(line, x + 10.0, y + 22.0 + k as f32 * 19.0, 16.0, *c);
+        }
+    }
+    button_ex(l.reset, "Reset talents", spent > 0);
+}
+
+/// Which talent (or the reset button, as `TALENTS`) a click hit.
+pub fn talent_click(mouse: Vec2) -> Option<usize> {
+    let l = talent_layout();
+    if l.reset.contains(mouse) {
+        return Some(TALENTS);
+    }
+    l.boxes.iter().position(|r| r.contains(mouse))
+}
+
+// ---- Sandbox ----
+
+pub struct SandboxLayout {
+    pub window: Rect,
+    pub buttons: Vec<(Rect, SandboxAction)>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SandboxAction {
+    Command(SandboxCmd),
+    LevelDown,
+    LevelUp,
+}
+
+pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
+    let (w, _) = (screen_width(), screen_height());
+    let window = Rect::new(w - 16.0 - 300.0 - 280.0, 110.0, 280.0, 560.0);
+    let mut buttons = Vec::new();
+    let x = window.x + 12.0;
+    let iw = window.w - 24.0;
+    let half = (iw - 8.0) / 2.0;
+    let third = (iw - 16.0) / 3.0;
+    let mut y = window.y + 60.0;
+    buttons.push((Rect::new(x, y, 40.0, 30.0), SandboxAction::LevelDown));
+    buttons.push((
+        Rect::new(x + iw - 40.0, y, 40.0, 30.0),
+        SandboxAction::LevelUp,
+    ));
+    y += 40.0;
+    buttons.push((
+        Rect::new(x, y, half, 30.0),
+        SandboxAction::Command(SandboxCmd::AddMoney(100)),
+    ));
+    buttons.push((
+        Rect::new(x + half + 8.0, y, half, 30.0),
+        SandboxAction::Command(SandboxCmd::AddMoney(10_000)),
+    ));
+    y += 38.0;
+    buttons.push((
+        Rect::new(x, y, half, 30.0),
+        SandboxAction::Command(SandboxCmd::ToggleGod),
+    ));
+    buttons.push((
+        Rect::new(x + half + 8.0, y, half, 30.0),
+        SandboxAction::Command(SandboxCmd::Refresh),
+    ));
+    y += 62.0;
+    for (i, z) in Zone::ALL.into_iter().enumerate() {
+        buttons.push((
+            Rect::new(
+                x + (i % 3) as f32 * (third + 8.0),
+                y + (i / 3) as f32 * 36.0,
+                third,
+                30.0,
+            ),
+            SandboxAction::Command(SandboxCmd::Teleport(z)),
+        ));
+    }
+    y += 98.0;
+    for (i, kind) in MobKind::for_zone(zone).into_iter().enumerate() {
+        buttons.push((
+            Rect::new(
+                x + (i % 2) as f32 * (half + 8.0),
+                y + (i / 2) as f32 * 36.0,
+                half,
+                30.0,
+            ),
+            SandboxAction::Command(SandboxCmd::SpawnMob { kind, level: 0 }),
+        ));
+    }
+    buttons.push((
+        Rect::new(x + half + 8.0, y + 72.0, half, 30.0),
+        SandboxAction::Command(SandboxCmd::ClearSpawns),
+    ));
+    y += 134.0;
+    let per_row = 5;
+    let size = (iw - (per_row - 1) as f32 * 6.0) / per_row as f32;
+    for i in 0..ITEMS.len() {
+        buttons.push((
+            Rect::new(
+                x + (i % per_row) as f32 * (size + 6.0),
+                y + (i / per_row) as f32 * (size + 6.0),
+                size,
+                size,
+            ),
+            SandboxAction::Command(SandboxCmd::GiveItem(ItemId(i as u16))),
+        ));
+    }
+    let rows = ITEMS.len().div_ceil(per_row);
+    let bottom = y + rows as f32 * (size + 6.0) + 10.0;
+    SandboxLayout {
+        window: Rect::new(window.x, window.y, window.w, bottom - window.y),
+        buttons,
+    }
+}
+
+pub fn draw_sandbox(game: &Game, level: u8) {
+    let l = sandbox_layout(game.zone);
+    let r = l.window;
+    panel(r);
+    draw_rectangle(
+        r.x + 2.0,
+        r.y + 2.0,
+        r.w - 4.0,
+        26.0,
+        Color::new(0.1, 0.25, 0.3, 0.9),
+    );
+    text("Sandbox (P)", r.x + 10.0, r.y + 21.0, 20.0, GOLD);
+    let x = r.x + 12.0;
+    let label = |s: &str, y: f32| text(s, x, y, 16.0, Color::new(0.75, 0.85, 0.9, 1.0));
+    label("Level", r.y + 52.0);
+    text_centered(
+        &format!("Level {level}"),
+        r.x + r.w / 2.0,
+        r.y + 82.0,
+        22.0,
+        WHITE,
+    );
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let mut item_tip = None;
+    for (b, action) in &l.buttons {
+        match action {
+            SandboxAction::LevelDown => button_ex(*b, "-", level > 1),
+            SandboxAction::LevelUp => button_ex(*b, "+", level < MAX_LEVEL),
+            SandboxAction::Command(cmd) => match cmd {
+                SandboxCmd::AddMoney(c) => button(*b, &format!("+{}", format_money(*c))),
+                SandboxCmd::ToggleGod => {
+                    button(*b, if game.me.god { "God: ON" } else { "God: off" });
+                    if game.me.god {
+                        draw_rectangle_lines(
+                            b.x,
+                            b.y,
+                            b.w,
+                            b.h,
+                            2.0,
+                            Color::new(0.4, 1.0, 0.4, 1.0),
+                        );
+                    }
+                }
+                SandboxCmd::Refresh => button(*b, "Refresh"),
+                SandboxCmd::Teleport(z) => {
+                    let short = z.name().split(' ').next().unwrap_or("");
+                    button(*b, short);
+                }
+                SandboxCmd::SpawnMob { kind, .. } => button(*b, kind.template().name),
+                SandboxCmd::ClearSpawns => button(*b, "Clear spawns"),
+                SandboxCmd::GiveItem(id) => {
+                    crate::hud::item_icon(*b, *id, 1);
+                    if b.contains(mouse) {
+                        draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, GOLD);
+                        item_tip = Some(item(*id).name);
+                    }
+                }
+                SandboxCmd::SetLevel(_) => {}
+            },
+        }
+    }
+    let first =
+        |f: fn(&SandboxAction) -> bool| l.buttons.iter().find(|(_, a)| f(a)).map(|(r, _)| r.y);
+    if let Some(y) = first(|a| matches!(a, SandboxAction::Command(SandboxCmd::Teleport(_)))) {
+        label("Teleport to a town", y - 8.0);
+    }
+    if let Some(y) = first(|a| matches!(a, SandboxAction::Command(SandboxCmd::SpawnMob { .. }))) {
+        label("Summon (at your level)", y - 8.0);
+    }
+    if let Some(y) = first(|a| matches!(a, SandboxAction::Command(SandboxCmd::GiveItem(_)))) {
+        label("Give yourself an item", y - 8.0);
+    }
+    if let Some(name) = item_tip {
+        text_centered(name, mouse.x, mouse.y - 14.0, 18.0, WHITE);
+    }
+}
+
+/// What a click on the sandbox panel asks the server for.
+pub fn sandbox_click(zone: Zone, level: u8, mouse: Vec2) -> Option<SandboxCmd> {
+    let l = sandbox_layout(zone);
+    let (_, action) = l.buttons.iter().find(|(r, _)| r.contains(mouse))?;
+    Some(match *action {
+        SandboxAction::LevelDown => SandboxCmd::SetLevel(level.saturating_sub(1).max(1)),
+        SandboxAction::LevelUp => SandboxCmd::SetLevel((level + 1).min(MAX_LEVEL)),
+        SandboxAction::Command(SandboxCmd::SpawnMob { kind, .. }) => {
+            SandboxCmd::SpawnMob { kind, level }
+        }
+        SandboxAction::Command(cmd) => cmd,
+    })
+}
+
+/// The compass letters around the minimap, which turns with the camera.
+pub fn minimap_compass(center: Vec2, radius: f32, cam_yaw: f32) {
+    let f = vec2(cam_yaw.sin(), cam_yaw.cos());
+    let r = vec2(-f.y, f.x);
+    for (label, d) in COMPASS {
+        let m = vec2(d.dot(r), -d.dot(f)).normalize_or_zero() * (radius - 9.0);
+        let p = center + m;
+        draw_circle(p.x, p.y, 9.0, Color::new(0.0, 0.0, 0.0, 0.6));
+        let color = if label == "N" {
+            Color::new(1.0, 0.35, 0.3, 1.0)
+        } else {
+            WHITE
+        };
+        text_centered(label, p.x, p.y + 5.0, 16.0, color);
+    }
+}
