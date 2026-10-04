@@ -21,6 +21,8 @@ pub struct Character {
     pub bags: Vec<Option<Stack>>,
     pub gear: [Option<ItemId>; 5],
     #[serde(default)]
+    pub weapon: Option<ItemId>,
+    #[serde(default)]
     pub talents: Ranks,
     #[serde(default)]
     pub quests: QuestLog,
@@ -42,6 +44,7 @@ impl Character {
             yaw: 0.0,
             bags: vec![None; BAG_SLOTS],
             gear: [None; 5],
+            weapon: None,
             talents: [0; TALENTS],
             quests: QuestLog::default(),
         }
@@ -82,6 +85,12 @@ impl Character {
                 *g = None;
             }
         }
+        let held = self.weapon.is_some_and(|id| {
+            (id.0 as usize) < ITEMS.len() && matches!(item(id).kind, ItemKind::Weapon { .. })
+        });
+        if !held {
+            self.weapon = None;
+        }
         if !self.pos.iter().all(|v| v.is_finite()) {
             self.pos = self.appearance.race.zone().graveyard().to_array();
         }
@@ -101,9 +110,19 @@ pub fn validate_name(raw: &str) -> Result<String, &'static str> {
     Ok(lower[..1].to_ascii_uppercase() + &lower[1..])
 }
 
-/// Stat totals from worn armor.
-pub fn gear_stats(gear: &[Option<ItemId>; 5]) -> Stats {
+/// Stat totals from worn armor and the held weapon.
+pub fn gear_stats(gear: &[Option<ItemId>; 5], weapon: Option<ItemId>) -> Stats {
     let mut stats = Stats::default();
+    if let Some(ItemKind::Weapon {
+        damage,
+        stamina,
+        power,
+    }) = weapon.map(|id| item(id).kind)
+    {
+        stats.damage += damage;
+        stats.stamina += stamina;
+        stats.power += power;
+    }
     for id in gear.iter().flatten() {
         if let ItemKind::Armor {
             armor,
@@ -217,5 +236,11 @@ mod tests {
         assert_eq!(c.bags[0], None);
         assert_eq!(c.gear[0], None);
         assert_eq!(c.gear[1], Some(LEATHER_VEST));
+        c.weapon = Some(LEATHER_VEST);
+        c.sanitize();
+        assert_eq!(c.weapon, None);
+        c.weapon = Some(EMBERWAND);
+        c.sanitize();
+        assert_eq!(c.weapon, Some(EMBERWAND));
     }
 }

@@ -2401,6 +2401,14 @@ pub enum ItemKind {
     },
     /// Used up to restore this fraction of health and power.
     Potion { health: f32, power: f32 },
+    /// Held in the weapon slot. Any class can use any weapon.
+    Weapon {
+        /// Added to every auto attack, before scaling with level.
+        damage: f32,
+        stamina: f32,
+        /// Each point adds 1% to damage and healing done.
+        power: f32,
+    },
 }
 
 #[derive(Debug)]
@@ -2455,6 +2463,20 @@ pub mod items {
     pub const STARWEAVE_TROUSERS: ItemId = ItemId(21);
     pub const TRAILBLAZER_BOOTS: ItemId = ItemId(22);
     pub const WHISPERSTEP_SLIPPERS: ItemId = ItemId(23);
+    pub const IRON_SCRAP: ItemId = ItemId(24);
+    pub const LINEN_GLOVES: ItemId = ItemId(25);
+    pub const LINEN_SANDALS: ItemId = ItemId(26);
+    // Weapons: crafted commons, then green drops, then the rare crafted one.
+    pub const IRON_SWORD: ItemId = ItemId(27);
+    pub const HUNTING_BOW: ItemId = ItemId(28);
+    pub const APPRENTICE_STAFF: ItemId = ItemId(29);
+    pub const HEARTSTONE_GREATSWORD: ItemId = ItemId(30);
+    pub const WOLFBITE_AXE: ItemId = ItemId(31);
+    pub const IRONWOOD_MACE: ItemId = ItemId(32);
+    pub const SHADOWFANG_DAGGER: ItemId = ItemId(33);
+    pub const ASHWOOD_LONGBOW: ItemId = ItemId(34);
+    pub const EMBERWAND: ItemId = ItemId(35);
+    pub const MOONWHISPER_STAFF: ItemId = ItemId(36);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2478,6 +2500,23 @@ pub const RARE_DROPS: [ItemId; 10] = {
 pub const RARE_DROP_CHANCE: f32 = 0.04;
 /// Chance an elite does.
 pub const ELITE_RARE_DROP_CHANCE: f32 = 0.6;
+
+/// Green weapons any mob may drop, rolled separately from `RARE_DROPS`.
+pub const WEAPON_DROPS: [ItemId; 6] = {
+    use items::*;
+    [
+        WOLFBITE_AXE,
+        IRONWOOD_MACE,
+        SHADOWFANG_DAGGER,
+        ASHWOOD_LONGBOW,
+        EMBERWAND,
+        MOONWHISPER_STAFF,
+    ]
+};
+/// Chance an ordinary mob drops one of the `WEAPON_DROPS`.
+pub const WEAPON_DROP_CHANCE: f32 = 0.03;
+/// Chance an elite does.
+pub const ELITE_WEAPON_DROP_CHANCE: f32 = 0.3;
 
 const fn material(
     name: &'static str,
@@ -2524,6 +2563,32 @@ const fn armor(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+const fn weapon(
+    name: &'static str,
+    description: &'static str,
+    damage: f32,
+    stamina: f32,
+    power: f32,
+    quality: Quality,
+    color: (f32, f32, f32),
+    price: u32,
+) -> Item {
+    Item {
+        name,
+        description,
+        kind: ItemKind::Weapon {
+            damage,
+            stamina,
+            power,
+        },
+        quality,
+        max_stack: 1,
+        color,
+        price,
+    }
+}
+
 const fn potion(
     name: &'static str,
     description: &'static str,
@@ -2544,8 +2609,9 @@ const fn potion(
 
 const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
+const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 24] = [
+pub static ITEMS: [Item; 37] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2773,6 +2839,133 @@ pub static ITEMS: [Item; 24] = [
         (0.6, 0.55, 0.75),
         600,
     ),
+    material(
+        "Iron Scrap",
+        "Bent nails and broken blades. Used to make weapons.",
+        Quality::Common,
+        (0.55, 0.57, 0.6),
+        40,
+    ),
+    armor(
+        "Linen Gloves",
+        Slot::Hands,
+        1.0,
+        1.0,
+        2.0,
+        Quality::Common,
+        LINEN,
+        100,
+    ),
+    armor(
+        "Linen Sandals",
+        Slot::Feet,
+        2.0,
+        1.0,
+        2.0,
+        Quality::Common,
+        LINEN,
+        120,
+    ),
+    weapon(
+        "Iron Sword",
+        "A plain, honest blade.",
+        2.0,
+        0.0,
+        0.0,
+        Quality::Common,
+        IRON,
+        240,
+    ),
+    weapon(
+        "Hunting Bow",
+        "Strung with leather and good for rabbits, or worse.",
+        2.0,
+        0.0,
+        0.0,
+        Quality::Common,
+        LEATHER,
+        240,
+    ),
+    weapon(
+        "Apprentice Staff",
+        "Wrapped in linen and humming faintly.",
+        1.0,
+        0.0,
+        2.0,
+        Quality::Common,
+        (0.55, 0.42, 0.28),
+        240,
+    ),
+    weapon(
+        "Heartstone Greatsword",
+        "An ancient core burns in the hilt.",
+        7.0,
+        6.0,
+        3.0,
+        Quality::Rare,
+        (0.35, 0.85, 1.0),
+        4000,
+    ),
+    weapon(
+        "Wolfbite Axe",
+        "",
+        4.0,
+        2.0,
+        0.0,
+        Quality::Uncommon,
+        (0.6, 0.55, 0.5),
+        900,
+    ),
+    weapon(
+        "Ironwood Mace",
+        "",
+        4.0,
+        2.0,
+        0.0,
+        Quality::Uncommon,
+        (0.4, 0.3, 0.2),
+        900,
+    ),
+    weapon(
+        "Shadowfang Dagger",
+        "",
+        4.0,
+        2.0,
+        0.0,
+        Quality::Uncommon,
+        (0.3, 0.28, 0.4),
+        900,
+    ),
+    weapon(
+        "Ashwood Longbow",
+        "",
+        4.0,
+        1.0,
+        1.0,
+        Quality::Uncommon,
+        (0.7, 0.6, 0.45),
+        900,
+    ),
+    weapon(
+        "Emberwand",
+        "",
+        2.0,
+        0.0,
+        4.0,
+        Quality::Uncommon,
+        (0.95, 0.45, 0.2),
+        900,
+    ),
+    weapon(
+        "Moonwhisper Staff",
+        "",
+        2.0,
+        0.0,
+        4.0,
+        Quality::Uncommon,
+        (0.6, 0.7, 0.95),
+        900,
+    ),
 ];
 
 /// What every merchant sells.
@@ -2790,7 +2983,7 @@ pub struct Recipe {
     pub materials: &'static [(ItemId, u16)],
 }
 
-pub static RECIPES: [Recipe; 9] = {
+pub static RECIPES: [Recipe; 15] = {
     use items::*;
     [
         Recipe {
@@ -2826,8 +3019,32 @@ pub static RECIPES: [Recipe; 9] = {
             materials: &[(LINEN_CLOTH, 4)],
         },
         Recipe {
+            result: LINEN_GLOVES,
+            materials: &[(LINEN_CLOTH, 2)],
+        },
+        Recipe {
+            result: LINEN_SANDALS,
+            materials: &[(LINEN_CLOTH, 3)],
+        },
+        Recipe {
             result: HEARTSTONE_CHESTGUARD,
             materials: &[(ANCIENT_CORE, 1), (LIGHT_LEATHER, 8)],
+        },
+        Recipe {
+            result: IRON_SWORD,
+            materials: &[(IRON_SCRAP, 5), (LIGHT_LEATHER, 2)],
+        },
+        Recipe {
+            result: HUNTING_BOW,
+            materials: &[(IRON_SCRAP, 2), (LIGHT_LEATHER, 4)],
+        },
+        Recipe {
+            result: APPRENTICE_STAFF,
+            materials: &[(IRON_SCRAP, 2), (LINEN_CLOTH, 4)],
+        },
+        Recipe {
+            result: HEARTSTONE_GREATSWORD,
+            materials: &[(ANCIENT_CORE, 1), (IRON_SCRAP, 8)],
         },
     ]
 };
@@ -2958,7 +3175,10 @@ const HIDE_LOOT: LootTable = LootTable {
 };
 const FIGHTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
-    items: &[(items::LINEN_CLOTH, 0.6, 1, 2)],
+    items: &[
+        (items::LINEN_CLOTH, 0.6, 1, 2),
+        (items::IRON_SCRAP, 0.35, 1, 2),
+    ],
 };
 const CASTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
@@ -3453,9 +3673,12 @@ mod tests {
     }
 
     #[test]
-    fn recipes_make_armor_from_drops() {
+    fn recipes_make_gear_from_drops() {
         for r in &RECIPES {
-            assert!(matches!(item(r.result).kind, ItemKind::Armor { .. }));
+            assert!(matches!(
+                item(r.result).kind,
+                ItemKind::Armor { .. } | ItemKind::Weapon { .. }
+            ));
             for (m, n) in r.materials {
                 assert_eq!(item(*m).kind, ItemKind::Material);
                 assert!(*n <= item(*m).max_stack);
@@ -3490,6 +3713,7 @@ mod tests {
             for r in &RECIPES {
                 let it = item(r.result);
                 if it.quality == Quality::Common
+                    && matches!(it.kind, ItemKind::Armor { .. })
                     && let (rs, rscore) = score(r.result)
                     && rs == slot
                 {
@@ -3501,6 +3725,43 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn green_weapons_sit_between_crafted_and_heartstone() {
+        let score = |id: ItemId| match item(id).kind {
+            ItemKind::Weapon {
+                damage,
+                stamina,
+                power,
+            } => damage * 3.0 + stamina * 2.0 + power * 3.0,
+            _ => panic!("{} is not a weapon", item(id).name),
+        };
+        let blue = score(items::HEARTSTONE_GREATSWORD);
+        for green in WEAPON_DROPS {
+            assert_eq!(item(green).quality, Quality::Uncommon);
+            assert!(score(green) < blue);
+            for r in &RECIPES {
+                let it = item(r.result);
+                if it.quality == Quality::Common && matches!(it.kind, ItemKind::Weapon { .. }) {
+                    assert!(score(green) > score(r.result), "{}", it.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn item_ids_match_their_names() {
+        use items::*;
+        for (id, name) in [
+            (IRON_SCRAP, "Iron Scrap"),
+            (LINEN_SANDALS, "Linen Sandals"),
+            (IRON_SWORD, "Iron Sword"),
+            (HEARTSTONE_GREATSWORD, "Heartstone Greatsword"),
+            (MOONWHISPER_STAFF, "Moonwhisper Staff"),
+        ] {
+            assert_eq!(item(id).name, name);
         }
     }
 }
