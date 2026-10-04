@@ -4,6 +4,8 @@ use macroquad::prelude::*;
 use shared::props::{Prop, PropKind, Scatter};
 
 use super::buildings::{centerpiece, house};
+use super::foliage::{bough_fringe, bush, canopy};
+use super::rocks::{Stone, boulder};
 use shared::world::*;
 
 use super::*;
@@ -52,8 +54,10 @@ pub(super) fn lamp_color(zone: Zone) -> Color {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_prop(
     b: &mut Batch,
+    cards: &mut Batch,
     zone: Zone,
     p: &Prop,
     chimneys: &mut Vec<Vec3>,
@@ -118,8 +122,8 @@ pub(super) fn draw_prop(
         }
         PropKind::Crate => b.block(pos + Vec3::Y * s, Vec3::splat(s), yaw, WOOD),
         PropKind::Tree => match zone {
-            Zone::Silverbough => regal_tree(b, &mut rng, pos, s),
-            _ => autumn_tree(b, &mut rng, pos - Vec3::Y * 0.2, s),
+            Zone::Silverbough => regal_tree(b, cards, &mut rng, pos, s),
+            _ => autumn_tree(b, cards, &mut rng, pos - Vec3::Y * 0.2, s),
         },
         PropKind::Conifer => {
             let (green, snowy) = match zone {
@@ -129,12 +133,20 @@ pub(super) fn draw_prop(
             };
             let p0 = pos - Vec3::Y * 0.2;
             b.cylinder(p0, Vec3::Y * 1.6 * s, 0.22 * s, 6, c(0.36, 0.25, 0.16));
-            for (y, r, hgt) in [
+            let tiers = [
                 (1.0, 1.6, 2.2),
                 (2.1, 1.3, 2.0),
                 (3.2, 1.0, 1.8),
                 (4.2, 0.7, 1.5),
-            ] {
+            ];
+            let scaled = tiers.map(|(y, r, h)| (y * s, r * s, h * s));
+            let fringe = if snowy {
+                mix(green, c(0.95, 0.97, 1.0), 0.45)
+            } else {
+                dark(green, 1.25)
+            };
+            bough_fringe(cards, &mut rng, p0, &scaled, fringe);
+            for (y, r, hgt) in tiers {
                 b.cone(
                     p0 + Vec3::Y * y * s,
                     Vec3::Y * hgt * s,
@@ -165,24 +177,30 @@ pub(super) fn draw_prop(
                 Zone::Witherwood => c(0.34, 0.33, 0.36),
                 _ => c(0.5, 0.48, 0.46),
             };
-            b.block(pos + Vec3::Y * 0.4 * s, vec3(0.9, 0.6, 0.7) * s, yaw, grey);
-            b.block(
-                pos + vec3(0.5, 0.9, 0.2) * s,
-                vec3(0.5, 0.35, 0.45) * s,
-                yaw + 0.7,
-                grey,
-            );
             let top = match zone {
                 Zone::Frostcog => c(0.96, 0.97, 1.0),
                 Zone::Scorchsand => dark(grey, 1.15),
                 Zone::Grubdeep => c(0.22, 0.32, 0.36),
                 _ => c(0.4, 0.45, 0.22),
             };
-            b.block(
-                pos + vec3(-0.2, 1.02, -0.1) * s,
-                vec3(0.55, 0.05, 0.4) * s,
-                yaw,
-                top,
+            let stone = Stone {
+                color: dark(grey, 1.1),
+                top: Some(top),
+                slices: 14,
+                stacks: 9,
+            };
+            let seed = v as u32 * 31 + (pos.x.abs() * 7.0) as u32;
+            let big = vec3(1.05, 0.85, 0.85) * s;
+            boulder(b, pos + Vec3::Y * big.y * 0.3, big, yaw, seed, &stone);
+            let small = vec3(0.55, 0.45, 0.5) * s;
+            let side = forward(yaw + 1.2) * 1.0 * s;
+            boulder(
+                b,
+                pos + side + Vec3::Y * small.y * 0.25,
+                small,
+                yaw + 0.7,
+                seed + 1,
+                &stone,
             );
         }
         PropKind::Shrub => {
@@ -194,7 +212,12 @@ pub(super) fn draw_prop(
                 Zone::Grubdeep => c(0.3, 0.35, 0.4),
                 Zone::Amberfall => c(0.7, 0.35, 0.1),
             };
-            b.ellipsoid(pos + Vec3::Y * 0.5 * s, vec3(0.8, 0.55, 0.8) * s, col);
+            if zone == Zone::Frostcog {
+                // A bush buried in snow.
+                b.ellipsoid(pos + Vec3::Y * 0.5 * s, vec3(0.8, 0.55, 0.8) * s, col);
+            } else {
+                bush(b, cards, &mut rng, pos, s, col);
+            }
             if matches!(zone, Zone::Amberfall | Zone::Silverbough) {
                 for k in 0..4 {
                     let a = k as f32 * 1.6;
@@ -263,13 +286,13 @@ pub(super) fn draw_prop(
         }
         PropKind::Mesa => {
             let rock = c(0.7, 0.42, 0.28);
-            b.cone(pos - Vec3::Y, Vec3::Y * 9.0 * s, 4.2 * s, 3.0 * s, 7, rock);
+            b.cone(pos - Vec3::Y, Vec3::Y * 9.0 * s, 4.2 * s, 3.0 * s, 16, rock);
             b.cone(
                 pos + Vec3::Y * 8.0 * s,
                 Vec3::Y * 1.0 * s,
                 3.1 * s,
                 2.8 * s,
-                7,
+                16,
                 dark(rock, 1.15),
             );
             for k in 0..3 {
@@ -278,9 +301,23 @@ pub(super) fn draw_prop(
                     pos + Vec3::Y * (2.0 + k as f32 * 2.5) * s,
                     Vec3::Y * 0.3,
                     r,
-                    7,
+                    16,
                     dark(rock, 0.8),
                 );
+            }
+            // Fallen boulders around its foot.
+            let stone = Stone {
+                color: dark(rock, 0.95),
+                top: None,
+                slices: 10,
+                stacks: 7,
+            };
+            for k in 0..4 {
+                let a = yaw + k as f32 * 1.7;
+                let r = vec3(0.9, 0.7, 0.8) * s * (0.7 + (k % 2) as f32 * 0.5);
+                let at = pos + forward(a) * 4.6 * s;
+                let at = vec3(at.x, terrain_height(at.x, at.z) + r.y * 0.25, at.z);
+                boulder(b, at, r, a, v as u32 * 7 + k, &stone);
             }
         }
         PropKind::Stalagmite => {
@@ -290,7 +327,7 @@ pub(super) fn draw_prop(
                 Vec3::Y * 4.0 * s,
                 0.7 * s,
                 0.0,
-                7,
+                12,
                 rock,
             );
             b.cone(
@@ -753,7 +790,7 @@ pub(super) fn banner_color(zone: Zone) -> Color {
     }
 }
 
-pub(super) fn autumn_tree(b: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
+pub(super) fn autumn_tree(b: &mut Batch, cards: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
     const LEAVES: [Color; 5] = [
         c(0.9, 0.46, 0.12),
         c(0.75, 0.2, 0.1),
@@ -777,10 +814,14 @@ pub(super) fn autumn_tree(b: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) 
             trunk,
         );
     }
-    b.ellipsoid(p + Vec3::Y * 3.2 * size, vec3(1.5, 1.2, 1.5) * size, leaves);
-    b.sphere(p + vec3(0.9, 2.8, 0.4) * size, 0.95 * size, leaves2);
-    b.sphere(p + vec3(-0.8, 2.9, -0.5) * size, 1.0 * size, leaves);
-    b.sphere(p + vec3(0.1, 3.9, -0.2) * size, 0.85 * size, leaves2);
+    for (at, r, col, count) in [
+        (vec3(0.0, 3.2, 0.0), vec3(1.5, 1.2, 1.5), leaves, 22),
+        (vec3(0.9, 2.8, 0.4), Vec3::splat(0.95), leaves2, 10),
+        (vec3(-0.8, 2.9, -0.5), Vec3::splat(1.0), leaves, 10),
+        (vec3(0.1, 3.9, -0.2), Vec3::splat(0.85), leaves2, 9),
+    ] {
+        canopy(b, cards, rng, p + at * size, r * size, col, count);
+    }
     for k in 0..6 {
         let a = k as f32 * 1.05 + rng.unit();
         let r = rng.range(0.6, 2.2) * size;
@@ -797,7 +838,7 @@ pub(super) fn autumn_tree(b: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) 
 }
 
 /// The great silver-barked trees of the elven forest.
-pub(super) fn regal_tree(b: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
+pub(super) fn regal_tree(b: &mut Batch, cards: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
     let bark = c(0.8, 0.8, 0.84);
     let s = size * 1.6;
     b.cone(
@@ -827,7 +868,7 @@ pub(super) fn regal_tree(b: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
         let r = if k == 0 { 0.0 } else { 1.6 };
         let col = greens[(rng.unit() * 3.0) as usize % 3];
         let at = p + vec3(a.cos() * r, 6.3 + (k % 2) as f32 * 0.8, a.sin() * r) * s;
-        b.ellipsoid(at, vec3(1.6, 1.0, 1.6) * s, col);
+        canopy(b, cards, rng, at, vec3(1.6, 1.0, 1.6) * s, col, 14);
     }
     // Glowing seed pods.
     for k in 0..3 {

@@ -4,7 +4,13 @@ use macroquad::prelude::*;
 use shared::props::Scatter;
 use shared::world::*;
 
+use std::cell::OnceCell;
+
+use macroquad::models::{Mesh, Vertex, draw_mesh};
+
+use super::theme::Theme;
 use super::*;
+use crate::gfx::texture::tile_noise;
 
 /// Small things drifting through the air around the camera: falling
 /// leaves, blowing sand, fireflies, spores, snow and ghostly wisps. Each
@@ -148,49 +154,132 @@ pub fn draw_sky(cam: &Camera3D, zone: Zone, time: f32, project: impl Fn(Vec3) ->
         }
     }
     if let (Some(disc), Some(p)) = (t.sun_disc, project(cam.position + t.light.sun_dir * 1000.0)) {
-        for (r, a) in [(120.0, 0.08), (70.0, 0.15), (40.0, 0.35)] {
+        // A wide, soft glow that brightens the sky around the sun.
+        for k in 0..40 {
+            let r = 300.0 * (1.0 - k as f32 / 40.0).powi(2) + 30.0;
             draw_circle(
                 p.x,
                 p.y,
                 r,
-                Color::new(disc.r, disc.g * 0.85, disc.b * 0.6, a),
+                Color::new(disc.r, disc.g * 0.88, disc.b * 0.7, 0.014),
             );
         }
-        draw_circle(p.x, p.y, 26.0, disc);
+        draw_circle(p.x, p.y, 30.0, Color::new(disc.r, disc.g, disc.b, 0.5));
+        draw_circle(p.x, p.y, 25.0, disc);
     }
-    // Clouds drifting slowly across the sky.
-    if !t.cave {
-        let cloud = match zone {
-            Zone::Witherwood => Color::new(0.3, 0.25, 0.35, 0.55),
-            Zone::Silverbough => Color::new(0.55, 0.6, 0.85, 0.35),
-            Zone::Scorchsand => Color::new(1.0, 1.0, 1.0, 0.45),
-            Zone::Frostcog => Color::new(1.0, 1.0, 1.0, 0.7),
-            _ => mix(t.sky_horizon, Color::new(1.0, 0.85, 0.8, 1.0), 0.5),
-        };
-        let cloud = Color::new(cloud.r, cloud.g, cloud.b, cloud.a.min(0.6));
-        let mut rng = Scatter(91 + zone.index() as u32);
-        for _ in 0..16 {
-            let az = rng.range(0.0, std::f32::consts::TAU) + time * 0.006;
-            let el = rng.range(0.06, 0.32);
-            let size = rng.range(0.6, 1.4);
-            let dir = vec3(az.cos() * el.cos(), el.sin(), az.sin() * el.cos());
-            let Some(p) = project(cam.position + dir * 1000.0) else {
-                continue;
-            };
-            // Closer to the horizon looks further away: smaller and flatter.
-            let r = 34.0 * size * (0.5 + el * 2.5);
-            for k in 0..5 {
-                let o = (k as f32 - 2.0) * r * 0.55;
-                let rr = r * (1.0 - (k as f32 - 2.0).abs() * 0.18);
-                draw_ellipse(
-                    p.x + o,
-                    p.y - (k % 2) as f32 * r * 0.15,
-                    rr,
-                    rr * 0.45,
-                    0.0,
-                    cloud,
-                );
-            }
+    if t.cave {
+        return;
+    }
+    clouds(cam, zone, &t, time, &project);
+    ridges(cam, zone, &t, &project);
+}
+
+/// Painted clouds drifting slowly across the sky.
+fn clouds(
+    cam: &Camera3D,
+    zone: Zone,
+    t: &Theme,
+    time: f32,
+    project: &impl Fn(Vec3) -> Option<Vec2>,
+) {
+    thread_local! {
+        static CLOUDS: OnceCell<Texture2D> = const { OnceCell::new() };
+    }
+    let texture = CLOUDS.with(|c| c.get_or_init(paint::clouds).clone());
+    let cloud = match zone {
+        Zone::Witherwood => Color::new(0.42, 0.36, 0.48, 0.8),
+        Zone::Silverbough => Color::new(0.62, 0.68, 0.92, 0.6),
+        Zone::Scorchsand => Color::new(1.0, 0.98, 0.95, 0.75),
+        Zone::Frostcog => Color::new(1.0, 1.0, 1.0, 0.9),
+        _ => {
+            let warm = mix(t.sky_horizon, Color::new(1.0, 0.86, 0.8, 1.0), 0.55);
+            Color::new(warm.r, warm.g, warm.b, 0.85)
         }
+    };
+    let (w, h) = texture.size().into();
+    let cell = w / paint::CLOUDS as f32;
+    let mut rng = Scatter(91 + zone.index() as u32);
+    for _ in 0..18 {
+        let az = rng.range(0.0, std::f32::consts::TAU) + time * 0.006;
+        let el = rng.range(0.05, 0.34);
+        let size = rng.range(0.7, 1.4);
+        let shape = (rng.unit() * paint::CLOUDS as f32) as usize % paint::CLOUDS;
+        let flip = rng.unit() < 0.5;
+        let dir = vec3(az.cos() * el.cos(), el.sin(), az.sin() * el.cos());
+        let Some(p) = project(cam.position + dir * 1000.0) else {
+            continue;
+        };
+        // Closer to the horizon looks further away: smaller and flatter.
+        let width = 330.0 * size * (0.45 + el * 2.4);
+        let height = width * 0.5 * (0.7 + el * 1.2);
+        draw_texture_ex(
+            &texture,
+            p.x - width * 0.5,
+            p.y - height * 0.7,
+            cloud,
+            DrawTextureParams {
+                dest_size: Some(vec2(width, height)),
+                source: Some(Rect::new(shape as f32 * cell, 0.0, cell, h)),
+                flip_x: flip,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Faraway mountains along the horizon, in two hazy layers, the further
+/// one paler. Their feet fade into the mist.
+fn ridges(cam: &Camera3D, zone: Zone, t: &Theme, project: &impl Fn(Vec3) -> Option<Vec2>) {
+    const STEPS: usize = 240;
+    let far = mix(t.sky_horizon, t.sky_mid, 0.3);
+    let near = mix(far, dark(t.fog, 0.72), 0.55);
+    let mist = Color::new(t.fog.r, t.fog.g, t.fog.b, 1.0);
+    for (layer, (color, lift, tall)) in [(far, 0.012, 0.075), (near, 0.004, 0.045)]
+        .into_iter()
+        .enumerate()
+    {
+        let seed = zone.index() as u32 * 13 + layer as u32 * 101;
+        let height = |a: f32| {
+            let u = a / std::f32::consts::TAU;
+            let n = tile_noise(u, 0.37, 9, seed) * 0.55
+                + tile_noise(u, 0.37, 23, seed + 1) * 0.3
+                + tile_noise(u, 0.37, 61, seed + 2) * 0.15;
+            // Folded, so the ridges come to peaks.
+            let peaks = 1.0 - (n * 2.0 - 1.0).abs();
+            lift + tall * (n * 0.5 + peaks * 0.5).powf(1.4)
+        };
+        let at = |a: f32, el: f32| {
+            project(cam.position + vec3(a.cos() * el.cos(), el.sin(), a.sin() * el.cos()) * 1000.0)
+        };
+        let mut vertices = Vec::new();
+        let mut indices: Vec<u16> = Vec::new();
+        let mut prev: Option<(Vec2, Vec2)> = None;
+        for k in 0..=STEPS {
+            let a = std::f32::consts::TAU * k as f32 / STEPS as f32;
+            let here = at(a, height(a)).zip(at(a, -0.03));
+            if let (Some((t0, b0)), Some((t1, b1))) = (prev, here) {
+                // Skip segments that wrap around behind the camera.
+                if (t1.x - t0.x).abs() < screen_width() * 0.5 {
+                    let base = vertices.len() as u16;
+                    for (p, col) in [(t0, color), (t1, color), (b1, mist), (b0, mist)] {
+                        vertices.push(Vertex::new(p.x, p.y, 0.0, 0.0, 0.0, col));
+                    }
+                    indices.extend_from_slice(&[
+                        base,
+                        base + 1,
+                        base + 2,
+                        base,
+                        base + 2,
+                        base + 3,
+                    ]);
+                }
+            }
+            prev = here;
+        }
+        draw_mesh(&Mesh {
+            vertices,
+            indices,
+            texture: None,
+        });
     }
 }
