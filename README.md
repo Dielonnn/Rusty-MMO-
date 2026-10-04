@@ -89,12 +89,13 @@ title and on the login screen.
 | Mouse wheel | Zoom |
 | `Tab` | Target the next enemy in view, nearest first |
 | Left click | Target |
-| Right click | Attack an enemy, loot a sparkling corpse, or trade with a merchant |
+| Right click | Attack an enemy, loot a sparkling corpse, trade with a merchant, or talk to a quest giver |
 | `F1` | Target yourself |
 | `1`-`6`, `E`, or click the action bar | Use an ability |
 | `T` | Start / stop auto attack |
 | `B` / `C` / `K` | Backpack / character / crafting |
 | `N` | Talents |
+| `L` | Quest log |
 | `M` | World map |
 | `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
@@ -171,6 +172,23 @@ seconds. Health regenerates out of combat. Rogues and Monks build combo points
 and spend them on Eviscerate or Blackout Kick. Backstab only works from behind.
 The Warrior is now the Barbarian; old Warrior characters load as Barbarians.
 
+### Quests
+
+Every town has a quest giver with a golden **!** over their head (a **?**
+when you have a quest to hand in). Right-click them to see their three
+quests:
+
+- **A hunt**: kill eight of the area's hunters (wolves, scorpions, spiders...).
+- **A crafting job**: gather materials, craft a piece of armor with `K`, and
+  hand it over.
+- **The elite**: slay the area's elite in its ruins (level 8 and up).
+
+Each pays out money, experience and a piece of green gear. Your quests and
+their progress show on the right of the screen, and their hunting grounds are
+circled on the world map (`M`). Press `L` for your quest log, where you can
+abandon a quest. Quests are saved with your character, and each can be done
+once.
+
 ### Talents
 
 From level 2 you earn a talent point every level (9 at level 10). Press `N`
@@ -191,6 +209,10 @@ loot (everyone who fought it may loot it; the first to do so gets it).
 - Boars (and some wolves) drop **Light Leather**
 - Bandits (and the other humanoids) drop **Linen Cloth**
 - Each starting area's elite drops an **Ancient Core**
+- Any mob may drop a piece of **green** gear (rarely; elites usually do):
+  helms, chests, gloves, legs and boots, each sturdy (armor and stamina) or
+  arcane (power). Greens are better than crafted leather and linen, but not
+  as good as the rare (blue) Heartstone Chestguard. Quests reward greens too
 
 Open crafting with `K` to turn materials into armor: a leather cap, vest,
 gloves, pants and boots; a linen hood, robe and pants; and the Heartstone
@@ -220,8 +242,10 @@ ruins. Mob levels rise the further you go from town: hunters and grazers
 a fighters' camp (8-9) sit further out, and the area's **elite** (10) waits in
 its ruins near the edge.
 
-Press `M` for the world map of your area, with the town, every camp and its
-levels, the elite, and everyone nearby. North is up on the map; the minimap in
+Press `M` for the world map of your area, inked on parchment: the town, every
+camp and its levels (tents for camps, paw prints for beasts, a skull for the
+elite), the quest giver's **!**, your quests' hunting grounds circled in
+yellow, and everyone nearby. The minimap in the corner shows the land itself. North is up on the map; the minimap in
 the corner turns with your camera and shows N, E, S and W around its edge. Your
 coordinates (relative to the town) are shown under the minimap.
 
@@ -272,6 +296,13 @@ client/   The macroquad client: login, character select and creation,
   clouds, weather (falling leaves, blowing sand, fireflies, spores, snow and
   wisps) and distance fog (a small GLSL shader). Each area's scenery is baked
   into meshes the first time you see it.
+- **Spell effects** (`client/src/vfx.rs`). Missiles look like their school
+  (fireballs trailing flame, spinning frost shards, shadow bolts, arcane
+  orbs, arrows and bullets) and burst where they land; melee abilities sweep
+  a slash, area spells send out a shockwave, heals raise spirals and pillars
+  of light, drains pour a beam back to the caster, casters stand in a
+  glowing rune circle, and auras show on whoever has them: shield bubbles,
+  stun stars, roots, frost, flames, poison, bleeding and more.
 - **Models and animation.** Characters and creatures (`client/src/models.rs`)
   are posed each frame from what they're doing. Every class fights and casts
   in its own way: barbarians chop overhead with both hands, fighters slash

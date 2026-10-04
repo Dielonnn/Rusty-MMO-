@@ -2435,7 +2435,40 @@ pub mod items {
     pub const HEARTSTONE_CHESTGUARD: ItemId = ItemId(11);
     pub const HEALING_POTION: ItemId = ItemId(12);
     pub const MANA_POTION: ItemId = ItemId(13);
+    // Rare (green) drops.
+    pub const WOLFHIDE_HELM: ItemId = ItemId(14);
+    pub const SILKWEAVE_CIRCLET: ItemId = ItemId(15);
+    pub const IRONBARK_JERKIN: ItemId = ItemId(16);
+    pub const MOONTHREAD_VESTMENT: ItemId = ItemId(17);
+    pub const BRAWLERS_GRIPS: ItemId = ItemId(18);
+    pub const SPELLWEAVER_GLOVES: ItemId = ItemId(19);
+    pub const RIDGERUNNER_LEGGINGS: ItemId = ItemId(20);
+    pub const STARWEAVE_TROUSERS: ItemId = ItemId(21);
+    pub const TRAILBLAZER_BOOTS: ItemId = ItemId(22);
+    pub const WHISPERSTEP_SLIPPERS: ItemId = ItemId(23);
 }
+
+/// Green items any mob may drop (and quests give): a little better than
+/// crafted common gear, not as good as rare crafted gear.
+pub const RARE_DROPS: [ItemId; 10] = {
+    use items::*;
+    [
+        WOLFHIDE_HELM,
+        SILKWEAVE_CIRCLET,
+        IRONBARK_JERKIN,
+        MOONTHREAD_VESTMENT,
+        BRAWLERS_GRIPS,
+        SPELLWEAVER_GLOVES,
+        RIDGERUNNER_LEGGINGS,
+        STARWEAVE_TROUSERS,
+        TRAILBLAZER_BOOTS,
+        WHISPERSTEP_SLIPPERS,
+    ]
+};
+/// Chance an ordinary mob drops one of the `RARE_DROPS`.
+pub const RARE_DROP_CHANCE: f32 = 0.04;
+/// Chance an elite does.
+pub const ELITE_RARE_DROP_CHANCE: f32 = 0.6;
 
 const fn material(
     name: &'static str,
@@ -2503,7 +2536,7 @@ const fn potion(
 const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 
-pub static ITEMS: [Item; 14] = [
+pub static ITEMS: [Item; 24] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2628,6 +2661,108 @@ pub static ITEMS: [Item; 14] = [
         0.0,
         0.35,
         (0.2, 0.35, 0.95),
+    ),
+    // Greens: sturdy (armor and stamina) and arcane (power) pieces for each
+    // slot, between the crafted leather and linen and the Heartstone.
+    armor(
+        "Wolfhide Helm",
+        Slot::Head,
+        9.0,
+        3.0,
+        1.0,
+        Quality::Uncommon,
+        (0.55, 0.5, 0.45),
+        600,
+    ),
+    armor(
+        "Silkweave Circlet",
+        Slot::Head,
+        3.0,
+        2.0,
+        3.0,
+        Quality::Uncommon,
+        (0.75, 0.6, 0.9),
+        600,
+    ),
+    armor(
+        "Ironbark Jerkin",
+        Slot::Chest,
+        18.0,
+        6.0,
+        1.0,
+        Quality::Uncommon,
+        (0.4, 0.32, 0.22),
+        900,
+    ),
+    armor(
+        "Moonthread Vestment",
+        Slot::Chest,
+        6.0,
+        3.0,
+        6.0,
+        Quality::Uncommon,
+        (0.55, 0.65, 0.9),
+        900,
+    ),
+    armor(
+        "Brawler's Grips",
+        Slot::Hands,
+        8.0,
+        3.0,
+        1.0,
+        Quality::Uncommon,
+        (0.6, 0.35, 0.2),
+        450,
+    ),
+    armor(
+        "Spellweaver Gloves",
+        Slot::Hands,
+        3.0,
+        1.0,
+        3.0,
+        Quality::Uncommon,
+        (0.35, 0.3, 0.6),
+        450,
+    ),
+    armor(
+        "Ridgerunner Leggings",
+        Slot::Legs,
+        15.0,
+        5.0,
+        1.0,
+        Quality::Uncommon,
+        (0.45, 0.4, 0.3),
+        750,
+    ),
+    armor(
+        "Starweave Trousers",
+        Slot::Legs,
+        5.0,
+        2.0,
+        5.0,
+        Quality::Uncommon,
+        (0.3, 0.3, 0.55),
+        750,
+    ),
+    armor(
+        "Trailblazer Boots",
+        Slot::Feet,
+        9.0,
+        3.0,
+        1.0,
+        Quality::Uncommon,
+        (0.35, 0.25, 0.15),
+        600,
+    ),
+    armor(
+        "Whisperstep Slippers",
+        Slot::Feet,
+        3.0,
+        2.0,
+        3.0,
+        Quality::Uncommon,
+        (0.6, 0.55, 0.75),
+        600,
     ),
 ];
 
@@ -3323,6 +3458,40 @@ mod tests {
     fn merchants_buy_for_less_than_they_sell() {
         for it in &ITEMS {
             assert!(it.sell_price() < it.price || it.price <= 1);
+        }
+    }
+
+    #[test]
+    fn greens_sit_between_crafted_commons_and_blues() {
+        let score = |id: ItemId| match item(id).kind {
+            ItemKind::Armor {
+                slot,
+                armor,
+                stamina,
+                power,
+            } => (slot, armor + stamina * 2.0 + power * 3.0),
+            _ => panic!("not armor"),
+        };
+        let blue = score(items::HEARTSTONE_CHESTGUARD).1;
+        for green in RARE_DROPS {
+            assert_eq!(item(green).quality, Quality::Uncommon);
+            let (slot, s) = score(green);
+            assert!(s < blue, "{} beats the Heartstone", item(green).name);
+            // Better than every crafted common piece for the same slot.
+            for r in &RECIPES {
+                let it = item(r.result);
+                if it.quality == Quality::Common
+                    && let (rs, rscore) = score(r.result)
+                    && rs == slot
+                {
+                    assert!(
+                        s > rscore,
+                        "{} isn't better than {}",
+                        item(green).name,
+                        it.name
+                    );
+                }
+            }
         }
     }
 }

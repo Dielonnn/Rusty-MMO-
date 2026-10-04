@@ -38,6 +38,7 @@ pub struct Layout {
     pub talents: Option<Rect>,
     pub sandbox: Option<Rect>,
     pub map: bool,
+    pub quest_window: Option<Rect>,
 }
 
 impl Layout {
@@ -159,6 +160,7 @@ impl Layout {
                 .sandbox
                 .then(|| crate::panels::sandbox_layout(Zone::Amberfall).window),
             map: windows.map,
+            quest_window: None,
         }
     }
 
@@ -177,6 +179,7 @@ impl Layout {
                 self.vendor,
                 self.talents,
                 self.sandbox,
+                self.quest_window,
             ]
             .iter()
             .flatten()
@@ -705,6 +708,36 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if game.show_help {
         help();
     }
+    let level = me.level;
+    let tracker_top = if game.show_help { 700.0 } else { 240.0 };
+    crate::quests_ui::draw_tracker(&game.me.quests, level, &game.me.bags, tracker_top);
+    if let Some((msg, t)) = &game.quest_flash {
+        let alpha = (3.0 - t).min(1.0);
+        text_centered(
+            msg,
+            screen_width() / 2.0,
+            screen_height() * 0.22,
+            24.0,
+            Color::new(1.0, 0.85, 0.2, alpha),
+        );
+    }
+    if game.windows.quest_log {
+        crate::quests_ui::draw_log(&game.me.quests, level, &game.me.bags);
+    }
+    if let Some(giver) = game
+        .windows
+        .quest_giver
+        .and_then(|id| game.entities.get(&id))
+        && let Some((icon, id)) = crate::quests_ui::draw_giver(
+            &giver.view.name,
+            game.zone,
+            &game.me.quests,
+            level,
+            &game.me.bags,
+        )
+    {
+        tooltip_box(&item_lines(id), icon, true);
+    }
     if game.menu_open {
         let w = 280.0;
         let r = Rect::new((screen_width() - w) / 2.0, screen_height() * 0.35, w, 220.0);
@@ -853,7 +886,7 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
     }
 }
 
-fn tooltip_box(lines: &[(String, Color)], anchor: Rect, above: bool) {
+pub fn tooltip_box(lines: &[(String, Color)], anchor: Rect, above: bool) {
     let w = 300.0;
     let h = 12.0 + lines.len() as f32 * 20.0;
     let x = (anchor.x + anchor.w / 2.0 - w / 2.0).clamp(4.0, screen_width() - w - 4.0);
@@ -909,7 +942,7 @@ fn ability_tooltip(a: &Ability, slot: Rect, class: Class, locked_until: Option<u
     tooltip_box(&lines, slot, true);
 }
 
-fn item_lines(id: ItemId) -> Vec<(String, Color)> {
+pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
     let it = item(id);
     let grey = Color::new(0.8, 0.8, 0.8, 1.0);
     let green = Color::new(0.3, 1.0, 0.25, 1.0);
@@ -1265,9 +1298,24 @@ fn nameplates(game: &Game, cam: &Camera3D) {
         } else {
             format!("{} ({})", v.name, level_label(v))
         };
-        if matches!(v.kind, EntityKind::Merchant(_)) {
+        if v.kind.is_npc() {
+            let title = if matches!(v.kind, EntityKind::QuestGiver(_)) {
+                "<Quests>"
+            } else {
+                "<Merchant>"
+            };
             text_centered(&v.name, p.x, p.y - 8.0, size, color);
-            text_centered("<Merchant>", p.x, p.y + 8.0, size * 0.85, color);
+            text_centered(title, p.x, p.y + 8.0, size * 0.85, color);
+            if matches!(v.kind, EntityKind::QuestGiver(_))
+                && let Some(m) = crate::quests_ui::marker(
+                    &game.me.quests,
+                    Zone::at(e.pos),
+                    my_level,
+                    &game.me.bags,
+                )
+            {
+                crate::quests_ui::draw_marker(m, vec2(p.x, p.y - 30.0), game.time);
+            }
             continue;
         }
         text_centered(&label, p.x, p.y - 8.0, size, color);
@@ -1332,13 +1380,21 @@ fn minimap(game: &Game, layout: &Layout) {
     text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
     let t = render::theme(zone);
     let ground = render::mix(t.fog, Color::new(0.1, 0.1, 0.1, 1.0), 0.45);
-    draw_circle(c.x, c.y, radius + 3.0, BORDER);
+    // A gold-trimmed frame, like the classic MMO minimaps.
+    draw_circle(c.x, c.y, radius + 7.0, Color::new(0.2, 0.15, 0.08, 1.0));
+    draw_circle(c.x, c.y, radius + 5.0, Color::new(0.85, 0.68, 0.3, 1.0));
+    draw_circle(c.x, c.y, radius + 2.0, Color::new(0.25, 0.18, 0.08, 1.0));
     draw_circle(
         c.x,
         c.y,
         radius,
         Color::new(ground.r, ground.g, ground.b, 0.92),
     );
+    if let Some((z, tex)) = &game.map_texture
+        && *z == zone
+    {
+        crate::panels::minimap_terrain(tex, zone, c, radius, game.pos, game.cam_yaw, range);
+    }
     // Map up is where the camera faces.
     let f = vec2(game.cam_yaw.sin(), game.cam_yaw.cos());
     let r = vec2(-f.y, f.x);
@@ -1346,23 +1402,32 @@ fn minimap(game: &Game, layout: &Layout) {
         let rel = vec2(p.x - game.pos.x, p.z - game.pos.z);
         vec2(rel.dot(r), -rel.dot(f)) * (radius / range)
     };
-    let center = zone.center();
-    let town = to_map(vec3(center.x, 0.0, center.y));
-    if town.length() < radius + 30.0 {
-        let tr = shared::world::TOWN_RADIUS * radius / range;
-        draw_circle(
-            c.x + town.x,
-            c.y + town.y,
-            tr,
-            Color::new(0.55, 0.5, 0.42, 0.7),
-        );
-    }
+
     for e in game.entities.values() {
         if Some(e.view.id) == game.my_id {
             continue;
         }
         let m = to_map(e.pos);
         if m.length() > radius - 3.0 {
+            continue;
+        }
+        if matches!(e.view.kind, EntityKind::QuestGiver(_))
+            && let Some(mk) =
+                crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
+        {
+            let s = if mk == crate::quests_ui::Marker::Ready {
+                "?"
+            } else {
+                "!"
+            };
+            text_centered(s, c.x + m.x + 1.0, c.y + m.y + 7.0, 22.0, BLACK);
+            text_centered(
+                s,
+                c.x + m.x,
+                c.y + m.y + 6.0,
+                22.0,
+                Color::new(1.0, 0.85, 0.1, 1.0),
+            );
             continue;
         }
         let color = if e.view.lootable {

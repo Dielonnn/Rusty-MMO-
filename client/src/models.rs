@@ -96,7 +96,9 @@ fn race_shape(race: Race) -> RaceShape {
 /// How tall something is, for nameplates and picking.
 pub fn model_height(kind: EntityKind, appearance: Appearance) -> f32 {
     match kind {
-        EntityKind::Player(_) | EntityKind::Merchant(_) => 2.1 * race_shape(appearance.race).scale,
+        EntityKind::Player(_) | EntityKind::Merchant(_) | EntityKind::QuestGiver(_) => {
+            2.1 * race_shape(appearance.race).scale
+        }
         EntityKind::Mob { kind, .. } => match kind.template().model {
             MobModel::Wolf => 1.3,
             MobModel::Boar => 1.25,
@@ -124,6 +126,7 @@ pub fn draw_model(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
     match look.kind {
         EntityKind::Player(class) => humanoid(b, pos, yaw, Outfit::Class(class), look, pose),
         EntityKind::Merchant(_) => humanoid(b, pos, yaw, Outfit::Merchant, look, pose),
+        EntityKind::QuestGiver(_) => humanoid(b, pos, yaw, Outfit::QuestGiver, look, pose),
         EntityKind::Mob { kind, .. } => {
             let t = kind.template();
             let colors = t.colors.map(rgb);
@@ -207,6 +210,8 @@ pub fn hair_color(i: u8) -> Color {
 enum Outfit {
     Class(Class),
     Merchant,
+    /// A townsperson with quests: an officer in a tabard, with a scroll.
+    QuestGiver,
     Mob(HumanoidStyle, [Color; 3]),
     Giant(GiantStyle, [Color; 3]),
 }
@@ -368,7 +373,7 @@ fn style_of(outfit: Outfit) -> Style {
             Class::Sorcerer => Style::Wild,
             Class::Warlock => Style::Fel,
         },
-        Outfit::Merchant => Style::Merchant,
+        Outfit::Merchant | Outfit::QuestGiver => Style::Merchant,
         Outfit::Mob(style, _) => match style {
             HumanoidStyle::Mystic
             | HumanoidStyle::Trickster
@@ -688,9 +693,14 @@ fn limb_dir(swing: f32, spread: f32, side: f32) -> Vec3 {
 fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pose: Pose) {
     let a = look.appearance;
     let seed = look.seed;
-    let person = matches!(outfit, Outfit::Class(_) | Outfit::Merchant);
+    let person = matches!(
+        outfit,
+        Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver
+    );
     let (race, scale) = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => (a.race, race_shape(a.race).scale),
+        Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver => {
+            (a.race, race_shape(a.race).scale)
+        }
         Outfit::Giant(..) => (Race::Human, 2.2),
         Outfit::Mob(..) => (Race::Human, 1.0),
     };
@@ -703,7 +713,7 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
         Frame::leaning(pos, yaw, scale, anim.lean)
     };
     let skin = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => skin_color(race, a.skin),
+        Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver => skin_color(race, a.skin),
         Outfit::Mob(style, colors) => match style {
             HumanoidStyle::Bandit
             | HumanoidStyle::Mystic
@@ -725,6 +735,13 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
     // Clothes.
     let (mut torso, mut legs, mut arms, mut boots, cape) = match outfit {
         Outfit::Class(class) => class_colors(class),
+        Outfit::QuestGiver => (
+            c(0.22, 0.28, 0.5),
+            c(0.25, 0.22, 0.2),
+            c(0.6, 0.62, 0.66),
+            c(0.3, 0.2, 0.14),
+            Some(c(0.55, 0.12, 0.1)),
+        ),
         Outfit::Merchant => (
             c(0.5, 0.3, 0.2),
             c(0.35, 0.28, 0.22),
@@ -823,7 +840,13 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
             fr.cube(b, ankle, vec3(0.07, 0.06, 0.08), c(0.12, 0.1, 0.08));
         } else {
             let foot = ankle + vec3(0.0, -0.01, 0.07);
-            fr.cube(b, foot, vec3(0.085, 0.06, 0.15), boots);
+            fr.cube(b, foot, vec3(0.1, 0.07, 0.17), boots);
+            fr.cube(
+                b,
+                foot + vec3(0.0, 0.04, 0.1),
+                vec3(0.095, 0.03, 0.07),
+                dark(boots, 1.15),
+            );
             // Boot cuff and sole.
             fr.cube(
                 b,
@@ -966,7 +989,7 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
 
     // Hair (players pick a style; mobs vary by seed).
     let hair_style_id = match outfit {
-        Outfit::Class(_) | Outfit::Merchant => a.hair_style,
+        Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver => a.hair_style,
         Outfit::Mob(HumanoidStyle::Bandit | HumanoidStyle::Raider, _) => 1 + (seed % 2) as u8,
         _ => 0,
     };
@@ -1062,7 +1085,7 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
         fr.sphere(
             b,
             wrist + vec3(0.0, -0.04, 0.0),
-            0.075 * limb_w.max(0.8),
+            0.088 * limb_w.max(0.8),
             hands,
         );
         hand_pos[i] = wrist + vec3(0.0, -0.05, 0.0);
@@ -1079,6 +1102,7 @@ fn humanoid(b: &mut Batch, pos: Vec3, yaw: f32, outfit: Outfit, look: &Look, pos
         chest_w,
     };
     gear_and_weapons(b, &fr, outfit, &h, look, pose, legs);
+    shoulders(b, &fr, outfit, &h, look, pose);
     if look.gear[Slot::Chest.index()] == Some(items::HEARTSTONE_CHESTGUARD) {
         fr.glow(b, vec3(0.0, 1.42 + y, 0.18), 0.06, c(0.35, 0.9, 1.0));
         for sx in [-1.0, 1.0] {
@@ -1128,7 +1152,10 @@ fn face(
     skeletal: bool,
     pose: Pose,
 ) {
-    let person = matches!(outfit, Outfit::Class(_) | Outfit::Merchant);
+    let person = matches!(
+        outfit,
+        Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver
+    );
     let undead = (person && race == Race::Undead) || skeletal;
     if skeletal {
         fr.ellipsoid(b, head, vec3(0.17, 0.2, 0.18) * hs, BONE);
@@ -1533,6 +1560,34 @@ fn headwear(b: &mut Batch, fr: &Frame, head: Vec3, hs: f32, outfit: Outfit, pose
                 }
             }
         },
+        Outfit::QuestGiver => {
+            // A plumed officer's hat.
+            fr.cylinder(
+                b,
+                h(vec3(0.0, 0.13, 0.0)),
+                0.03 * hs,
+                0.3 * hs,
+                c(0.18, 0.15, 0.2),
+            );
+            fr.cylinder(
+                b,
+                h(vec3(0.0, 0.15, 0.0)),
+                0.12 * hs,
+                0.2 * hs,
+                c(0.18, 0.15, 0.2),
+            );
+            fr.cylinder(b, h(vec3(0.0, 0.16, 0.0)), 0.025 * hs, 0.205 * hs, GOLD);
+            for k in 0..3 {
+                let x = 0.1 + k as f32 * 0.03;
+                fr.beam(
+                    b,
+                    h(vec3(x, 0.25, -0.05)),
+                    h(vec3(x + 0.12, 0.6 - k as f32 * 0.05, -0.25)),
+                    0.025 * hs,
+                    c(0.95, 0.95, 0.92),
+                );
+            }
+        }
         Outfit::Merchant => {
             fr.cylinder(
                 b,
@@ -1780,6 +1835,178 @@ fn shield(b: &mut Batch, fr: &Frame, hand: Vec3, face: Color, trim: Color) {
         trim,
     );
     fr.sphere(b, hand + vec3(-0.12, 0.05, 0.13), 0.06, trim);
+}
+
+/// A big pauldron on each shoulder, in the chunky style of the classic
+/// fantasy MMOs: a dome, a rim, and (`spikes` > 0) spikes on top.
+fn pauldron(
+    b: &mut Batch,
+    fr: &Frame,
+    h: &Hands,
+    size: f32,
+    color: Color,
+    rim: Option<Color>,
+    spikes: u32,
+) {
+    for sx in [-1.0f32, 1.0] {
+        let at = vec3(h.sw * sx * 1.05, h.shoulder_y + 0.07, 0.0);
+        fr.ellipsoid(b, at, vec3(size, size * 0.62, size), color);
+        if let Some(rim) = rim {
+            fr.ellipsoid(
+                b,
+                at - vec3(0.0, size * 0.25, 0.0),
+                vec3(size * 1.06, size * 0.18, size * 1.06),
+                rim,
+            );
+        }
+        for k in 0..spikes {
+            let a = (k as f32 - (spikes as f32 - 1.0) / 2.0) * 0.45;
+            fr.cone_dir(
+                b,
+                at + vec3(sx * size * 0.3, size * 0.45, a * size),
+                vec3(sx * size * 0.5, size * 1.1, 0.0),
+                size * 0.22,
+                dark(color, 0.85),
+            );
+        }
+    }
+}
+
+/// Shoulders for everyone who doesn't already wear something there.
+fn shoulders(b: &mut Batch, fr: &Frame, outfit: Outfit, h: &Hands, look: &Look, pose: Pose) {
+    // Worn chest armor colors the lighter pauldrons.
+    let chest = look.gear[Slot::Chest.index()].map(|id| rgb(item(id).color));
+    match outfit {
+        Outfit::Class(class) => match class {
+            Class::Fighter => pauldron(b, fr, h, 0.21, STEEL, Some(c(0.18, 0.3, 0.6)), 0),
+            Class::Paladin => pauldron(b, fr, h, 0.24, c(0.9, 0.9, 0.94), Some(GOLD), 0),
+            Class::Rogue => {
+                let col = chest.unwrap_or(c(0.18, 0.18, 0.2));
+                pauldron(b, fr, h, 0.14, col, Some(LEATHER), 0)
+            }
+            Class::Ranger => {
+                let col = chest.unwrap_or(c(0.36, 0.26, 0.16));
+                pauldron(b, fr, h, 0.16, col, Some(c(0.25, 0.35, 0.2)), 0);
+                // A feather on the right shoulder.
+                fr.beam(
+                    b,
+                    vec3(h.sw * 1.1, h.shoulder_y + 0.15, -0.05),
+                    vec3(h.sw * 1.3, h.shoulder_y + 0.45, -0.15),
+                    0.02,
+                    c(0.85, 0.3, 0.2),
+                );
+            }
+            Class::Artificer => pauldron(
+                b,
+                fr,
+                h,
+                0.17,
+                c(0.7, 0.55, 0.25),
+                Some(c(0.35, 0.33, 0.32)),
+                0,
+            ),
+            Class::Mage => pauldron(b, fr, h, 0.15, c(0.3, 0.2, 0.65), Some(GOLD), 0),
+            Class::Cleric => pauldron(b, fr, h, 0.15, c(0.95, 0.93, 0.86), Some(GOLD), 0),
+            Class::Sorcerer => {
+                pauldron(b, fr, h, 0.15, c(0.55, 0.1, 0.14), Some(GOLD), 0);
+                for sx in [-1.0f32, 1.0] {
+                    let pulse = 0.04 + (pose.time * 3.0 + sx).sin().abs() * 0.015;
+                    let at = vec3(h.sw * sx * 1.05, h.shoulder_y + 0.17, 0.0);
+                    fr.glow(b, at, pulse, c(1.0, 0.45, 0.3));
+                }
+            }
+            Class::Warlock => {
+                pauldron(
+                    b,
+                    fr,
+                    h,
+                    0.17,
+                    c(0.14, 0.1, 0.16),
+                    Some(c(0.35, 0.1, 0.4)),
+                    2,
+                );
+                for sx in [-1.0f32, 1.0] {
+                    fr.sphere(
+                        b,
+                        vec3(h.sw * sx * 1.05, h.shoulder_y + 0.05, 0.16),
+                        0.06,
+                        BONE,
+                    );
+                }
+            }
+            Class::Druid => {
+                for sx in [-1.0f32, 1.0] {
+                    for k in 0..3 {
+                        let a = k as f32 * 0.9 - 0.9;
+                        fr.ellipsoid(
+                            b,
+                            vec3(
+                                h.sw * sx * 1.05 + a.sin() * 0.06,
+                                h.shoulder_y + 0.1,
+                                a.cos() * 0.08 - 0.02,
+                            ),
+                            vec3(0.12, 0.03, 0.08),
+                            c(0.35 + k as f32 * 0.05, 0.6, 0.28),
+                        );
+                    }
+                }
+            }
+            Class::Bard => {
+                // Puffed, slashed sleeves.
+                for sx in [-1.0f32, 1.0] {
+                    let at = vec3(h.sw * sx * 1.05, h.shoulder_y, 0.0);
+                    fr.ellipsoid(b, at, vec3(0.14, 0.12, 0.14), c(0.15, 0.55, 0.6));
+                    fr.cube(
+                        b,
+                        at + vec3(sx * 0.08, 0.0, 0.0),
+                        vec3(0.01, 0.1, 0.06),
+                        c(0.6, 0.18, 0.45),
+                    );
+                }
+            }
+            // Barbarians wear fur, and monks go bare-shouldered.
+            Class::Barbarian | Class::Monk => {}
+        },
+        Outfit::Mob(style, colors) => match style {
+            HumanoidStyle::Bandit | HumanoidStyle::Raider => {
+                pauldron(b, fr, h, 0.14, LEATHER, Some(dark(colors[0], 0.8)), 0)
+            }
+            HumanoidStyle::Troll | HumanoidStyle::TrollShaman => {
+                pauldron(b, fr, h, 0.17, BONE, None, 2)
+            }
+            HumanoidStyle::Skeleton => pauldron(
+                b,
+                fr,
+                h,
+                0.15,
+                c(0.45, 0.32, 0.22),
+                Some(c(0.35, 0.3, 0.28)),
+                1,
+            ),
+            HumanoidStyle::Trogg | HumanoidStyle::TroggShaman => {
+                pauldron(b, fr, h, 0.16, c(0.35, 0.33, 0.35), None, 3)
+            }
+            HumanoidStyle::Necromancer => {
+                pauldron(b, fr, h, 0.15, c(0.15, 0.12, 0.16), Some(BONE), 2)
+            }
+            _ => {}
+        },
+        Outfit::Giant(style, colors) => {
+            // Great slabs of armor chained across the chest.
+            if !matches!(style, GiantStyle::Yeti | GiantStyle::Treant) {
+                let plate = dark(colors[0], 0.8);
+                pauldron(b, fr, h, 0.24, plate, Some(dark(plate, 0.7)), 2);
+                fr.beam(
+                    b,
+                    vec3(-h.sw, h.shoulder_y - 0.05, 0.18),
+                    vec3(h.sw * 0.6, 1.05 + h.y, 0.18),
+                    0.025,
+                    c(0.4, 0.4, 0.42),
+                );
+            }
+        }
+        Outfit::Merchant | Outfit::QuestGiver => {}
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2136,6 +2363,39 @@ fn gear_and_weapons(
                 fr.glow(b, lhand + vec3(0.0, 0.05, 0.1), 0.06, flame);
             }
         },
+        Outfit::QuestGiver => {
+            // A tabard with the zone's emblem, steel pauldrons, and a scroll.
+            fr.cube(
+                b,
+                vec3(0.0, 1.15 + y, 0.175),
+                vec3(0.16, 0.38, 0.01),
+                c(0.22, 0.28, 0.5),
+            );
+            fr.cube(b, vec3(0.0, 1.32 + y, 0.18), vec3(0.07, 0.07, 0.006), GOLD);
+            fr.cube(b, vec3(0.0, 0.8 + y, 0.18), vec3(0.165, 0.02, 0.008), GOLD);
+            pauldron(b, fr, h, 0.2, STEEL, Some(GOLD), 0);
+            fr.cylinder_dir(
+                b,
+                lhand + vec3(-0.15, 0.02, 0.08),
+                vec3(0.3, 0.0, 0.0),
+                0.05,
+                c(0.92, 0.88, 0.72),
+            );
+            for sx in [-1.0, 1.0] {
+                fr.sphere(
+                    b,
+                    lhand + vec3(sx * 0.16, 0.02, 0.08),
+                    0.06,
+                    c(0.55, 0.35, 0.2),
+                );
+            }
+            fr.cube(
+                b,
+                vec3(-0.22, 0.98 + y, 0.06),
+                vec3(0.03, 0.1, 0.08),
+                c(0.45, 0.15, 0.12),
+            );
+        }
         Outfit::Merchant => {
             fr.cube(
                 b,

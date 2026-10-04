@@ -171,9 +171,11 @@ impl Terrain {
             hills *= self.valleys;
         }
         if self.ridges > 0.0 {
-            // Sharp crests where two waves meet.
-            let r = 1.0 - ((px * 0.043).sin() * (pz * 0.037).cos()).abs();
-            hills += r.powi(6) * self.ridges * 2.5;
+            // Winding crests: ridged noise, sharp where the noise crosses
+            // its middle, so they twist across the land instead of lining up.
+            let n = fbm(px * 0.012, pz * 0.012, 3, 7);
+            let r = 1.0 - (n * 2.0 - 1.0).abs();
+            hills += r.powi(4) * self.ridges * 2.5;
         }
         let edge = smoothstep(
             WORLD_HALF_SIZE - 30.0,
@@ -199,13 +201,18 @@ fn ring(radius: f32, degrees: &[f32]) -> Vec<HouseSpot> {
         .collect()
 }
 
-/// Houses at given spots, facing the square.
-fn facing_center(spots: &[(f32, f32)]) -> Vec<HouseSpot> {
+/// Houses at (degrees around the square, distance, how far they're turned
+/// away from facing it).
+fn scattered(spots: &[(f32, f32, f32)]) -> Vec<HouseSpot> {
     spots
         .iter()
-        .map(|&(x, z)| HouseSpot {
-            pos: vec2(x, z),
-            yaw: (-x).atan2(-z),
+        .map(|&(deg, r, turn)| {
+            let a = deg.to_radians();
+            let pos = vec2(a.cos(), a.sin()) * r;
+            HouseSpot {
+                pos,
+                yaw: (-pos.x).atan2(-pos.y) + turn,
+            }
         })
         .collect()
 }
@@ -227,29 +234,28 @@ fn houses(zone: Zone) -> Vec<HouseSpot> {
             h.extend(ring(23.5, &[70.0, 110.0, 250.0, 290.0]));
             h
         }
-        // Two rows of shacks along a street.
-        Zone::Grubdeep => {
-            let mut h = Vec::new();
-            for z in [-17.0f32, 17.0] {
-                for x in [-18.0f32, -9.0, 9.0, 18.0] {
-                    h.push(HouseSpot {
-                        pos: vec2(x, z),
-                        yaw: if z > 0.0 { std::f32::consts::PI } else { 0.0 },
-                    });
-                }
-            }
-            h
-        }
-        // A tight cluster of cottages.
-        Zone::Frostcog => facing_center(&[
-            (14.0, 15.0),
-            (-14.0, 15.0),
-            (14.0, -15.0),
-            (-14.5, -16.0),
-            (22.0, 7.5),
-            (-22.0, 7.5),
-            (22.0, -8.0),
-            (-22.0, -8.5),
+        // A ramshackle sprawl: shacks at odd distances, none quite square
+        // to the square.
+        Zone::Grubdeep => scattered(&[
+            (15.0, 19.5, 0.3),
+            (58.0, 23.5, -0.25),
+            (96.0, 18.0, 0.4),
+            (138.0, 22.0, -0.35),
+            (178.0, 19.0, 0.2),
+            (232.0, 23.0, -0.4),
+            (275.0, 18.5, 0.15),
+            (318.0, 22.5, -0.3),
+        ]),
+        // Little hamlets of cottages huddled together, near and far.
+        Zone::Frostcog => scattered(&[
+            (30.0, 19.0, 0.5),
+            (55.0, 22.5, -0.2),
+            (110.0, 20.0, -0.45),
+            (145.0, 23.0, 0.3),
+            (195.0, 20.5, 0.35),
+            (240.0, 22.0, -0.3),
+            (300.0, 16.5, 0.2),
+            (335.0, 23.0, -0.4),
         ]),
         // A crooked lane of houses to the south, a few strays to the north.
         Zone::Witherwood => {

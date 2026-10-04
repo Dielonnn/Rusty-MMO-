@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use shared::data::*;
 use shared::protocol::{CharacterSummary, Stack, Stats};
+use shared::quests::QuestLog;
 use shared::talents::{self, Ranks, TALENTS};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub struct Character {
     pub gear: [Option<ItemId>; 5],
     #[serde(default)]
     pub talents: Ranks,
+    #[serde(default)]
+    pub quests: QuestLog,
 }
 
 impl Character {
@@ -40,6 +43,7 @@ impl Character {
             bags: vec![None; BAG_SLOTS],
             gear: [None; 5],
             talents: [0; TALENTS],
+            quests: QuestLog::default(),
         }
     }
 
@@ -57,6 +61,7 @@ impl Character {
     pub fn sanitize(&mut self) {
         self.level = self.level.clamp(1, MAX_LEVEL);
         self.talents = talents::sanitize(&self.talents, self.level);
+        self.quests.sanitize();
         self.appearance = self.appearance.clamped();
         self.bags.resize(BAG_SLOTS, None);
         for slot in &mut self.bags {

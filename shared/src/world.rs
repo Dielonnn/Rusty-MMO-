@@ -208,6 +208,50 @@ pub fn in_town(p: Vec3) -> bool {
     Zone::at(p).in_town(p)
 }
 
+/// A pseudo-random value in `0..1` for a lattice point.
+fn lattice(i: i32, j: i32, seed: u32) -> f32 {
+    let mut h = (i as u32).wrapping_mul(0x8DA6_B343)
+        ^ (j as u32).wrapping_mul(0xD816_3841)
+        ^ seed.wrapping_mul(0xCB1A_B31F);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5BD1_E995);
+    h ^= h >> 15;
+    (h & 0xFFFF) as f32 / 65535.0
+}
+
+/// Smooth value noise in `0..1`: random heights on a lattice, eased in
+/// between. Unlike sums of sine waves it has no regular rows or columns.
+pub fn value_noise(x: f32, z: f32, seed: u32) -> f32 {
+    let (fx, fz) = (x.floor(), z.floor());
+    let (i, j) = (fx as i32, fz as i32);
+    let (tx, tz) = (x - fx, z - fz);
+    let (sx, sz) = (tx * tx * (3.0 - 2.0 * tx), tz * tz * (3.0 - 2.0 * tz));
+    let a = lattice(i, j, seed);
+    let b = lattice(i + 1, j, seed);
+    let c = lattice(i, j + 1, seed);
+    let d = lattice(i + 1, j + 1, seed);
+    let top = a + (b - a) * sx;
+    let bottom = c + (d - c) * sx;
+    top + (bottom - top) * sz
+}
+
+/// Several octaves of value noise, each turned a little so no direction
+/// lines up. Returns `0..1`.
+pub fn fbm(x: f32, z: f32, octaves: u32, seed: u32) -> f32 {
+    let (mut x, mut z) = (x, z);
+    let (mut sum, mut amp, mut total) = (0.0, 0.5, 0.0);
+    for o in 0..octaves {
+        sum += value_noise(x, z, seed.wrapping_add(o)) * amp;
+        total += amp;
+        // Rotate by about 37 degrees and double the frequency.
+        let (nx, nz) = (x * 0.8 - z * 0.6, x * 0.6 + z * 0.8);
+        x = nx * 2.03 + 17.1;
+        z = nz * 2.03 - 9.7;
+        amp *= 0.5;
+    }
+    sum / total
+}
+
 pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
