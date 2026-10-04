@@ -340,7 +340,9 @@ client/   The macroquad client: login, character select and creation,
   Adventurers and Skeletons packs (`client/assets/characters/`). All bodies
   share one skeleton and one set of animation clips; the `.glb` loader
   (`client/src/gfx/model_file.rs`) reads skeletons, skins and clips, and
-  `client/src/models/rigged.rs` picks a body and props for each class or mob,
+  `client/src/models/rigged.rs` reshapes the packs' cartoon bodies toward
+  heroic proportions (longer limbs and torso, smaller head, hands and feet,
+  with the meshes stretched to fit), picks a body and props for each class or mob,
   repaints its texture for race, class and armor colors, and blends clips from
   what someone is doing: running, idling, casting, attacking (with the upper
   body only while running), flinching, jumping and dying. Every class fights

@@ -7,12 +7,14 @@ built from that commit.
 
 ## v8.0
 
-Commit: the one titled "v8.0: Rigged, animated characters".
+Commit: the one titled "v8.0: Heroic proportions for the character models".
 
 - **Real character models**: players, townsfolk and humanoid mobs are now
   rigged 3D models with bending limbs, painted textures and skeletal
   animation, instead of stacks of boxes. They come from the free KayKit
-  Adventurers and Skeletons packs (CC0)
+  Adventurers and Skeletons packs (CC0), reshaped from the packs' cartoon
+  look toward heroic proportions: smaller heads, hands and feet, and longer,
+  slimmer legs, arms and bodies
 - **Classes look the part**: fighters and paladins in plate with sword and
   shield or greatsword, barbarians and monks in fur and leather, rogues,
   rangers, artificers and bards in leather with knives, crossbows or a

@@ -362,6 +362,100 @@ impl ModelFile {
         })
     }
 
+    /// Changes the model's proportions. `lengths` scales how far named
+    /// nodes sit from their parents (along the parent's axes), in the rest
+    /// pose and in every clip
+    /// (longer legs: scale the knees, ankles and hips). `stretch` scales the
+    /// meshes around named bones along the model's own axes, so the
+    /// geometry grows to fill the longer bones. Skinned meshes are rebuilt
+    /// around the new skeleton, and rigid parts hanging off a stretched bone
+    /// (a cape on the chest) move and stretch with it.
+    ///
+    /// Assumes the meshes were bound in the rest pose, as models exported
+    /// from a T-pose are. Models drawn on another model's skeleton (see
+    /// `bind`) need the same `lengths` as the skeleton.
+    pub fn reshape(&mut self, lengths: &[(&str, Vec3)], stretch: &[(&str, Vec3)]) {
+        let before = self.world(&self.rest_pose());
+        for &(name, factor) in lengths {
+            let Some(i) = self.node(name) else {
+                continue;
+            };
+            self.nodes[i].rest.translation *= factor;
+            for clip in &mut self.clips {
+                for track in &mut clip.tracks {
+                    if track.node == i && track.channel == Channel::Translation {
+                        for v in &mut track.values {
+                            *v *= factor.extend(1.0);
+                        }
+                    }
+                }
+            }
+        }
+        let after = self.world(&self.rest_pose());
+        // How each bone carries a point from before to after: around where
+        // the bone started, stretched, then to where it is now.
+        let stretch_of = |i: usize| {
+            stretch
+                .iter()
+                .find(|(name, _)| self.nodes[i].name == *name)
+                .map_or(Vec3::ONE, |s| s.1)
+        };
+        let carry: Vec<Mat4> = (0..self.nodes.len())
+            .map(|i| {
+                let from = before[i].transform_point3(Vec3::ZERO);
+                let to = after[i].transform_point3(Vec3::ZERO);
+                Mat4::from_translation(to)
+                    * Mat4::from_scale(stretch_of(i))
+                    * Mat4::from_translation(-from)
+            })
+            .collect();
+        for part in &mut self.parts {
+            match part.skin {
+                Some(s) => {
+                    let joints = &self.skins[s].joints;
+                    for v in 0..part.positions.len() {
+                        let mut m = Mat4::ZERO;
+                        for (&j, &w) in part.joints[v].iter().zip(&part.weights[v]) {
+                            if w > 0.0 {
+                                m += carry[joints[j as usize]] * w;
+                            }
+                        }
+                        part.positions[v] = m.transform_point3(part.positions[v]);
+                        part.normals[v] = m
+                            .inverse()
+                            .transpose()
+                            .transform_vector3(part.normals[v])
+                            .normalize_or_zero();
+                    }
+                }
+                None => {
+                    // Carried by the nearest stretched bone above it.
+                    let mut bone = self.nodes[part.node].parent;
+                    while let Some(b) = bone {
+                        if stretch_of(b) != Vec3::ONE {
+                            break;
+                        }
+                        bone = self.nodes[b].parent;
+                    }
+                    let Some(b) = bone else {
+                        continue;
+                    };
+                    let m = after[part.node].inverse() * carry[b] * before[part.node];
+                    let n = m.inverse().transpose();
+                    for (p, nm) in part.positions.iter_mut().zip(&mut part.normals) {
+                        *p = m.transform_point3(*p);
+                        *nm = n.transform_vector3(*nm).normalize_or_zero();
+                    }
+                }
+            }
+        }
+        for skin in &mut self.skins {
+            for (k, &j) in skin.joints.iter().enumerate() {
+                skin.inverse_bind[k] = after[j].inverse();
+            }
+        }
+    }
+
     /// Every node where the file puts it.
     pub fn rest_pose(&self) -> Vec<Transform> {
         self.nodes.iter().map(|n| n.rest).collect()
@@ -702,6 +796,34 @@ mod tests {
         let elbow = model.node("elbow").unwrap();
         let angle = pose[elbow].rotation.to_euler(EulerRot::XYZ).2;
         assert!((angle - std::f32::consts::FRAC_PI_4).abs() < 1e-4);
+    }
+
+    #[test]
+    fn reshaping_lengthens_bones_and_stretches_their_meshes() {
+        let mut model = ModelFile::from_glb(&arm_glb()).unwrap();
+        // Twice as far from root to elbow, and the root's mesh twice as tall.
+        model.reshape(
+            &[("elbow", Vec3::splat(2.0))],
+            &[("root", vec3(1.0, 2.0, 1.0))],
+        );
+        let elbow = model.node("elbow").unwrap();
+        assert_eq!(model.rest_pose()[elbow].translation, vec3(0.0, 2.0, 0.0));
+        let world = model.world(&model.rest_pose());
+        let only_skin = |p: &ModelPart| (p.name == "skin").then_some(WHITE);
+        let mut b = Batch::recording();
+        model.draw_posed(&mut b, Mat4::IDENTITY, &world, only_skin);
+        let p = positions(b);
+        // The bottom stays; the top, on the elbow, moves up with it.
+        assert!(close(p[0], Vec3::ZERO), "{p:?}");
+        assert!(close(p[3], vec3(0.0, 3.0, 0.0)), "{p:?}");
+        // Bending still turns the top around the moved elbow.
+        let mut pose = model.rest_pose();
+        model.clip("bend").unwrap().apply(1.0, &mut pose);
+        let world = model.world(&pose);
+        let mut b = Batch::recording();
+        model.draw_posed(&mut b, Mat4::IDENTITY, &world, only_skin);
+        let p = positions(b);
+        assert!(close(p[3], vec3(-1.0, 2.0, 0.0)), "{p:?}");
     }
 
     #[test]

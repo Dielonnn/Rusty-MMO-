@@ -165,14 +165,73 @@ struct Library {
     bodies: Vec<Loaded>,
 }
 
+// The packs' bodies are cartoon-shaped: a huge head on a short body and
+// stubby legs. They're reshaped toward heroic proportions: longer legs,
+// torso and arms (below), and a smaller head (`HEAD`).
+const LEGS: f32 = 1.85;
+const TORSO: f32 = 1.35;
+const ARMS: f32 = 1.4;
+/// Narrower bodies and slimmer limbs.
+const SLIM: f32 = 0.85;
+/// Smaller hands and feet (and what the hands hold).
+const HANDS: f32 = 0.72;
+const FEET: f32 = 0.85;
+
+/// How much further each bone sits from its parent.
+const LENGTHS: &[(&str, Vec3)] = &[
+    ("hips", vec3(1.0, LEGS, 1.0)),
+    ("upperleg.l", vec3(SLIM, 1.0, 1.0)),
+    ("upperleg.r", vec3(SLIM, 1.0, 1.0)),
+    ("lowerleg.l", Vec3::splat(LEGS)),
+    ("lowerleg.r", Vec3::splat(LEGS)),
+    ("foot.l", Vec3::splat(LEGS)),
+    ("foot.r", Vec3::splat(LEGS)),
+    ("chest", Vec3::splat(TORSO)),
+    ("head", Vec3::splat(TORSO)),
+    ("upperarm.l", vec3(SLIM, TORSO, 1.0)),
+    ("upperarm.r", vec3(SLIM, TORSO, 1.0)),
+    ("lowerarm.l", Vec3::splat(ARMS)),
+    ("lowerarm.r", Vec3::splat(ARMS)),
+    ("wrist.l", Vec3::splat(ARMS)),
+    ("wrist.r", Vec3::splat(ARMS)),
+    ("hand.l", Vec3::splat(HANDS)),
+    ("hand.r", Vec3::splat(HANDS)),
+];
+
+/// How much the meshes around each bone stretch to fill them (in the
+/// T-pose the bodies were made in: legs point down, arms out sideways).
+const STRETCH: &[(&str, Vec3)] = &[
+    ("hips", vec3(SLIM, 1.0, 0.9)),
+    ("upperleg.l", vec3(SLIM, LEGS, SLIM)),
+    ("upperleg.r", vec3(SLIM, LEGS, SLIM)),
+    ("lowerleg.l", vec3(SLIM, LEGS, SLIM)),
+    ("lowerleg.r", vec3(SLIM, LEGS, SLIM)),
+    ("foot.l", Vec3::splat(FEET)),
+    ("foot.r", Vec3::splat(FEET)),
+    ("spine", vec3(SLIM, TORSO, 0.9)),
+    ("chest", vec3(SLIM, TORSO, 0.9)),
+    ("upperarm.l", vec3(ARMS, SLIM, SLIM)),
+    ("upperarm.r", vec3(ARMS, SLIM, SLIM)),
+    ("lowerarm.l", vec3(ARMS, SLIM, SLIM)),
+    ("lowerarm.r", vec3(ARMS, SLIM, SLIM)),
+    ("wrist.l", Vec3::splat(HANDS)),
+    ("wrist.r", Vec3::splat(HANDS)),
+    ("hand.l", Vec3::splat(HANDS)),
+    ("hand.r", Vec3::splat(HANDS)),
+];
+
+/// Head size after reshaping.
+const HEAD: f32 = 0.5;
+
 /// The repainted textures are this many pixels square.
 const ATLAS: usize = 256;
 
 fn library() -> &'static Library {
     static LIBRARY: OnceLock<Library> = OnceLock::new();
     LIBRARY.get_or_init(|| {
-        let rig = ModelFile::from_glb(include_bytes!("../../assets/characters/rig.glb"))
+        let mut rig = ModelFile::from_glb(include_bytes!("../../assets/characters/rig.glb"))
             .expect("the character skeleton loads");
+        rig.reshape(LENGTHS, &[]);
         let spine = rig.node("spine");
         let upper = (0..rig.nodes.len())
             .map(|mut i| {
@@ -190,7 +249,8 @@ fn library() -> &'static Library {
         let bodies = Body::ALL
             .iter()
             .map(|body| {
-                let model = ModelFile::from_glb(body.file()).expect("a character body loads");
+                let mut model = ModelFile::from_glb(body.file()).expect("a character body loads");
+                model.reshape(LENGTHS, STRETCH);
                 let binding = model.bind(&rig);
                 let picture = shrink(model.picture.as_ref().expect("bodies have a texture"));
                 Loaded {
@@ -698,7 +758,7 @@ fn is_head(part: &ModelPart) -> bool {
 }
 
 /// How tall the bodies are, in their files' units.
-const BODY_HEIGHT: f32 = 2.2;
+const BODY_HEIGHT: f32 = 2.5;
 
 pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f32, pose: Pose) {
     let lib = library();
@@ -706,7 +766,7 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
     let style = style_of(outfit);
     let mut skeleton = posed(lib, &layers(style, pose));
     if let Some(head) = lib.rig.node("head") {
-        skeleton[head].scale *= dress.head;
+        skeleton[head].scale *= dress.head * HEAD;
     }
     let skeleton = lib.rig.world(&skeleton);
     let size = 2.1 / BODY_HEIGHT * dress.scale;
@@ -771,7 +831,7 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
         let ear = |b: &mut Batch, side: f32, dir: Vec3, radius: f32| {
             let base = head.transform_point3(vec3(0.5 * side, 0.45, -0.02));
             let tip = head.transform_vector3(dir * vec3(side, 1.0, 1.0));
-            b.cone(base, tip, radius * size * dress.head, 0.0, 8, skin);
+            b.cone(base, tip, radius * size * dress.head * HEAD, 0.0, 8, skin);
         };
         for side in [-1.0, 1.0] {
             match race {
@@ -803,7 +863,7 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
             let a = -1.1 + k as f32 * 0.38;
             let base = head.transform_point3(vec3(0.0, 0.5 + a.cos() * 0.42, a.sin() * 0.47));
             let up = head.transform_vector3(vec3(0.0, a.cos(), a.sin()) * 0.26);
-            b.cone(base, up, 0.12 * size * dress.head, 0.0, 6, hair);
+            b.cone(base, up, 0.12 * size * dress.head * HEAD, 0.0, 6, hair);
         }
     }
     // Spell light gathering in the hands while casting.
