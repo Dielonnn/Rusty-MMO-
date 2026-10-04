@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v7.0
+## v6.5
 
-Commit: the one titled "v7.0: parties".
+Commit: the one titled "v6.5: parties".
 
 - **Parties** of up to 8 players. Target a player and click **Invite** (or
   type `/invite NAME`); they get a popup to **Accept** or **Decline**, and the
