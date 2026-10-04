@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -93,6 +93,17 @@ pub enum ClientMsg {
     },
     /// Give up a quest (its progress is lost).
     AbandonQuest(QuestId),
+    /// Ask a player (by name) to join your party.
+    PartyInvite(String),
+    /// Join the party you were invited to.
+    PartyAccept,
+    /// Turn down a party invite.
+    PartyDecline,
+    PartyLeave,
+    /// Remove a member (by name). Leader only.
+    PartyKick(String),
+    /// Make another member (by name) the leader. Leader only.
+    PartyPromote(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -257,6 +268,32 @@ pub struct SelfView {
     /// Sandbox god mode is on.
     pub god: bool,
     pub quests: QuestLog,
+    pub party: Option<PartyView>,
+    /// Who has invited you to a party, if anyone.
+    pub invite: Option<String>,
+}
+
+/// The party you're in, yourself included.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PartyView {
+    pub leader: EntityId,
+    pub members: Vec<PartyMember>,
+}
+
+/// One party member, wherever they are in the world.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PartyMember {
+    pub id: EntityId,
+    pub name: String,
+    pub class: Class,
+    pub level: u8,
+    pub hp: f32,
+    pub max_hp: f32,
+    pub power: f32,
+    pub max_power: f32,
+    pub dead: bool,
+    /// Close enough to you to share kills (within `PARTY_RANGE`).
+    pub near: bool,
 }
 
 /// Totals from worn armor.
@@ -349,6 +386,11 @@ pub enum GameEvent {
     /// Something you tried didn't work ("Out of range.").
     Error(String),
     Chat {
+        from: String,
+        text: String,
+    },
+    /// A message to your party only.
+    PartyChat {
         from: String,
         text: String,
     },
