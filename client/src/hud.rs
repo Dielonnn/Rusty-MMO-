@@ -39,7 +39,86 @@ pub struct Layout {
     pub sandbox: Option<Rect>,
     pub map: bool,
     pub quest_window: Option<Rect>,
+    pub party: PartyLayout,
 }
+
+/// Party frames down the left, and the buttons that go with parties.
+#[derive(Default)]
+pub struct PartyLayout {
+    /// The other members' frames.
+    pub frames: Vec<(Rect, EntityId)>,
+    /// The leader's remove buttons on those frames.
+    pub kicks: Vec<(Rect, String)>,
+    pub leave: Option<Rect>,
+    /// The invite popup, with its Accept and Decline buttons.
+    pub popup: Option<(Rect, Rect, Rect)>,
+    /// Invite whoever you've targeted.
+    pub invite_target: Option<(Rect, String)>,
+}
+
+impl PartyLayout {
+    pub fn new(game: &Game, target_frame: Rect) -> Self {
+        let mut l = Self::default();
+        let me = game.my_id;
+        let party = game.me.party.as_ref();
+        let leader = party.is_none_or(|p| Some(p.leader) == me);
+        if let Some(p) = party {
+            let mut y = PARTY_TOP;
+            for m in p.members.iter().filter(|m| Some(m.id) != me) {
+                let r = Rect::new(16.0, y, 200.0, 44.0);
+                l.frames.push((r, m.id));
+                if leader {
+                    l.kicks.push((
+                        Rect::new(r.right() - 20.0, r.y + 4.0, 16.0, 14.0),
+                        m.name.clone(),
+                    ));
+                }
+                y += 50.0;
+            }
+            l.leave = Some(Rect::new(16.0, y, 110.0, 24.0));
+        }
+        if game.me.invite.is_some() {
+            let (w, h) = (340.0, 100.0);
+            let r = Rect::new((screen_width() - w) / 2.0, screen_height() * 0.42, w, h);
+            l.popup = Some((
+                r,
+                Rect::new(r.x + 30.0, r.y + 52.0, 125.0, 34.0),
+                Rect::new(r.right() - 155.0, r.y + 52.0, 125.0, 34.0),
+            ));
+        }
+        let full = party.is_some_and(|p| p.members.len() >= MAX_PARTY_SIZE);
+        if let Some(t) = game.target_ent()
+            && t.view.kind.is_player()
+            && Some(t.view.id) != me
+            && leader
+            && !full
+            && party.is_none_or(|p| p.members.iter().all(|m| m.id != t.view.id))
+        {
+            l.invite_target = Some((
+                Rect::new(
+                    target_frame.right() + 16.0,
+                    target_frame.bottom() - 4.0,
+                    120.0,
+                    26.0,
+                ),
+                t.view.name.clone(),
+            ));
+        }
+        l
+    }
+
+    fn rects(&self) -> impl Iterator<Item = Rect> + '_ {
+        self.frames
+            .iter()
+            .map(|(r, _)| *r)
+            .chain(self.leave)
+            .chain(self.popup.map(|p| p.0))
+            .chain(self.invite_target.as_ref().map(|(r, _)| *r))
+    }
+}
+
+/// Where the first party frame goes, below your own frame and auras.
+const PARTY_TOP: f32 = 144.0;
 
 impl Layout {
     pub fn new(windows: &Windows) -> Self {
@@ -161,12 +240,31 @@ impl Layout {
                 .then(|| crate::panels::sandbox_layout(Zone::Amberfall).window),
             map: windows.map,
             quest_window: None,
+            party: PartyLayout::default(),
         }
+    }
+
+    /// Whether the mouse is over an open window.
+    pub fn over_window(&self, mouse: Vec2) -> bool {
+        self.map
+            || [
+                self.bags,
+                self.character,
+                self.crafting,
+                self.vendor,
+                self.talents,
+                self.sandbox,
+                self.quest_window,
+            ]
+            .iter()
+            .flatten()
+            .any(|r| r.contains(mouse))
     }
 
     /// Whether the mouse is over something that should eat world clicks.
     pub fn blocks(&self, mouse: Vec2, has_target: bool, dead: bool) -> bool {
-        self.hotbar.iter().any(|r| r.contains(mouse))
+        self.party.rects().any(|r| r.contains(mouse))
+            || self.hotbar.iter().any(|r| r.contains(mouse))
             || self.player_frame.contains(mouse)
             || (has_target && self.target_frame.contains(mouse))
             || (dead && self.release_button.contains(mouse))
@@ -354,12 +452,97 @@ pub fn button_ex(r: Rect, label: &str, enabled: bool) {
 
 fn power_color(view: &EntityView) -> Color {
     match view.kind {
-        EntityKind::Player(c) => match c.power_kind() {
-            PowerKind::Rage => Color::new(0.8, 0.15, 0.15, 1.0),
-            PowerKind::Energy => Color::new(0.95, 0.85, 0.2, 1.0),
-            PowerKind::Mana => Color::new(0.2, 0.4, 0.95, 1.0),
-        },
+        EntityKind::Player(c) => class_power_color(c),
         _ => Color::new(0.2, 0.4, 0.95, 1.0),
+    }
+}
+
+fn class_power_color(class: Class) -> Color {
+    match class.power_kind() {
+        PowerKind::Rage => Color::new(0.8, 0.15, 0.15, 1.0),
+        PowerKind::Energy => Color::new(0.95, 0.85, 0.2, 1.0),
+        PowerKind::Mana => Color::new(0.2, 0.4, 0.95, 1.0),
+    }
+}
+
+/// The other party members: click one to target them. Members too far away
+/// to share kills are dimmed.
+fn party_frames(game: &Game, layout: &Layout) {
+    let Some(party) = &game.me.party else { return };
+    for (r, id) in &layout.party.frames {
+        let Some(m) = party.members.iter().find(|m| m.id == *id) else {
+            continue;
+        };
+        panel(*r);
+        if game.target == Some(m.id) {
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, GOLD);
+        }
+        let alpha = if m.near { 1.0 } else { 0.45 };
+        let mut name_x = r.x + 7.0;
+        if m.id == party.leader {
+            draw_poly(r.x + 11.0, r.y + 11.0, 4, 5.0, 45.0, GOLD);
+            name_x += 11.0;
+        }
+        let mut color = class_color(m.class);
+        color.a = alpha;
+        text(&m.name, name_x, r.y + 16.0, 17.0, color);
+        let lvl = m.level.to_string();
+        let lvl_right = if layout.party.kicks.is_empty() {
+            r.right() - 7.0
+        } else {
+            r.right() - 26.0
+        };
+        text(
+            &lvl,
+            lvl_right - text_width(&lvl, 16.0),
+            r.y + 16.0,
+            16.0,
+            Color::new(1.0, 1.0, 1.0, alpha),
+        );
+        let frac = if m.dead {
+            0.0
+        } else {
+            m.hp / m.max_hp.max(1.0)
+        };
+        let mut hp = hp_color(frac);
+        hp.a = alpha;
+        let label = if m.dead { "Dead" } else { "" };
+        bar(
+            Rect::new(r.x + 7.0, r.y + 21.0, r.w - 14.0, 12.0),
+            frac,
+            hp,
+            label,
+        );
+        if m.max_power > 0.0 {
+            let mut c = class_power_color(m.class);
+            c.a = alpha;
+            bar(
+                Rect::new(r.x + 7.0, r.y + 35.0, r.w - 14.0, 5.0),
+                m.power / m.max_power,
+                c,
+                "",
+            );
+        }
+    }
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    for (r, name) in &layout.party.kicks {
+        let hover = r.contains(mouse);
+        let c = if hover {
+            Color::new(1.0, 0.35, 0.3, 1.0)
+        } else {
+            Color::new(0.7, 0.6, 0.55, 1.0)
+        };
+        text_centered("x", r.x + r.w / 2.0, r.y + 11.0, 18.0, c);
+        if hover {
+            tooltip_box(
+                &[(format!("Remove {name} from the party"), WHITE)],
+                *r,
+                false,
+            );
+        }
+    }
+    if let Some(r) = layout.party.leave {
+        button(r, "Leave party");
     }
 }
 
@@ -546,6 +729,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         below += 20.0;
     }
     aura_row(layout.player_frame.x, below, me);
+    party_frames(game, layout);
     if let Some(t) = game.target_ent() {
         unit_frame(layout.target_frame, &t.view, game);
         aura_row(
@@ -587,6 +771,9 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
                 16.0,
                 Color::new(1.0, 0.5, 0.3, 1.0),
             );
+        }
+        if let Some((r, _)) = &layout.party.invite_target {
+            button(*r, "Invite");
         }
         if t.view.lootable {
             text(
@@ -737,6 +924,20 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         )
     {
         tooltip_box(&item_lines(id), icon, true);
+    }
+    if let Some((r, accept, decline)) = layout.party.popup
+        && let Some(from) = &game.me.invite
+    {
+        panel(r);
+        text_centered(
+            &format!("{from} invites you to a party."),
+            r.x + r.w / 2.0,
+            r.y + 32.0,
+            20.0,
+            WHITE,
+        );
+        button(accept, "Accept");
+        button(decline, "Decline");
     }
     if game.menu_open {
         let w = 280.0;
@@ -1546,7 +1747,9 @@ fn help() {
         ("N  M", "Talents, world map"),
         ("P", "Sandbox panel (sandbox mode)"),
         ("Esc", "Close / clear target / menu"),
-        ("Enter", "Chat (/who lists players)"),
+        ("Enter", "Chat (/help lists commands)"),
+        ("/invite NAME", "Party up (or target, Invite)"),
+        ("/p MESSAGE", "Talk to your party"),
         ("H", "Hide this help"),
     ];
     let w = 380.0;

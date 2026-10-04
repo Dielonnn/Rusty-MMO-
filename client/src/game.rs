@@ -279,6 +279,7 @@ impl Game {
                 None => l.window,
             });
         }
+        layout.party = hud::PartyLayout::new(self, layout.target_frame);
         if let Some(outcome) = self.input(&layout) {
             self.lock_cursor(false);
             return outcome;
@@ -679,6 +680,10 @@ impl Game {
                 text: format!("[{from}]: {text}"),
                 color: WHITE,
             }),
+            GameEvent::PartyChat { from, text } => self.chat.push(ChatLine {
+                text: format!("[Party] [{from}]: {text}"),
+                color: Color::new(0.55, 0.75, 1.0, 1.0),
+            }),
             GameEvent::System(text) => self.system(&text),
         }
         if self.chat.len() > 100 {
@@ -1021,6 +1026,9 @@ impl Game {
         if self.windows.map {
             return;
         }
+        if left && self.party_click(layout, mouse) {
+            return;
+        }
         let level = self.level();
         if let Some(giver) = self.windows.quest_giver
             && left
@@ -1115,6 +1123,41 @@ impl Game {
                 item: MERCHANT_GOODS[i],
             });
         }
+    }
+
+    /// Clicks on the party frames and buttons. True if one was hit.
+    fn party_click(&mut self, layout: &Layout, mouse: Vec2) -> bool {
+        let party = &layout.party;
+        if let Some((_, accept, decline)) = party.popup {
+            if accept.contains(mouse) {
+                self.send(ClientMsg::PartyAccept);
+                return true;
+            }
+            if decline.contains(mouse) {
+                self.send(ClientMsg::PartyDecline);
+                return true;
+            }
+        }
+        // Open windows cover the party frames.
+        if layout.over_window(mouse) {
+            return false;
+        }
+        if let Some((_, name)) = party.kicks.iter().find(|(r, _)| r.contains(mouse)) {
+            self.send(ClientMsg::PartyKick(name.clone()));
+        } else if let Some((_, id)) = party.frames.iter().find(|(r, _)| r.contains(mouse)) {
+            self.set_target(Some(*id));
+        } else if party.leave.is_some_and(|r| r.contains(mouse)) {
+            self.send(ClientMsg::PartyLeave);
+        } else if let Some((_, name)) = party
+            .invite_target
+            .as_ref()
+            .filter(|(r, _)| r.contains(mouse))
+        {
+            self.send(ClientMsg::PartyInvite(name.clone()));
+        } else {
+            return false;
+        }
+        true
     }
 
     // ---- Simulation ----

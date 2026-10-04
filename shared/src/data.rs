@@ -29,6 +29,15 @@ pub const UNLOCK_LEVELS: [u8; ACTION_BAR_SLOTS] = [1, 2, 4, 6, 8, 10, 3];
 pub const BAG_SLOTS: usize = 20;
 /// How close you have to be to loot a corpse.
 pub const LOOT_RANGE: f32 = 6.0;
+/// The most players in one party.
+pub const MAX_PARTY_SIZE: usize = 5;
+/// Party members this close to a kill share its experience, quest credit
+/// and loot.
+pub const PARTY_RANGE: f32 = 60.0;
+/// Seconds before an unanswered party invite runs out.
+pub const PARTY_INVITE_TIME: f32 = 60.0;
+/// Seconds a party's corpse is kept for whoever's turn it is to loot.
+pub const LOOT_TURN_TIME: f32 = 10.0;
 /// How close you have to be to trade with a merchant.
 pub const MERCHANT_RANGE: f32 = 8.0;
 /// Extra health per point of stamina.

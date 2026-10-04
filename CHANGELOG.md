@@ -5,6 +5,30 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.0
+
+Commit: the one titled "v7.0: parties".
+
+- **Parties** of up to 5 players. Target a player and click **Invite** (or
+  type `/invite NAME`); they get a popup to **Accept** or **Decline**, and the
+  invite runs out after 60 seconds. Only the leader invites
+- **Party frames** down the left of the screen show each member's name,
+  class, level, health and mana/rage/energy, with a gold mark on the leader.
+  Members too far away to share kills are dimmed. Click a frame to target
+  that member (handy for heals), click **Leave party** to leave
+- The leader can remove a member with the **x** on their frame (or
+  `/kick NAME`) and hand over the lead with `/promote NAME`. If the leader
+  leaves, the next member takes over; a party of one breaks up. Logging out
+  leaves your party
+- **Shared kills**: when anyone in the party kills a mob, every member who
+  is alive and within 60 yards gets the full experience for their level and
+  quest kill credit, and can loot the corpse
+- **Loot turns**: party members take turns at the loot. The member whose
+  turn it is has the corpse to themselves for 10 seconds, then anyone in the
+  party nearby can take what's left
+- **Party chat**: `/p MESSAGE` talks only to your party, in blue.
+  `/help` lists all the chat commands
+
 ## v6.0
 
 Commit: the one titled "v6.0: GPU lighting, soft shadows and a split renderer".

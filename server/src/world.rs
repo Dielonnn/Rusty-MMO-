@@ -16,6 +16,9 @@ use crate::character::{Character, add_item, count_item, gear_stats, remove_item}
 use shared::props::{MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
+mod party;
+pub use party::{Party, PartyId};
+
 /// Who a message is for.
 #[derive(Clone, Copy, Debug)]
 pub enum Audience {
@@ -93,6 +96,9 @@ pub struct PlayerData {
     /// Sandbox god mode: no damage taken, abilities are free.
     pub god: bool,
     pub quests: QuestLog,
+    pub party: Option<PartyId>,
+    /// A party invite: who from, and seconds left to answer it.
+    pub invite: Option<(EntityId, f32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +114,15 @@ pub struct Loot {
     pub money: u32,
     pub items: Vec<Stack>,
     pub looters: Vec<EntityId>,
+    /// A party member whose turn it is: only they may loot until the
+    /// seconds run out.
+    pub turn: Option<(EntityId, f32)>,
+}
+
+impl Loot {
+    pub fn allows(&self, id: EntityId) -> bool {
+        self.looters.contains(&id) && self.turn.is_none_or(|(t, _)| t == id)
+    }
 }
 
 pub struct MobData {
@@ -314,7 +329,7 @@ impl Entity {
         let lootable = self
             .mob()
             .and_then(|m| m.loot.as_ref())
-            .is_some_and(|l| l.looters.contains(&viewer));
+            .is_some_and(|l| l.allows(viewer));
         EntityView {
             id: self.id,
             name: self.name.clone(),
@@ -405,6 +420,8 @@ pub struct World {
     tick: u64,
     /// Players may use the sandbox cheats.
     pub sandbox: bool,
+    pub parties: HashMap<PartyId, Party>,
+    next_party: PartyId,
 }
 
 impl World {
@@ -417,6 +434,8 @@ impl World {
             rng: Rng(seed | 1),
             tick: 0,
             sandbox: false,
+            parties: HashMap::new(),
+            next_party: 1,
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -605,6 +624,8 @@ impl World {
                     bonuses,
                     god: false,
                     quests: c.quests.clone(),
+                    party: None,
+                    invite: None,
                 }),
             },
         );
@@ -640,6 +661,8 @@ impl World {
     pub fn remove_player(&mut self, id: EntityId) -> Option<Character> {
         let mut c = self.character(id)?;
         self.clear_spawns(id);
+        self.party_leave(id, "leaves");
+        self.decline_invites_from(id);
         // Logging out dead brings you back at the graveyard.
         if self.entities[&id].dead {
             c.pos = Zone::at(Vec3::from(c.pos)).graveyard().to_array();
@@ -660,6 +683,9 @@ impl World {
                 m.threat.retain(|(t, _)| *t != id);
                 if let Some(loot) = &mut m.loot {
                     loot.looters.retain(|l| *l != id);
+                    if loot.turn.is_some_and(|(t, _)| t == id) {
+                        loot.turn = None;
+                    }
                 }
             }
         }
@@ -715,6 +741,11 @@ impl World {
                 sandbox: self.sandbox,
                 god: p.god,
                 quests: p.quests.clone(),
+                party: self.party_view(id),
+                invite: p
+                    .invite
+                    .and_then(|(from, _)| self.entities.get(&from))
+                    .map(|e| e.name.clone()),
             },
         })
     }
@@ -811,6 +842,28 @@ impl World {
                     p.quests.active.retain(|(q, _)| *q != quest);
                 }
             }
+            ClientMsg::PartyInvite(name) => {
+                if let Err(e) = self.party_invite(id, &name) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::PartyAccept => {
+                if let Err(e) = self.party_accept(id) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::PartyDecline => self.party_decline(id),
+            ClientMsg::PartyLeave => self.party_leave(id, "leaves"),
+            ClientMsg::PartyKick(name) => {
+                if let Err(e) = self.party_kick(id, &name) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::PartyPromote(name) => {
+                if let Err(e) = self.party_promote(id, &name) {
+                    self.error(id, e);
+                }
+            }
             // Session messages are handled by the network layer.
             ClientMsg::Hello { .. }
             | ClientMsg::CreateCharacter { .. }
@@ -882,11 +935,38 @@ impl World {
             self.send(Audience::Only(id), GameEvent::System(msg));
             return;
         }
-        if text.starts_with('/') {
-            self.send(
-                Audience::Only(id),
-                GameEvent::System("Commands: /who".into()),
-            );
+        if let Some(rest) = text.strip_prefix('/') {
+            let (cmd, arg) = rest.split_once(' ').unwrap_or((rest, ""));
+            let arg = arg.trim();
+            let result = match cmd.to_ascii_lowercase().as_str() {
+                "invite" | "inv" if !arg.is_empty() => self.party_invite(id, arg),
+                "accept" => self.party_accept(id),
+                "decline" => {
+                    self.party_decline(id);
+                    Ok(())
+                }
+                "leave" => {
+                    self.party_leave(id, "leaves");
+                    Ok(())
+                }
+                "kick" if !arg.is_empty() => self.party_kick(id, arg),
+                "promote" if !arg.is_empty() => self.party_promote(id, arg),
+                "p" | "party" if !arg.is_empty() => self.party_chat(id, arg),
+                _ => {
+                    self.send(
+                        Audience::Only(id),
+                        GameEvent::System(
+                            "Commands: /who, /invite NAME, /accept, /decline, /leave, \
+                             /kick NAME, /promote NAME, /p MESSAGE (party chat)"
+                                .into(),
+                        ),
+                    );
+                    Ok(())
+                }
+            };
+            if let Err(e) = result {
+                self.error(id, e);
+            }
             return;
         }
         let from = self.entities[&id].name.clone();
@@ -926,7 +1006,7 @@ impl World {
         let allowed = c
             .mob()
             .and_then(|m| m.loot.as_ref())
-            .is_some_and(|l| l.looters.contains(&id));
+            .is_some_and(|l| l.allows(id));
         if !c.dead || !allowed {
             return Err("There's nothing to loot.");
         }
@@ -955,6 +1035,7 @@ impl World {
                 money: 0,
                 items: left,
                 looters: loot.looters,
+                turn: None,
             });
             self.error(id, "Your bags are full.");
         }
@@ -1991,10 +2072,12 @@ impl World {
             let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
             items.push((pick, 1));
         }
+        let turn = self.loot_turn(&looters).map(|t| (t, LOOT_TURN_TIME));
         (!looters.is_empty()).then_some(Loot {
             money,
             items,
             looters,
+            turn,
         })
     }
 
@@ -2028,11 +2111,13 @@ impl World {
         self.forget(victim);
         let Some(kind) = mob_kind else { return };
         let t = kind.template();
-        // Everyone who fought the mob shares the kill and may loot it.
-        let players: Vec<EntityId> = fighters
+        // Everyone who fought the mob, and their party members nearby, share
+        // the kill and may loot it.
+        let fighters: Vec<EntityId> = fighters
             .into_iter()
             .filter(|id| self.entities.get(id).is_some_and(|e| e.player().is_some()))
             .collect();
+        let players = self.kill_credit(&fighters, pos);
         let loot = self.roll_loot(kind, level, players.clone());
         mob_of(&mut self.entities.get_mut(&victim).unwrap().brain).loot = loot;
         for &player in &players {
@@ -2090,6 +2175,7 @@ impl World {
 
     pub fn tick(&mut self, dt: f32) {
         self.tick += 1;
+        self.tick_parties(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -3605,5 +3691,139 @@ mod tests {
             (4..=40).contains(&greens),
             "{greens} greens from 400 wolves"
         );
+    }
+
+    fn party_of_two(w: &mut World) -> (EntityId, EntityId) {
+        let a = join(w, "Ann", Class::Barbarian, 3);
+        let b = join(w, "Bo", Class::Cleric, 3);
+        w.handle(a, ClientMsg::PartyInvite("bo".into()));
+        assert!(w.entities[&b].player().unwrap().invite.is_some());
+        assert_eq!(w.snapshot_for(b).unwrap().me.invite.as_deref(), Some("Ann"));
+        w.handle(b, ClientMsg::PartyAccept);
+        (a, b)
+    }
+
+    #[test]
+    fn invite_accept_leave() {
+        let mut w = World::new(3);
+        let (a, b) = party_of_two(&mut w);
+        let party = w.party_of(a).unwrap();
+        assert_eq!(w.party_of(b), Some(party));
+        let view = w.snapshot_for(b).unwrap().me.party.unwrap();
+        assert_eq!(view.leader, a);
+        assert_eq!(view.members.len(), 2);
+
+        // Only the leader invites; a third joins through the chat command.
+        let c = join(&mut w, "Cy", Class::Barbarian, 2);
+        w.handle(b, ClientMsg::PartyInvite("Cy".into()));
+        assert!(w.entities[&c].player().unwrap().invite.is_none());
+        w.handle(a, ClientMsg::Chat("/invite Cy".into()));
+        w.handle(c, ClientMsg::Chat("/accept".into()));
+        assert_eq!(w.parties[&party].members, vec![a, b, c]);
+
+        // The leader leaving hands the lead on; kicking down to one disbands.
+        w.handle(a, ClientMsg::PartyLeave);
+        assert_eq!(w.party_of(a), None);
+        assert_eq!(w.parties[&party].leader, b);
+        w.handle(b, ClientMsg::PartyKick("Cy".into()));
+        assert!(w.parties.is_empty());
+        assert_eq!(w.party_of(b), None);
+        assert_eq!(w.party_of(c), None);
+    }
+
+    #[test]
+    fn invites_run_out_and_parties_fill_up() {
+        let mut w = World::new(3);
+        let a = join(&mut w, "Lead", Class::Barbarian, 3);
+        let b = join(&mut w, "Slow", Class::Barbarian, 3);
+        w.handle(a, ClientMsg::PartyInvite("Slow".into()));
+        run(&mut w, PARTY_INVITE_TIME + 1.0);
+        w.handle(b, ClientMsg::PartyAccept);
+        assert_eq!(w.party_of(b), None);
+
+        let mut ids = vec![];
+        for i in 0..MAX_PARTY_SIZE {
+            let name = format!("M{i}");
+            let id = join(&mut w, &name, Class::Barbarian, 3);
+            w.handle(a, ClientMsg::PartyInvite(name));
+            w.handle(id, ClientMsg::PartyAccept);
+            ids.push(id);
+        }
+        let party = w.party_of(a).unwrap();
+        assert_eq!(w.parties[&party].members.len(), MAX_PARTY_SIZE);
+        assert_eq!(w.party_of(*ids.last().unwrap()), None);
+    }
+
+    #[test]
+    fn logging_out_leaves_the_party() {
+        let mut w = World::new(3);
+        let (a, b) = party_of_two(&mut w);
+        w.remove_player(a);
+        assert_eq!(w.party_of(b), None);
+        assert!(w.parties.is_empty());
+    }
+
+    #[test]
+    fn party_members_nearby_share_kills_and_take_turns_looting() {
+        let mut w = World::new(5);
+        let (a, b) = party_of_two(&mut w);
+        let far = join(&mut w, "Far", Class::Cleric, 3);
+        w.handle(a, ClientMsg::PartyInvite("Far".into()));
+        w.handle(far, ClientMsg::PartyAccept);
+        let stranger = join(&mut w, "Stranger", Class::Barbarian, 3);
+
+        for round in 0..2 {
+            let boar = engage(&mut w, a, MobKind::Boar);
+            let at = w.entities[&boar].pos;
+            for (id, dx) in [(b, 5.0), (stranger, 5.0), (far, PARTY_RANGE + 20.0)] {
+                w.entities.get_mut(&id).unwrap().pos = ground(at.x + dx, at.z);
+            }
+            let xp: Vec<u32> = [a, b, far, stranger]
+                .iter()
+                .map(|id| w.entities[id].player().unwrap().xp)
+                .collect();
+            w.entities.get_mut(&boar).unwrap().mob_mut().unwrap().threat = vec![(a, 10.0)];
+            w.kill(boar, Some(a));
+            let gained: Vec<bool> = [a, b, far, stranger]
+                .iter()
+                .zip(&xp)
+                .map(|(id, x)| w.entities[id].player().unwrap().xp != *x)
+                .collect();
+            assert_eq!(gained, [true, true, false, false], "round {round}");
+
+            let loot = w.entities[&boar].mob().unwrap().loot.as_ref().unwrap();
+            assert_eq!(loot.looters, vec![a, b]);
+            // Ann loots first, then Bo.
+            let first = if round == 0 { a } else { b };
+            let second = if round == 0 { b } else { a };
+            assert_eq!(loot.turn.map(|t| t.0), Some(first));
+            assert!(loot.allows(first) && !loot.allows(second));
+            run(&mut w, LOOT_TURN_TIME + 0.5);
+            let loot = w.entities[&boar].mob().unwrap().loot.as_ref().unwrap();
+            assert!(loot.allows(second));
+            // Bring it back for the next round.
+            let mut e = w.entities.remove(&boar).unwrap();
+            w.reset_mob(&mut e);
+            w.entities.insert(boar, e);
+        }
+    }
+
+    #[test]
+    fn party_chat_reaches_only_the_party() {
+        let mut w = World::new(3);
+        let (a, b) = party_of_two(&mut w);
+        let c = join(&mut w, "Out", Class::Barbarian, 3);
+        w.drain_outbox();
+        w.handle(b, ClientMsg::Chat("/p pull the boar".into()));
+        let to: Vec<EntityId> = w
+            .drain_outbox()
+            .into_iter()
+            .filter_map(|(aud, m)| match (aud, m) {
+                (Audience::Only(id), ServerMsg::Event(GameEvent::PartyChat { .. })) => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(to, vec![a, b]);
+        assert!(!to.contains(&c));
     }
 }
