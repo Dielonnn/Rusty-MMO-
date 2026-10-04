@@ -15,7 +15,7 @@ mod world;
 use macroquad::prelude::*;
 
 use game::{Game, Outcome};
-use menu::{CharacterOutcome, Characters, Login, Mode};
+use menu::{CharacterOutcome, Characters, Login};
 use render::Scene;
 
 fn window_conf() -> macroquad::conf::Conf {
@@ -37,9 +37,8 @@ fn window_conf() -> macroquad::conf::Conf {
 enum Screen {
     Login,
     Characters(Box<Characters>),
-    /// Playing, plus the account and how you're playing, to go back to the
-    /// character list on logout.
-    Game(Box<Game>, String, Mode),
+    /// Playing, plus the character list to go back to on logout.
+    Game(Box<Game>, Box<Characters>),
 }
 
 #[macroquad::main(window_conf)]
@@ -63,18 +62,14 @@ async fn main() {
                     }
                     Screen::Login
                 }
-                CharacterOutcome::Play(game) => {
-                    let (account, solo) = chars.account();
-                    Screen::Game(game, account.to_string(), solo)
-                }
+                CharacterOutcome::Play(game) => Screen::Game(game, chars),
             },
-            Screen::Game(mut game, account, solo) => match game.frame(&scene) {
-                Outcome::Continue => Screen::Game(game, account, solo),
-                Outcome::Logout => Screen::Characters(Box::new(Characters::new(
-                    game.into_connection(),
-                    account,
-                    solo,
-                ))),
+            Screen::Game(mut game, mut chars) => match game.frame(&scene) {
+                Outcome::Continue => Screen::Game(game, chars),
+                Outcome::Logout => {
+                    chars.resume(game.into_connection());
+                    Screen::Characters(chars)
+                }
                 Outcome::Disconnected(reason) => {
                     login = login.with_message(reason);
                     Screen::Login

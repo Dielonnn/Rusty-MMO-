@@ -5,6 +5,23 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.3
+
+Commit: the one titled "v7.3: one character list for solo and server characters".
+
+- **One character list**: the login screen has a single Play button, and
+  the character list shows your solo characters and your characters on the
+  server together. Each is tagged with where it lives: Solo, or the
+  server's address
+- Each character still plays where it was made: solo characters stay on
+  this computer and server characters on their server
+- When making a character, pick where it lives under "Play on"
+- If the server is offline or still connecting, your solo characters show
+  straight away and the list says the server is offline
+- Leave the server address empty to see only solo characters
+- Sandbox is still its own button, with its own characters
+- Long lists scroll with the mouse wheel or the arrow keys
+
 ## v7.0
 
 Commit: the one titled "v7.0: Painted world: ground, foliage, rocks, water and sky".

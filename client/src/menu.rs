@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use macroquad::prelude::*;
 use shared::data::{Appearance, Class, Race};
@@ -174,13 +175,11 @@ fn type_into(field: &mut String, max: usize, allow: impl Fn(char) -> bool) {
 
 /// How you're playing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mode {
-    /// A private world on this computer.
-    Solo,
+enum Mode {
+    /// Your solo characters and your characters on a server, in one list.
+    Play,
     /// A private world with cheats, and its own characters.
     Sandbox,
-    /// Someone's server.
-    Online,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -234,8 +233,7 @@ impl Login {
         let iw = p.w - 48.0;
         let account_box = Rect::new(inner, p.y + 132.0, iw, 36.0);
         let address_box = Rect::new(inner, p.y + 212.0, iw, 36.0);
-        let solo = Rect::new(inner, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
-        let join = Rect::new(inner + iw * 0.5 + 6.0, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
+        let play = Rect::new(inner, p.y + 270.0, iw, 44.0);
         let sandbox = Rect::new(inner, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
         let quit = Rect::new(inner + iw * 0.5 + 6.0, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
 
@@ -259,10 +257,8 @@ impl Login {
                 self.focus = Field::Account;
             } else if address_box.contains(m) {
                 self.focus = Field::Address;
-            } else if solo.contains(m) {
-                start = Some(Mode::Solo);
-            } else if join.contains(m) {
-                start = Some(Mode::Online);
+            } else if play.contains(m) {
+                start = Some(Mode::Play);
             } else if sandbox.contains(m) {
                 start = Some(Mode::Sandbox);
             } else if quit.contains(m) {
@@ -270,11 +266,7 @@ impl Login {
             }
         }
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-            start = Some(if self.focus == Field::Account {
-                Mode::Solo
-            } else {
-                Mode::Online
-            });
+            start = Some(Mode::Play);
         }
 
         panel(p);
@@ -302,7 +294,7 @@ impl Login {
             self.time,
         );
         text(
-            "Server address (for Join)",
+            "Server address (empty to play solo only)",
             address_box.x,
             address_box.y - 8.0,
             18.0,
@@ -315,15 +307,14 @@ impl Login {
             self.focus == Field::Address,
             self.time,
         );
-        button(solo, "Play Solo");
-        button(join, "Join Server");
+        button(play, "Play");
         button(sandbox, "Sandbox");
         button(quit, "Quit");
         text_centered(
-            "Solo and sandbox characters are saved on this computer.",
+            "Solo characters are saved on this computer, the rest on their server.",
             cx,
             p.bottom() - 18.0,
-            16.0,
+            15.0,
             Color::new(0.7, 0.7, 0.7, 1.0),
         );
         if let Some(msg) = &self.message {
@@ -348,6 +339,22 @@ impl Login {
         }
     }
 
+    /// The address of a single-player server, starting it the first time.
+    fn local_server(&mut self, mode: Mode) -> Result<SocketAddr, String> {
+        let (slot, file, sandbox) = match mode {
+            Mode::Sandbox => (1, "sandbox_characters.json", true),
+            Mode::Play => (0, "solo_characters.json", false),
+        };
+        if let Some(a) = self.local[slot] {
+            return Ok(a);
+        }
+        let save = data_dir().join(file);
+        let a = server::spawn_local(save, sandbox)
+            .map_err(|e| format!("Couldn't start the local server: {e}"))?;
+        self.local[slot] = Some(a);
+        Ok(a)
+    }
+
     fn connect(&mut self, mode: Mode) -> Result<Characters, String> {
         let account = if self.account.trim().is_empty() {
             "Player".to_string()
@@ -355,50 +362,116 @@ impl Login {
             self.account.trim().to_string()
         };
         save_settings(&account, &self.address);
-        let addr = if mode == Mode::Online {
-            self.address.clone()
-        } else {
-            let (slot, file, sandbox) = match mode {
-                Mode::Sandbox => (1, "sandbox_characters.json", true),
-                _ => (0, "solo_characters.json", false),
-            };
-            match self.local[slot] {
-                Some(a) => a.to_string(),
-                None => {
-                    let save = data_dir().join(file);
-                    let a = server::spawn_local(save, sandbox)
-                        .map_err(|e| format!("Couldn't start the local server: {e}"))?;
-                    self.local[slot] = Some(a);
-                    a.to_string()
-                }
-            }
-        };
-        let mut conn = Connection::connect(&addr, DEFAULT_PORT)
-            .map_err(|e| format!("Couldn't connect to {addr}: {e}"))?;
-        conn.send(&ClientMsg::Hello {
-            version: PROTOCOL_VERSION,
-            account: account.clone(),
-        })
-        .map_err(|e| format!("Couldn't talk to {addr}: {e}"))?;
-        Ok(Characters::new(conn, account, mode))
+        let local = self.local_server(mode)?;
+        let mut sources = vec![Source {
+            place: if mode == Mode::Sandbox {
+                Place::Sandbox
+            } else {
+                Place::Solo
+            },
+            link: Link::Open(open(&local.to_string(), &account)?),
+            list: None,
+        }];
+        let address = self.address.trim();
+        if mode == Mode::Play && !address.is_empty() {
+            sources.push(Source {
+                place: Place::Online(address.to_string()),
+                link: Link::connecting(address.to_string(), account.clone()),
+                list: None,
+            });
+        }
+        Ok(Characters::new(account, sources))
     }
 }
 
+/// Connects to a server and says hello.
+fn open(addr: &str, account: &str) -> Result<Connection, String> {
+    let mut conn = Connection::connect(addr, DEFAULT_PORT)
+        .map_err(|e| format!("Couldn't connect to {addr}: {e}"))?;
+    conn.send(&ClientMsg::Hello {
+        version: PROTOCOL_VERSION,
+        account: account.to_string(),
+    })
+    .map_err(|e| format!("Couldn't talk to {addr}: {e}"))?;
+    Ok(conn)
+}
+
 // ---- Character select and creation ----
+
+/// Where a character lives.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Place {
+    /// On this computer.
+    Solo,
+    /// On this computer, in the world with cheats.
+    Sandbox,
+    /// On the server at this address.
+    Online(String),
+}
+
+impl Place {
+    /// The tag next to a character in the list.
+    fn label(&self) -> &str {
+        match self {
+            Place::Solo => "Solo",
+            Place::Sandbox => "Sandbox",
+            Place::Online(addr) => addr,
+        }
+    }
+
+    fn color(&self) -> Color {
+        match self {
+            Place::Solo | Place::Sandbox => Color::new(0.65, 0.85, 0.6, 1.0),
+            Place::Online(_) => Color::new(0.55, 0.75, 1.0, 1.0),
+        }
+    }
+}
+
+enum Link {
+    /// Connecting in the background, so a slow or missing server doesn't
+    /// freeze the screen.
+    Connecting(Receiver<Result<Connection, String>>),
+    Open(Connection),
+    /// The connection is in the game.
+    Playing,
+    /// Couldn't connect, or lost the connection: why.
+    Down(String),
+}
+
+impl Link {
+    fn connecting(addr: String, account: String) -> Self {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(open(&addr, &account).map_err(|_| "offline".to_string()));
+        });
+        Link::Connecting(rx)
+    }
+}
+
+/// One place characters come from, and the ones it has.
+struct Source {
+    place: Place,
+    link: Link,
+    /// `None` until the list arrives.
+    list: Option<Vec<CharacterSummary>>,
+}
 
 struct Create {
     name: String,
     class: Class,
     appearance: Appearance,
+    /// Which source to make it in.
+    source: usize,
 }
 
 pub struct Characters {
-    /// Moves into the game when a character enters the world.
-    conn: Option<Connection>,
     account: String,
-    mode: Mode,
-    list: Option<Vec<CharacterSummary>>,
-    selected: usize,
+    /// Solo or sandbox first, then the server if there is one.
+    sources: Vec<Source>,
+    /// The chosen character: its source and name.
+    selected: Option<(usize, String)>,
+    /// The first row shown, when there are more than fit.
+    scroll: usize,
     create: Option<Create>,
     confirm_delete: bool,
     message: Option<String>,
@@ -413,22 +486,19 @@ pub enum CharacterOutcome {
     Play(Box<Game>),
 }
 
-fn new_character() -> Create {
-    Create {
-        name: String::new(),
-        class: Class::Barbarian,
-        appearance: Appearance::default(),
-    }
+/// One row of the merged list.
+struct Entry {
+    source: usize,
+    character: CharacterSummary,
 }
 
 impl Characters {
-    pub fn new(conn: Connection, account: String, mode: Mode) -> Self {
+    fn new(account: String, sources: Vec<Source>) -> Self {
         Self {
-            conn: Some(conn),
             account,
-            mode,
-            list: None,
-            selected: 0,
+            sources,
+            selected: None,
+            scroll: 0,
             create: None,
             confirm_delete: false,
             message: None,
@@ -438,67 +508,149 @@ impl Characters {
         }
     }
 
-    pub fn account(&self) -> (&str, Mode) {
-        (&self.account, self.mode)
+    /// Back from the game: the connection returns to the source it was
+    /// playing on, and the list comes again from every source.
+    pub fn resume(&mut self, conn: Connection) {
+        for s in &mut self.sources {
+            if matches!(s.link, Link::Playing) {
+                s.link = Link::Open(conn);
+                // The server sends a fresh list after logout.
+                s.list = None;
+                break;
+            }
+        }
+        self.message = None;
+        self.create = None;
+        self.confirm_delete = false;
     }
 
-    fn send(&mut self, msg: ClientMsg) {
-        if let Some(conn) = &mut self.conn {
+    fn entries(&self) -> Vec<Entry> {
+        self.sources
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| {
+                s.list.iter().flatten().map(move |c| Entry {
+                    source: i,
+                    character: c.clone(),
+                })
+            })
+            .collect()
+    }
+
+    fn selected_index(&self, entries: &[Entry]) -> usize {
+        self.selected
+            .as_ref()
+            .and_then(|(src, name)| {
+                entries
+                    .iter()
+                    .position(|e| e.source == *src && e.character.name == *name)
+            })
+            .unwrap_or(0)
+    }
+
+    fn select(&mut self, e: &Entry) {
+        self.selected = Some((e.source, e.character.name.clone()));
+    }
+
+    fn send(&mut self, source: usize, msg: ClientMsg) {
+        if let Link::Open(conn) = &mut self.sources[source].link {
             let _ = conn.send(&msg);
         }
+    }
+
+    /// A source lost its server. With only one, go back to the login screen.
+    fn source_down(&mut self, i: usize, why: String) -> Option<CharacterOutcome> {
+        if self.sources.len() == 1 {
+            return Some(CharacterOutcome::Back(Some(why)));
+        }
+        self.sources[i].link = Link::Down(why);
+        self.sources[i].list = None;
+        if self.create.as_ref().is_some_and(|c| c.source == i) {
+            self.create.as_mut().unwrap().source = 0;
+        }
+        None
+    }
+
+    fn got_list(&mut self, i: usize, list: Vec<CharacterSummary>) {
+        // A character was just made here: select it and close the form.
+        if let (Some(old), Some(c)) = (&self.sources[i].list, &self.create)
+            && c.source == i
+            && list.len() > old.len()
+        {
+            if let Some(new) = list.iter().find(|s| s.name.eq_ignore_ascii_case(&c.name)) {
+                self.selected = Some((i, new.name.clone()));
+            }
+            self.create = None;
+        }
+        self.sources[i].list = Some(list);
+    }
+
+    /// Reads what each server sent.
+    fn network(&mut self) -> Option<CharacterOutcome> {
+        for i in 0..self.sources.len() {
+            if let Link::Connecting(rx) = &self.sources[i].link {
+                let result = rx.try_recv();
+                match result {
+                    Ok(Ok(conn)) => self.sources[i].link = Link::Open(conn),
+                    Ok(Err(e)) => self.sources[i].link = Link::Down(e),
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        self.sources[i].link = Link::Down("Couldn't connect.".into())
+                    }
+                }
+            }
+            while let Link::Open(conn) = &mut self.sources[i].link {
+                match conn.poll::<ServerMsg>() {
+                    Ok(Some(ServerMsg::Characters(list))) => self.got_list(i, list),
+                    Ok(Some(ServerMsg::CharacterError(e))) => self.message = Some(e),
+                    Ok(Some(ServerMsg::Rejected(e))) => {
+                        if let Some(out) = self.source_down(i, e) {
+                            return Some(out);
+                        }
+                    }
+                    Ok(Some(ServerMsg::Welcome { id })) => {
+                        let Link::Open(conn) =
+                            std::mem::replace(&mut self.sources[i].link, Link::Playing)
+                        else {
+                            unreachable!()
+                        };
+                        let entries = self.entries();
+                        let class = entries
+                            .get(self.selected_index(&entries))
+                            .map_or(Class::Barbarian, |e| e.character.class);
+                        let mut game = Game::new(conn, class);
+                        game.my_id = Some(id);
+                        return Some(CharacterOutcome::Play(Box::new(game)));
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(e) => {
+                        let why = format!("Lost connection to the server ({e}).");
+                        if let Some(out) = self.source_down(i, why) {
+                            return Some(out);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn frame(&mut self, scene: &Scene) -> CharacterOutcome {
         let dt = get_frame_time();
         self.time += dt;
         self.spin += dt * 0.5;
-        // Network.
-        loop {
-            let Some(conn) = self.conn.as_mut() else {
-                return CharacterOutcome::Back(None);
-            };
-            match conn.poll::<ServerMsg>() {
-                Ok(Some(ServerMsg::Characters(list))) => {
-                    // A new character was just made: select it.
-                    if let (Some(old), Some(c)) = (&self.list, &self.create)
-                        && list.len() > old.len()
-                    {
-                        self.selected = list
-                            .iter()
-                            .position(|s| s.name.eq_ignore_ascii_case(&c.name))
-                            .unwrap_or(0);
-                    }
-                    if self.selected >= list.len() {
-                        self.selected = 0;
-                    }
-                    if list.is_empty() {
-                        self.create.get_or_insert_with(new_character);
-                    } else if self.list.as_ref().is_some_and(|old| list.len() > old.len()) {
-                        self.create = None;
-                    }
-                    self.list = Some(list);
-                }
-                Ok(Some(ServerMsg::CharacterError(e))) => self.message = Some(e),
-                Ok(Some(ServerMsg::Rejected(e))) => return CharacterOutcome::Back(Some(e)),
-                Ok(Some(ServerMsg::Welcome { id })) => {
-                    let class = self
-                        .list
-                        .as_ref()
-                        .and_then(|l| l.get(self.selected))
-                        .map_or(Class::Barbarian, |c| c.class);
-                    let conn = self.conn.take().unwrap();
-                    let mut game = Game::new(conn, class);
-                    game.my_id = Some(id);
-                    return CharacterOutcome::Play(Box::new(game));
-                }
-                Ok(Some(_)) => {}
-                Ok(None) => break,
-                Err(e) => {
-                    return CharacterOutcome::Back(Some(format!(
-                        "Lost connection to the server ({e})."
-                    )));
-                }
-            }
+        if let Some(out) = self.network() {
+            return out;
+        }
+        let entries = self.entries();
+        // Nothing to pick from once every source has answered: make one.
+        let settled = self
+            .sources
+            .iter()
+            .all(|s| s.list.is_some() || matches!(s.link, Link::Down(_) | Link::Playing));
+        if settled && entries.is_empty() && self.create.is_none() {
+            self.create = Some(self.new_character());
         }
 
         let preview = match &self.create {
@@ -508,16 +660,12 @@ impl Characters {
                 gear: [None; 5],
                 seed: 0,
             }),
-            None => self
-                .list
-                .as_ref()
-                .and_then(|l| l.get(self.selected))
-                .map(|c| Look {
-                    kind: EntityKind::Player(c.class),
-                    appearance: c.appearance,
-                    gear: c.gear,
-                    seed: 0,
-                }),
+            None => entries.get(self.selected_index(&entries)).map(|e| Look {
+                kind: EntityKind::Player(e.character.class),
+                appearance: e.character.appearance,
+                gear: e.character.gear,
+                seed: 0,
+            }),
         };
         let yaw = 0.4 + (self.spin * 0.8).sin() * 0.6;
         let zone = preview
@@ -531,7 +679,8 @@ impl Characters {
             preview.as_ref().map(|l| (l, yaw)),
         );
 
-        if self.list.is_none() {
+        // Wait for the characters on this computer; a server can follow.
+        if self.sources[0].list.is_none() {
             text_centered(
                 "Loading characters...",
                 screen_width() / 2.0,
@@ -542,9 +691,9 @@ impl Characters {
             return CharacterOutcome::Stay;
         }
         let outcome = if self.create.is_some() {
-            self.create_screen()
+            self.create_screen(!entries.is_empty())
         } else {
-            self.select_screen()
+            self.select_screen(&entries)
         };
         if let Some(msg) = &self.message {
             text_centered(
@@ -558,29 +707,84 @@ impl Characters {
         outcome
     }
 
-    fn select_screen(&mut self) -> CharacterOutcome {
-        let list = self.list.clone().unwrap_or_default();
+    /// A blank character, made where the selected one lives.
+    fn new_character(&self) -> Create {
+        let source = self
+            .selected
+            .as_ref()
+            .map_or(0, |(s, _)| *s)
+            .min(self.sources.len() - 1);
+        let source = if matches!(self.sources[source].link, Link::Open(_)) {
+            source
+        } else {
+            0
+        };
+        Create {
+            name: String::new(),
+            class: Class::Barbarian,
+            appearance: Appearance::default(),
+            source,
+        }
+    }
+
+    /// The servers that aren't showing characters, and why.
+    fn server_status(&self) -> Option<String> {
+        self.sources.iter().find_map(|s| {
+            let Place::Online(addr) = &s.place else {
+                return None;
+            };
+            match &s.link {
+                Link::Connecting(_) => Some(format!("Connecting to {addr}...")),
+                Link::Open(_) if s.list.is_none() => Some(format!("Connecting to {addr}...")),
+                Link::Down(why) => Some(format!("Server {addr}: {why}")),
+                _ => None,
+            }
+        })
+    }
+
+    fn select_screen(&mut self, entries: &[Entry]) -> CharacterOutcome {
         let (w, h) = (screen_width(), screen_height());
         let p = Rect::new(w - 380.0, 30.0, 350.0, h - 60.0);
         panel(p);
         text_centered("Characters", p.x + p.w / 2.0, p.y + 36.0, 30.0, GOLD);
-        let where_ = match self.mode {
-            Mode::Solo => "Solo".to_string(),
-            Mode::Sandbox => "Sandbox: press P in game for cheats".to_string(),
-            Mode::Online => format!("Account: {}", self.account),
+        let where_ = if self.sources[0].place == Place::Sandbox {
+            "Sandbox: press P in game for cheats".to_string()
+        } else {
+            format!("Account: {}", self.account)
         };
-        text_centered(
-            &where_,
-            p.x + p.w / 2.0,
-            p.y + 60.0,
-            16.0,
-            Color::new(0.75, 0.75, 0.75, 1.0),
-        );
-        let rows: Vec<Rect> = (0..list.len())
-            .map(|i| Rect::new(p.x + 14.0, p.y + 78.0 + i as f32 * 60.0, p.w - 28.0, 54.0))
+        let grey = Color::new(0.75, 0.75, 0.75, 1.0);
+        text_centered(&where_, p.x + p.w / 2.0, p.y + 60.0, 16.0, grey);
+        if let Some(status) = self.server_status() {
+            for (i, line) in hud::wrap(&status, 40).iter().take(3).enumerate() {
+                text_centered(
+                    line,
+                    p.x + p.w / 2.0,
+                    p.y + 78.0 + i as f32 * 16.0,
+                    15.0,
+                    Color::new(0.95, 0.7, 0.5, 1.0),
+                );
+            }
+        }
+        let create = Rect::new(p.x + 14.0, p.bottom() - 112.0, p.w - 28.0, 40.0);
+        let top = p.y + 126.0;
+        let fits = (((create.y - 8.0 - top) / 60.0).floor() as usize).max(1);
+        let selected = self.selected_index(entries);
+        // Keep the selected row in view.
+        self.scroll = self
+            .scroll
+            .min(entries.len().saturating_sub(fits))
+            .min(selected)
+            .max((selected + 1).saturating_sub(fits));
+        let rows: Vec<(usize, Rect)> = (self.scroll..entries.len().min(self.scroll + fits))
+            .enumerate()
+            .map(|(row, i)| {
+                (
+                    i,
+                    Rect::new(p.x + 14.0, top + row as f32 * 60.0, p.w - 28.0, 54.0),
+                )
+            })
             .collect();
         let enter = Rect::new(w / 2.0 - 120.0, h - 110.0, 240.0, 48.0);
-        let create = Rect::new(p.x + 14.0, p.bottom() - 112.0, p.w - 28.0, 40.0);
         let delete = Rect::new(p.x + 14.0, p.bottom() - 62.0, (p.w - 40.0) / 2.0, 40.0);
         let back = Rect::new(
             p.x + 26.0 + (p.w - 40.0) / 2.0,
@@ -589,20 +793,32 @@ impl Characters {
             40.0,
         );
 
+        let wheel = mouse_wheel().1;
+        if wheel != 0.0 && entries.len() > fits {
+            let pick = if wheel < 0.0 {
+                (selected + 1).min(entries.len() - 1)
+            } else {
+                selected.saturating_sub(1)
+            };
+            self.select(&entries[pick]);
+        }
         if is_mouse_button_pressed(MouseButton::Left) {
             let m = mouse();
-            if let Some(i) = rows.iter().position(|r| r.contains(m)) {
-                self.selected = i;
+            if let Some(&(i, _)) = rows.iter().find(|(_, r)| r.contains(m)) {
+                self.select(&entries[i]);
                 self.confirm_delete = false;
-            } else if enter.contains(m) && !list.is_empty() {
-                self.enter(&list);
+            } else if enter.contains(m) && !entries.is_empty() {
+                self.enter(&entries[selected]);
             } else if create.contains(m) {
-                self.create = Some(new_character());
+                self.create = Some(self.new_character());
                 self.message = None;
-            } else if delete.contains(m) && !list.is_empty() {
+            } else if delete.contains(m) && !entries.is_empty() {
                 if self.confirm_delete {
-                    let name = list[self.selected].name.clone();
-                    self.send(ClientMsg::DeleteCharacter(name));
+                    let e = &entries[selected];
+                    self.send(
+                        e.source,
+                        ClientMsg::DeleteCharacter(e.character.name.clone()),
+                    );
                     self.confirm_delete = false;
                 } else {
                     self.confirm_delete = true;
@@ -611,15 +827,17 @@ impl Characters {
                 return CharacterOutcome::Back(None);
             }
         }
-        if !list.is_empty() {
+        if !entries.is_empty() {
             if is_key_pressed(KeyCode::Down) {
-                self.selected = (self.selected + 1) % list.len();
+                self.select(&entries[(selected + 1) % entries.len()]);
+                self.confirm_delete = false;
             }
             if is_key_pressed(KeyCode::Up) {
-                self.selected = (self.selected + list.len() - 1) % list.len();
+                self.select(&entries[(selected + entries.len() - 1) % entries.len()]);
+                self.confirm_delete = false;
             }
             if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-                self.enter(&list);
+                self.enter(&entries[selected]);
             }
         }
         if is_key_pressed(KeyCode::Escape) {
@@ -627,14 +845,18 @@ impl Characters {
         }
         while get_char_pressed().is_some() {}
 
-        for (i, (c, r)) in list.iter().zip(&rows).enumerate() {
-            let selected = i == self.selected;
+        // Draw with the selection as it is after this frame's input.
+        let selected = self.selected_index(entries);
+        for (i, r) in &rows {
+            let e = &entries[*i];
+            let c = &e.character;
+            let is_selected = *i == selected;
             draw_rectangle(
                 r.x,
                 r.y,
                 r.w,
                 r.h,
-                if selected {
+                if is_selected {
                     Color::new(0.35, 0.25, 0.1, 0.9)
                 } else {
                     Color::new(0.0, 0.0, 0.0, 0.4)
@@ -646,7 +868,7 @@ impl Characters {
                 r.w,
                 r.h,
                 2.0,
-                if selected { GOLD } else { BORDER },
+                if is_selected { GOLD } else { BORDER },
             );
             text(
                 &c.name,
@@ -654,6 +876,15 @@ impl Characters {
                 r.y + 24.0,
                 24.0,
                 hud::class_color(c.class),
+            );
+            let place = &self.sources[e.source].place;
+            let tag = place.label();
+            text(
+                tag,
+                r.right() - 10.0 - hud::text_width(tag, 15.0),
+                r.y + 20.0,
+                15.0,
+                place.color(),
             );
             text(
                 &format!(
@@ -668,11 +899,17 @@ impl Characters {
                 Color::new(0.85, 0.85, 0.85, 1.0),
             );
         }
-        if list.is_empty() {
+        if self.scroll > 0 {
+            text_centered("more above", p.x + p.w / 2.0, top - 4.0, 14.0, grey);
+        }
+        if self.scroll + fits < entries.len() {
+            text_centered("more below", p.x + p.w / 2.0, create.y - 2.0, 14.0, grey);
+        }
+        if entries.is_empty() {
             text_centered(
                 "No characters yet.",
                 p.x + p.w / 2.0,
-                p.y + 110.0,
+                top + 30.0,
                 20.0,
                 WHITE,
             );
@@ -685,31 +922,29 @@ impl Characters {
             } else {
                 "Delete"
             },
-            !list.is_empty(),
+            !entries.is_empty(),
         );
         button(back, "Back");
-        if let Some(c) = list.get(self.selected) {
+        if let Some(e) = entries.get(selected) {
             text_centered(
-                &c.name,
+                &e.character.name,
                 w / 2.0 - 60.0,
                 h - 150.0,
                 40.0,
-                hud::class_color(c.class),
+                hud::class_color(e.character.class),
             );
         }
-        button_ex(enter, "Enter World", !list.is_empty());
+        button_ex(enter, "Enter World", !entries.is_empty());
         CharacterOutcome::Stay
     }
 
-    fn enter(&mut self, list: &[CharacterSummary]) {
-        if let Some(c) = list.get(self.selected) {
-            self.message = None;
-            let name = c.name.clone();
-            self.send(ClientMsg::EnterWorld(name));
-        }
+    fn enter(&mut self, e: &Entry) {
+        self.message = None;
+        self.select(e);
+        self.send(e.source, ClientMsg::EnterWorld(e.character.name.clone()));
     }
 
-    fn create_screen(&mut self) -> CharacterOutcome {
+    fn create_screen(&mut self, has_characters: bool) -> CharacterOutcome {
         let (w, h) = (screen_width(), screen_height());
         let p = Rect::new(w - 420.0, 30.0, 390.0, h - 60.0);
         let inner = p.x + 20.0;
@@ -741,6 +976,20 @@ impl Characters {
                 )
             })
             .collect();
+        // Where to make it, when there's a server as well as solo.
+        let places: Vec<Rect> = if self.sources.len() > 1 {
+            let cw = (iw - 6.0) / 2.0;
+            (0..self.sources.len())
+                .map(|i| Rect::new(inner + i as f32 * (cw + 6.0), p.y + 616.0, cw, 30.0))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let available: Vec<bool> = self
+            .sources
+            .iter()
+            .map(|s| matches!(s.link, Link::Open(_)) && s.list.is_some())
+            .collect();
         let create = Rect::new(inner, p.bottom() - 62.0, iw * 0.5 - 6.0, 44.0);
         let back = Rect::new(
             inner + iw * 0.5 + 6.0,
@@ -748,9 +997,11 @@ impl Characters {
             iw * 0.5 - 6.0,
             44.0,
         );
-        let has_characters = self.list.as_ref().is_some_and(|l| !l.is_empty());
 
         let c = self.create.as_mut().unwrap();
+        if !available[c.source] {
+            c.source = 0;
+        }
         type_into(&mut c.name, 12, |ch| ch.is_ascii_alphabetic());
         let mut submit = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
         if is_mouse_button_pressed(MouseButton::Left) {
@@ -763,6 +1014,11 @@ impl Characters {
             for (r, race) in races.iter().zip(Race::ALL) {
                 if r.contains(m) {
                     c.appearance.race = race;
+                }
+            }
+            for (i, r) in places.iter().enumerate() {
+                if r.contains(m) && available[i] {
+                    c.source = i;
                 }
             }
             let a = &mut c.appearance;
@@ -792,17 +1048,20 @@ impl Characters {
             self.message = None;
             return CharacterOutcome::Stay;
         }
-        let (name, class, appearance) = (c.name.clone(), c.class, c.appearance);
+        let (name, class, appearance, source) = (c.name.clone(), c.class, c.appearance, c.source);
         if submit {
             if name.len() < 2 {
                 self.message = Some("Pick a name of 2 to 12 letters.".into());
             } else {
                 self.message = None;
-                self.send(ClientMsg::CreateCharacter {
-                    name: name.clone(),
-                    class,
-                    appearance,
-                });
+                self.send(
+                    source,
+                    ClientMsg::CreateCharacter {
+                        name: name.clone(),
+                        class,
+                        appearance,
+                    },
+                );
             }
         }
 
@@ -832,6 +1091,17 @@ impl Characters {
         text("Class", inner, p.y + 244.0, 18.0, WHITE);
         for (r, cl) in classes.iter().zip(Class::ALL) {
             choice(*r, cl.name(), cl == class, hud::class_color(cl), 17.0);
+        }
+        if !places.is_empty() {
+            text("Play on", inner, p.y + 608.0, 18.0, WHITE);
+            for (i, r) in places.iter().enumerate() {
+                let place = &self.sources[i].place;
+                if available[i] {
+                    choice(*r, place.label(), i == source, place.color(), 16.0);
+                } else {
+                    button_ex(*r, &format!("{} (offline)", place.label()), false);
+                }
+            }
         }
 
         // Descriptions of the chosen race and class, bottom left.
