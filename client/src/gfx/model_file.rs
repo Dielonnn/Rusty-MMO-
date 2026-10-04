@@ -118,7 +118,7 @@ impl ModelFile {
                 let indices: Vec<u16> = part.indices.iter().map(|&i| base + i as u16).collect();
                 b.index(&indices);
             } else {
-                for tri in part.indices.chunks_exact(3) {
+                for tri in part.indices.as_chunks::<3>().0 {
                     let base = b.begin_shape(3, 3);
                     for &i in tri {
                         vertex(b, i as usize);
