@@ -20,6 +20,10 @@ Two people (each with their own Claude) work on this repository. So:
   or rewrite someone else's branch.
 - Before starting, check what's new on `main` and on open branches, so you
   don't redo or clash with the other person's work.
+- **Before you push, catch up with `main`.** Run `git fetch origin main`. If
+  `main` has moved, merge it into your branch (`git merge origin/main`, never
+  rebase). If that brought in a new CLAUDE.md, re-read it and follow the new
+  rules. Then rerun the checks, and push only if they pass.
 
 ## Checks
 
