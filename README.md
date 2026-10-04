@@ -4,7 +4,7 @@ A small 3D tab-targeting MMO written in Rust, in the spirit of World of Warcraft
 and Final Fantasy XIV. Pick one of six races and thirteen classes, and start in
 your race's own starting area: autumn hills, a desert, an elven forest, a
 goblin cave, snowy peaks or a dying forest, each with its own town, merchant,
-creatures and elite. Loot leather and cloth, craft armor, buy potions, and level
+creatures and elite. Loot leather, cloth and iron, craft armor and weapons, buy potions, and level
 up to unlock your abilities. Play solo, or run a server and adventure together.
 Characters are saved between sessions.
 
@@ -218,18 +218,25 @@ loot (everyone who fought it may loot it; the first to do so gets it).
 
 - Boars (and some wolves) drop **Light Leather**
 - Bandits (and the other humanoids) drop **Linen Cloth**
+- Bandits, raiders and the other fighters also drop **Iron Scrap**
 - Each starting area's elite drops an **Ancient Core**
 - Any mob may drop a piece of **green** gear (rarely; elites usually do):
   helms, chests, gloves, legs and boots, each sturdy (armor and stamina) or
   arcane (power). Greens are better than crafted leather and linen, but not
   as good as the rare (blue) Heartstone Chestguard. Quests reward greens too
+- Any mob may also drop a **green weapon** (rarely; elites often do): the
+  Wolfbite Axe, Ironwood Mace, Shadowfang Dagger, Ashwood Longbow, Emberwand
+  and Moonwhisper Staff
 
-Open crafting with `K` to turn materials into armor: a leather cap, vest,
-gloves, pants and boots; a linen hood, robe and pants; and the Heartstone
-Chestguard. Click armor in your backpack to wear it, and click it in the
-character window to take it off. Armor reduces physical damage, stamina adds
+Open crafting with `K` to turn materials into gear: a leather cap, vest,
+gloves, pants and boots; a linen hood, robe, gloves, pants and sandals; an
+Iron Sword, Hunting Bow and Apprentice Staff; and the rare Heartstone
+Chestguard and Heartstone Greatsword. Click gear in your backpack to wear or
+hold it, and click it in the character window to take it off. Armor reduces
+physical damage, a weapon adds damage to every auto attack, stamina adds
 health, and power adds to the damage and healing you do. What you wear shows on
-your character.
+your character (weapons don't yet; your class's own weapon is drawn instead).
+Any class can use any weapon.
 
 ### Merchants
 

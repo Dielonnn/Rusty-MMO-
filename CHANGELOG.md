@@ -5,6 +5,29 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.1
+
+Commit: the one titled "v7.1: weapons as loot and more crafting recipes".
+
+- **Weapons**: a new weapon slot on the character sheet (`C`). A weapon adds
+  damage to every auto attack, and some add stamina or power. Click one in
+  your backpack to hold it, and click it on the character sheet to put it
+  away. Any class can use any weapon. Weapons aren't drawn in hands yet
+- **Weapon drops**: any mob may drop a green weapon (3%; elites 30%): the
+  Wolfbite Axe, Ironwood Mace and Shadowfang Dagger (+4 damage, +2 stamina),
+  the Ashwood Longbow (+4 damage, +1 stamina, +1 power), and the Emberwand
+  and Moonwhisper Staff (+2 damage, +4 power)
+- **Iron Scrap**: a new material that fighters (bandits, raiders, satyrs,
+  troggs, trolls and skeletons) drop 35% of the time
+- **New recipes**: Iron Sword (5 Iron Scrap, 2 Light Leather; +2 damage),
+  Hunting Bow (2 Iron Scrap, 4 Light Leather; +2 damage), Apprentice Staff
+  (2 Iron Scrap, 4 Linen Cloth; +1 damage, +2 power), the rare Heartstone
+  Greatsword (1 Ancient Core, 8 Iron Scrap; +7 damage, +6 stamina, +3 power),
+  and Linen Gloves and Linen Sandals to finish the linen set
+- The character sheet shows your weapon damage next to stamina and power
+- Saved characters load as before, with an empty weapon slot. Old clients
+  can't join a v7.1 server (protocol 7)
+
 ## v7.0
 
 Commit: the one titled "v7.0: Painted world: ground, foliage, rocks, water and sky".
