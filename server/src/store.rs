@@ -171,7 +171,7 @@ mod tests {
             s.create("bob", "ARIA", Class::Rogue, Appearance::default())
                 .is_err()
         );
-        s.create("bob", "Brom", Class::Warrior, Appearance::default())
+        s.create("bob", "Brom", Class::Barbarian, Appearance::default())
             .unwrap();
         assert_eq!(s.list("ann").len(), 1);
         assert_eq!(s.list("ann")[0].name, "Aria");

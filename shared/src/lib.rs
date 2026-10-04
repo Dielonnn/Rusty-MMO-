@@ -1,8 +1,9 @@
 //! Code shared by the client and the server: game data (classes, abilities,
-//! mobs), the network protocol, message framing and the terrain.
+//! mobs), the network protocol, message framing, the terrain and scenery.
 
 pub mod data;
 pub mod net;
+pub mod props;
 pub mod protocol;
 pub mod world;
 

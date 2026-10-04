@@ -10,10 +10,10 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
-use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Slot};
+use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Race, Slot};
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -60,6 +60,18 @@ pub enum ClientMsg {
     Unequip(Slot),
     /// Make the recipe with this index in `RECIPES`.
     Craft(usize),
+    /// Buy one of an item from a merchant.
+    Buy {
+        merchant: EntityId,
+        item: ItemId,
+    },
+    /// Sell everything in a bag slot to a merchant.
+    Sell {
+        merchant: EntityId,
+        slot: usize,
+    },
+    /// Use the item in a bag slot (drink a potion).
+    UseItem(usize),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -137,6 +149,8 @@ pub enum EntityKind {
         /// Running home after giving up a chase; immune to everything.
         evading: bool,
     },
+    /// A friendly townsperson who trades.
+    Merchant(Race),
 }
 
 impl EntityKind {
@@ -144,9 +158,13 @@ impl EntityKind {
         matches!(self, EntityKind::Player(_))
     }
 
-    /// Players fight mobs; nobody fights their own side.
+    pub fn is_mob(self) -> bool {
+        matches!(self, EntityKind::Mob { .. })
+    }
+
+    /// Players fight mobs; nobody else fights anyone.
     pub fn hostile_to(self, other: EntityKind) -> bool {
-        self.is_player() != other.is_player()
+        (self.is_player() && other.is_mob()) || (self.is_mob() && other.is_player())
     }
 }
 
@@ -177,6 +195,8 @@ pub struct SelfView {
     pub gcd: f32,
     pub auto_attacking: bool,
     pub combo_points: u8,
+    /// Seconds until potions can be used again.
+    pub potion_cooldown: f32,
     /// In copper.
     pub money: u32,
     pub bags: Vec<Option<Stack>>,
@@ -245,6 +265,17 @@ pub enum GameEvent {
     },
     /// You made an item.
     Crafted(ItemId),
+    /// You bought an item for this much.
+    Bought {
+        item: ItemId,
+        price: u32,
+    },
+    /// You sold items for this much.
+    Sold {
+        item: ItemId,
+        count: u16,
+        money: u32,
+    },
     /// Something you tried didn't work ("Out of range.").
     Error(String),
     Chat {

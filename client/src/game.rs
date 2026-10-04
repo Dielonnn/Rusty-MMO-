@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use shared::props::Colliders;
+
 use macroquad::prelude::*;
 use shared::data::*;
 use shared::net::Connection;
@@ -86,6 +88,14 @@ pub struct Windows {
     pub bags: bool,
     pub character: bool,
     pub crafting: bool,
+    /// The merchant whose wares are shown.
+    pub vendor: Option<EntityId>,
+}
+
+impl Windows {
+    pub fn any(&self) -> bool {
+        self.bags || self.character || self.crafting || self.vendor.is_some()
+    }
 }
 
 pub struct Game {
@@ -128,6 +138,11 @@ pub struct Game {
     pub menu_open: bool,
     pub time: f32,
     batch: Batch,
+    /// The starting area you're in, and what you can bump into there.
+    pub zone: Zone,
+    colliders: Colliders,
+    /// Show the zone name once we know where we are.
+    banner_due: bool,
 }
 
 pub enum Outcome {
@@ -149,7 +164,7 @@ impl Game {
             entities: HashMap::new(),
             me: SelfView::default(),
             target: None,
-            pos: ground(GRAVEYARD.x, GRAVEYARD.y),
+            pos: Zone::Amberfall.graveyard(),
             yaw: 0.0,
             vel_y: 0.0,
             grounded: true,
@@ -168,7 +183,7 @@ impl Game {
             chat_input: None,
             errors: Vec::new(),
             floats: Vec::new(),
-            banner: Some((render::ZONE_NAME.into(), render::ZONE_SUBTITLE.into(), 0.0)),
+            banner: None,
             cast_flash: None,
             projectiles: Vec::new(),
             rings: Vec::new(),
@@ -177,8 +192,11 @@ impl Game {
             menu_open: false,
             time: 0.0,
             batch: Batch::new(),
+            zone: Zone::Amberfall,
+            colliders: Colliders::for_zone(Zone::Amberfall),
+            banner_due: true,
         };
-        game.system("Welcome to Amberfall Vale! Press H to show or hide the controls.");
+        game.system("Welcome! Press H to show or hide the controls.");
         game
     }
 
@@ -245,15 +263,30 @@ impl Game {
         self.simulate(dt);
         self.send_movement(dt);
 
+        self.update_zone();
         let cam = self.camera();
-        render::draw_sky(&cam, |p| hud::project(&cam, p));
+        render::draw_sky(&cam, self.zone, |p| hud::project(&cam, p));
         set_camera(&cam);
-        scene.begin_3d();
+        scene.begin_3d(self.zone);
         self.draw_world(scene);
         scene.end_3d();
         set_default_camera();
         hud::draw(self, &layout, &cam);
         Outcome::Continue
+    }
+
+    /// Notices when you arrive in a different starting area.
+    fn update_zone(&mut self) {
+        if self.my_id.is_none_or(|id| !self.entities.contains_key(&id)) {
+            return;
+        }
+        let zone = Zone::at(self.pos);
+        if zone != self.zone || self.banner_due {
+            self.banner_due = false;
+            self.zone = zone;
+            self.colliders = Colliders::for_zone(zone);
+            self.banner = Some((zone.name().into(), zone.subtitle(), 0.0));
+        }
     }
 
     // ---- Network ----
@@ -276,9 +309,13 @@ impl Game {
             ServerMsg::Welcome { id } => self.my_id = Some(id),
             ServerMsg::Rejected(reason) => return Err(reason),
             ServerMsg::SetPosition { pos, yaw } => {
+                // Only swing the camera around after a long jump (a respawn),
+                // not for a charge or a corrected step.
+                if pos.distance(self.pos) > 40.0 {
+                    self.cam_yaw = yaw;
+                }
                 self.pos = pos;
                 self.yaw = yaw;
-                self.cam_yaw = yaw;
                 self.vel_y = 0.0;
             }
             ServerMsg::Snapshot(snap) => {
@@ -416,17 +453,26 @@ impl Game {
                             age: 0.0,
                         });
                     }
-                } else if let Targeting::AroundCaster(radius) = a.targeting {
+                } else if let Targeting::AroundCaster(radius) | Targeting::AroundTarget(radius) =
+                    a.targeting
+                {
+                    let around_target = matches!(a.targeting, Targeting::AroundTarget(_));
                     self.rings.push(RingEffect {
-                        entity: caster,
+                        entity: if around_target {
+                            target.unwrap_or(caster)
+                        } else {
+                            caster
+                        },
                         radius,
                         color,
                         rising: false,
                         age: 0.0,
                         duration: 0.45,
                     });
-                } else if a.range <= MELEE_RANGE
-                    && a.targeting == Targeting::Enemy
+                }
+                if a.range <= MELEE_RANGE
+                    && !a.projectile
+                    && a.targeting.needs_enemy()
                     && let Some(e) = self.entities.get_mut(&caster)
                 {
                     e.swing = 0.0;
@@ -539,6 +585,29 @@ impl Game {
                     color: hud::quality_color(it.quality),
                 });
             }
+            GameEvent::Bought { item: id, price } => {
+                let it = item(id);
+                self.chat.push(ChatLine {
+                    text: format!("You buy {} for {}.", it.name, format_money(price)),
+                    color: hud::quality_color(it.quality),
+                });
+            }
+            GameEvent::Sold {
+                item: id,
+                count,
+                money,
+            } => {
+                let it = item(id);
+                let what = if count > 1 {
+                    format!("{} x{count}", it.name)
+                } else {
+                    it.name.to_string()
+                };
+                self.chat.push(ChatLine {
+                    text: format!("You sell {what} for {}.", format_money(money)),
+                    color: Color::new(1.0, 0.85, 0.35, 1.0),
+                });
+            }
             GameEvent::Error(text) => self.error(&text),
             GameEvent::Chat { from, text } => self.chat.push(ChatLine {
                 text: format!("[{from}]: {text}"),
@@ -596,7 +665,7 @@ impl Game {
             ));
             return;
         }
-        if shared::data::ability(ability).targeting == Targeting::Enemy {
+        if shared::data::ability(ability).targeting.needs_enemy() {
             self.face_target();
         }
         self.send(ClientMsg::UseAbility {
@@ -642,7 +711,7 @@ impl Game {
                 let h = if e.view.dead {
                     0.8
                 } else {
-                    render::model_height(e.view.kind)
+                    render::model_height(e.view.kind, e.view.appearance)
                 };
                 let r = render::model_radius(e.view.kind);
                 let bottom = hud::project(cam, e.pos)?;
@@ -693,7 +762,7 @@ impl Game {
         if !typing && is_key_pressed(KeyCode::Escape) {
             if self.menu_open {
                 self.menu_open = false;
-            } else if self.windows.bags || self.windows.character || self.windows.crafting {
+            } else if self.windows.any() {
                 self.windows = Windows::default();
             } else if self.target.is_some() {
                 self.set_target(None);
@@ -781,6 +850,7 @@ impl Game {
             KeyCode::Key4,
             KeyCode::Key5,
             KeyCode::Key6,
+            KeyCode::E,
         ]
         .into_iter()
         .enumerate()
@@ -794,6 +864,9 @@ impl Game {
         }
         if is_key_pressed(KeyCode::F1) {
             self.set_target(self.my_id);
+        }
+        if is_key_pressed(KeyCode::Q) {
+            self.error("Q no longer strafes: use A and D. E is your seventh ability.");
         }
         if is_key_pressed(KeyCode::T) {
             if self.me.auto_attacking {
@@ -832,6 +905,13 @@ impl Game {
         };
         if e.view.lootable {
             self.send(ClientMsg::Loot(id));
+        } else if matches!(e.view.kind, EntityKind::Merchant(_)) {
+            if e.pos.distance(self.pos) > MERCHANT_RANGE {
+                self.error("You are too far away.");
+            } else {
+                self.windows.vendor = Some(id);
+                self.windows.bags = true;
+            }
         } else if self.is_hostile(&e.view) && !e.view.dead {
             self.face_target();
             self.send(ClientMsg::StartAttack);
@@ -853,10 +933,16 @@ impl Game {
             .iter()
             .position(|r| self.windows.bags && r.contains(mouse))
         {
-            // Right click (or left) wears armor.
+            // With a merchant open, right click sells. Otherwise clicking
+            // armor wears it and right clicking a potion drinks it.
             if let Some(Some((id, _))) = self.me.bags.get(i) {
-                if matches!(item(*id).kind, ItemKind::Armor { .. }) {
+                let kind = item(*id).kind;
+                if let (Some(merchant), false) = (self.windows.vendor, left) {
+                    self.send(ClientMsg::Sell { merchant, slot: i });
+                } else if matches!(kind, ItemKind::Armor { .. }) {
                     self.send(ClientMsg::Equip(i));
+                } else if matches!(kind, ItemKind::Potion { .. }) {
+                    self.send(ClientMsg::UseItem(i));
                 } else if !left {
                     self.error("You can't wear that. Use it for crafting (K).");
                 }
@@ -876,6 +962,13 @@ impl Game {
             && left
         {
             self.send(ClientMsg::Craft(i));
+        } else if let Some(merchant) = self.windows.vendor
+            && let Some(i) = layout.vendor_buttons.iter().position(|r| r.contains(mouse))
+        {
+            self.send(ClientMsg::Buy {
+                merchant,
+                item: MERCHANT_GOODS[i],
+            });
         }
     }
 
@@ -895,7 +988,8 @@ impl Game {
                 if let Effect::Aura { kind, .. } = effect {
                     match kind {
                         AuraKind::Stun | AuraKind::Root => factor = 0.0,
-                        AuraKind::Slow(f) => factor = factor.min(*f),
+                        AuraKind::Slow(f) => factor *= *f,
+                        AuraKind::Speed(f) => factor *= *f,
                         _ => {}
                     }
                 }
@@ -928,12 +1022,12 @@ impl Game {
         if key(KeyCode::S) || key(KeyCode::Down) {
             fwd -= 1.0;
         }
-        // A and D (and Q and E) strafe.
+        // A and D strafe.
         let mut strafe = 0.0;
-        if key(KeyCode::A) || key(KeyCode::Q) {
+        if key(KeyCode::A) {
             strafe -= 1.0;
         }
-        if key(KeyCode::D) || key(KeyCode::E) {
+        if key(KeyCode::D) {
             strafe += 1.0;
         }
         let wants_move = (fwd != 0.0 || strafe != 0.0) && alive;
@@ -952,7 +1046,9 @@ impl Game {
         } * factor;
         self.moving = dir != Vec3::ZERO && factor > 0.0;
         if self.moving {
-            self.pos += dir * speed * dt;
+            // Houses, trees, rocks and the like are solid.
+            let next = self.pos + dir * speed * dt;
+            self.pos = self.colliders.resolve(next, 0.45);
         }
         if key(KeyCode::Space) && self.grounded && factor > 0.0 {
             self.vel_y = JUMP_SPEED;
@@ -967,6 +1063,16 @@ impl Game {
             self.grounded = true;
         }
         self.pos = clamp_to_world(self.pos);
+
+        // Walking away from a merchant closes their window.
+        if let Some(id) = self.windows.vendor
+            && self
+                .entities
+                .get(&id)
+                .is_none_or(|m| m.pos.distance(self.pos) > MERCHANT_RANGE + 2.0)
+        {
+            self.windows.vendor = None;
+        }
 
         // Everyone else glides towards where the server says they are.
         let smooth = 1.0 - (-12.0 * dt).exp();
@@ -1071,8 +1177,9 @@ impl Game {
     }
 
     fn draw_world(&mut self, scene: &Scene) {
-        scene.draw();
+        scene.draw(self.zone);
         let b = &mut self.batch;
+        b.light = render::theme(self.zone).light;
 
         if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
             let color = hud::reaction_color(&t.view, self.class);
@@ -1106,7 +1213,8 @@ impl Game {
             let Some(to) = self.entities.get(&p.to) else {
                 continue;
             };
-            let end = to.pos + Vec3::Y * render::model_height(to.view.kind) * 0.6;
+            let end =
+                to.pos + Vec3::Y * render::model_height(to.view.kind, to.view.appearance) * 0.6;
             let dist = p.start.distance(end).max(0.1);
             let t = (p.age * 35.0 / dist).min(1.0);
             let at = p.start.lerp(end, t);
@@ -1139,9 +1247,9 @@ impl Game {
                 b.air_ring(e.pos + Vec3::Y * 0.3, r.radius * t.sqrt(), 0.5, color);
             }
         }
-        scene.draw_effects(b, self.time);
+        scene.draw_effects(self.zone, b, self.time);
         b.flush();
-        scene.draw_water();
+        scene.draw_water(self.zone);
     }
 }
 

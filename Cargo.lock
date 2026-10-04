@@ -55,7 +55,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "client"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "macroquad",
  "server",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "glam",
  "serde",
@@ -362,11 +362,12 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "bincode",
  "glam",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

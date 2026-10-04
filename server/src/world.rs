@@ -12,6 +12,7 @@ use shared::protocol::*;
 use shared::world::*;
 
 use crate::character::{Character, add_item, count_item, gear_stats, remove_item};
+use shared::props::MERCHANT_SPOT;
 
 /// Who a message is for.
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +84,7 @@ pub struct PlayerData {
     move_budget: f32,
     /// Seconds since mana was last spent.
     since_spend: f32,
+    potion_cooldown: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,9 +116,17 @@ pub struct MobData {
     pub loot: Option<Loot>,
 }
 
+/// A townsperson who trades.
+pub struct NpcData {
+    pub race: Race,
+    pub home: Vec3,
+    pub home_yaw: f32,
+}
+
 pub enum Brain {
     Player(PlayerData),
     Mob(MobData),
+    Npc(NpcData),
 }
 
 pub struct Entity {
@@ -155,34 +165,35 @@ impl Entity {
                     evading: m.state == MobState::Evading,
                 }
             }
+            Brain::Npc(n) => EntityKind::Merchant(n.race),
         }
     }
 
     pub fn player(&self) -> Option<&PlayerData> {
         match &self.brain {
             Brain::Player(p) => Some(p),
-            Brain::Mob(_) => None,
+            _ => None,
         }
     }
 
     fn player_mut(&mut self) -> Option<&mut PlayerData> {
         match &mut self.brain {
             Brain::Player(p) => Some(p),
-            Brain::Mob(_) => None,
+            _ => None,
         }
     }
 
     pub fn mob(&self) -> Option<&MobData> {
         match &self.brain {
             Brain::Mob(m) => Some(m),
-            Brain::Player(_) => None,
+            _ => None,
         }
     }
 
     fn mob_mut(&mut self) -> Option<&mut MobData> {
         match &mut self.brain {
             Brain::Mob(m) => Some(m),
-            Brain::Player(_) => None,
+            _ => None,
         }
     }
 
@@ -199,14 +210,37 @@ impl Entity {
     }
 
     /// Movement speed multiplier from slows (the strongest one wins).
-    fn slow(&self) -> f32 {
-        self.auras
+    /// Movement speed multiplier: the strongest slow times the strongest
+    /// speed boost.
+    fn move_mult(&self) -> f32 {
+        let slow = self
+            .auras
             .iter()
             .filter_map(|a| match a.kind {
                 AuraKind::Slow(f) => Some(f),
                 _ => None,
             })
-            .fold(1.0, f32::min)
+            .fold(1.0, f32::min);
+        let fast = self
+            .auras
+            .iter()
+            .filter_map(|a| match a.kind {
+                AuraKind::Speed(f) => Some(f),
+                _ => None,
+            })
+            .fold(1.0, f32::max);
+        slow * fast
+    }
+
+    /// Damage done multiplier from auras like Recklessness and curses.
+    fn damage_done(&self) -> f32 {
+        self.auras
+            .iter()
+            .filter_map(|a| match a.kind {
+                AuraKind::DamageDone(f) => Some(f),
+                _ => None,
+            })
+            .product()
     }
 
     /// Damage taken multiplier from auras like Evasion.
@@ -238,6 +272,16 @@ impl Entity {
         let (appearance, gear) = match &self.brain {
             Brain::Player(p) => (p.appearance, p.gear),
             Brain::Mob(_) => (Appearance::default(), [None; 5]),
+            Brain::Npc(n) => (
+                Appearance {
+                    race: n.race,
+                    body: (self.id % 2) as u8,
+                    skin: (self.id % 5) as u8,
+                    hair_style: 1 + (self.id % 4) as u8,
+                    hair_color: (self.id % 6) as u8,
+                },
+                [None; 5],
+            ),
         };
         let lootable = self
             .mob()
@@ -286,7 +330,7 @@ impl Entity {
 fn mob_of(brain: &mut Brain) -> &mut MobData {
     match brain {
         Brain::Mob(m) => m,
-        Brain::Player(_) => panic!("not a mob"),
+        _ => panic!("not a mob"),
     }
 }
 
@@ -298,43 +342,47 @@ struct Camp {
     count: usize,
 }
 
-const fn camp(x: f32, z: f32, radius: f32, kind: MobKind, levels: (u8, u8), count: usize) -> Camp {
-    Camp {
-        center: Vec2::new(x, z),
-        radius,
-        kind,
-        levels,
-        count,
-    }
-}
+/// Mob camps in the shared layout (local coordinates), by role: 0 the
+/// aggressive beast, 1 the neutral beast, 2 the fighter, 3 the caster and 4
+/// the elite. Levels rise the further you go from town.
+type CampRow = (f32, f32, f32, usize, (u8, u8), usize);
+const CAMPS: [CampRow; 12] = [
+    (50.0, 25.0, 14.0, 0, (1, 2), 5),
+    (-45.0, 40.0, 16.0, 1, (1, 3), 6),
+    (15.0, -60.0, 14.0, 0, (2, 3), 5),
+    (-85.0, -35.0, 16.0, 1, (3, 5), 6),
+    (90.0, -75.0, 14.0, 2, (4, 5), 4),
+    (95.0, -70.0, 12.0, 3, (4, 5), 2),
+    (20.0, 110.0, 16.0, 0, (5, 6), 6),
+    (120.0, 90.0, 14.0, 2, (6, 8), 5),
+    (125.0, 95.0, 12.0, 3, (6, 8), 3),
+    (155.0, -20.0, 16.0, 0, (7, 8), 6),
+    (-120.0, -120.0, 16.0, 2, (8, 9), 5),
+    (-150.0, -150.0, 4.0, 4, (10, 10), 1),
+];
 
-/// Mob camps. Levels rise the further you go from town.
+/// Every zone's camps, in world coordinates, with that zone's mobs.
 fn camps() -> Vec<Camp> {
-    use MobKind::*;
-    vec![
-        camp(50.0, 25.0, 14.0, Wolf, (1, 2), 5),
-        camp(-45.0, 40.0, 16.0, Boar, (1, 3), 6),
-        camp(15.0, -60.0, 14.0, Wolf, (2, 3), 5),
-        camp(-85.0, -35.0, 16.0, Boar, (3, 5), 6),
-        camp(90.0, -75.0, 14.0, Bandit, (4, 5), 4),
-        camp(95.0, -70.0, 12.0, BanditMystic, (4, 5), 2),
-        camp(20.0, 110.0, 16.0, Wolf, (5, 6), 6),
-        camp(120.0, 90.0, 14.0, Bandit, (6, 8), 5),
-        camp(125.0, 95.0, 12.0, BanditMystic, (6, 8), 3),
-        camp(155.0, -20.0, 16.0, Wolf, (7, 8), 6),
-        camp(-120.0, -120.0, 16.0, Bandit, (8, 9), 5),
-        camp(-150.0, -150.0, 4.0, Golem, (10, 10), 1),
-    ]
+    let mut camps = Vec::new();
+    for zone in Zone::ALL {
+        let mobs = MobKind::for_zone(zone);
+        for (x, z, radius, role, levels, count) in CAMPS {
+            camps.push(Camp {
+                center: zone.to_world(vec2(x, z)),
+                radius,
+                kind: mobs[role],
+                levels,
+                count,
+            });
+        }
+    }
+    camps
 }
 
 /// Something that happens to a target when an ability or aura lands.
 enum Hit {
     Damage(f32, bool),
     Heal(f32, bool),
-}
-
-fn in_town(p: Vec3) -> bool {
-    (p.x * p.x + p.z * p.z).sqrt() < TOWN_RADIUS
 }
 
 pub struct World {
@@ -361,7 +409,47 @@ impl World {
                 world.spawn_mob(camp);
             }
         }
+        for zone in Zone::ALL {
+            world.spawn_merchant(zone);
+        }
         world
+    }
+
+    /// A merchant in a zone's town, facing the square.
+    fn spawn_merchant(&mut self, zone: Zone) -> EntityId {
+        let id = self.alloc_id();
+        let pos = zone.ground_local(MERCHANT_SPOT);
+        let center = zone.ground_local(Vec2::ZERO);
+        let yaw = yaw_towards(pos, center);
+        self.entities.insert(
+            id,
+            Entity {
+                id,
+                name: zone.merchant_name().to_string(),
+                level: MAX_LEVEL,
+                pos,
+                yaw,
+                hp: 1000.0,
+                max_hp: 1000.0,
+                power: 0.0,
+                max_power: 0.0,
+                target: None,
+                cast: None,
+                auras: Vec::new(),
+                cooldowns: HashMap::new(),
+                gcd: 0.0,
+                swing_timer: 0.0,
+                dead: false,
+                in_combat: false,
+                moving: false,
+                brain: Brain::Npc(NpcData {
+                    race: zone.race(),
+                    home: pos,
+                    home_yaw: yaw,
+                }),
+            },
+        );
+        id
     }
 
     fn alloc_id(&mut self) -> EntityId {
@@ -482,6 +570,7 @@ impl World {
                     auto_attack: false,
                     move_budget: 0.0,
                     since_spend: MANA_REGEN_DELAY,
+                    potion_cooldown: 0.0,
                 }),
             },
         );
@@ -516,7 +605,7 @@ impl World {
         let mut c = self.character(id)?;
         // Logging out dead brings you back at the graveyard.
         if self.entities[&id].dead {
-            c.pos = ground(GRAVEYARD.x, GRAVEYARD.y).to_array();
+            c.pos = Zone::at(Vec3::from(c.pos)).graveyard().to_array();
         }
         self.entities.remove(&id);
         self.forget(id);
@@ -581,6 +670,7 @@ impl World {
                 gcd: me.gcd,
                 auto_attacking: p.auto_attack,
                 combo_points: p.combo_points,
+                potion_cooldown: p.potion_cooldown,
                 money: p.money,
                 bags: p.bags.clone(),
                 stats: p.stats,
@@ -636,6 +726,21 @@ impl World {
             }
             ClientMsg::Craft(recipe) => {
                 if let Err(e) = self.craft(id, recipe) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::Buy { merchant, item } => {
+                if let Err(e) = self.buy(id, merchant, item) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::Sell { merchant, slot } => {
+                if let Err(e) = self.sell(id, merchant, slot) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::UseItem(slot) => {
+                if let Err(e) = self.use_item(id, slot) {
                     self.error(id, e);
                 }
             }
@@ -733,7 +838,7 @@ impl World {
         {
             e.power = e.max_power * 0.5;
         }
-        e.pos = ground(GRAVEYARD.x, GRAVEYARD.y);
+        e.pos = Zone::at(e.pos).graveyard();
         e.yaw = 0.0;
         let (pos, yaw) = (e.pos, e.yaw);
         self.outbox
@@ -875,6 +980,107 @@ impl World {
         Ok(())
     }
 
+    /// Checks that a merchant is close enough to trade with.
+    fn merchant_near(&self, id: EntityId, merchant: EntityId) -> Result<(), &'static str> {
+        let me = &self.entities[&id];
+        let m = self
+            .entities
+            .get(&merchant)
+            .ok_or("There's no one to trade with.")?;
+        if !matches!(m.brain, Brain::Npc(_)) {
+            return Err("They won't trade with you.");
+        }
+        if m.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
+            return Err("You are too far away.");
+        }
+        if me.dead {
+            return Err("You are dead.");
+        }
+        Ok(())
+    }
+
+    fn buy(
+        &mut self,
+        id: EntityId,
+        merchant: EntityId,
+        item_id: ItemId,
+    ) -> Result<(), &'static str> {
+        self.merchant_near(id, merchant)?;
+        if !MERCHANT_GOODS.contains(&item_id) {
+            return Err("That isn't for sale.");
+        }
+        let price = item(item_id).price;
+        let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+        if p.money < price {
+            return Err("You don't have enough money.");
+        }
+        let mut bags = p.bags.clone();
+        if add_item(&mut bags, item_id, 1) > 0 {
+            return Err("Your bags are full.");
+        }
+        p.bags = bags;
+        p.money -= price;
+        self.send(
+            Audience::Only(id),
+            GameEvent::Bought {
+                item: item_id,
+                price,
+            },
+        );
+        Ok(())
+    }
+
+    fn sell(&mut self, id: EntityId, merchant: EntityId, slot: usize) -> Result<(), &'static str> {
+        self.merchant_near(id, merchant)?;
+        let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+        let (item_id, count) = p
+            .bags
+            .get(slot)
+            .copied()
+            .flatten()
+            .ok_or("That slot is empty.")?;
+        let money = item(item_id).sell_price() * count as u32;
+        p.bags[slot] = None;
+        p.money += money;
+        self.send(
+            Audience::Only(id),
+            GameEvent::Sold {
+                item: item_id,
+                count,
+                money,
+            },
+        );
+        Ok(())
+    }
+
+    fn use_item(&mut self, id: EntityId, slot: usize) -> Result<(), &'static str> {
+        let e = self.entities.get_mut(&id).unwrap();
+        if e.dead {
+            return Err("You are dead.");
+        }
+        let p = e.player_mut().unwrap();
+        let (item_id, count) = p
+            .bags
+            .get(slot)
+            .copied()
+            .flatten()
+            .ok_or("That slot is empty.")?;
+        let ItemKind::Potion { health, power } = item(item_id).kind else {
+            return Err("You can't use that.");
+        };
+        if p.potion_cooldown > 0.0 {
+            return Err("Potions are not ready yet.");
+        }
+        p.potion_cooldown = POTION_COOLDOWN;
+        p.bags[slot] = (count > 1).then_some((item_id, count - 1));
+        let heal = e.max_hp * health;
+        e.power = (e.power + e.max_power * power).min(e.max_power);
+        if heal > 0.0 {
+            self.apply_hit(id, id, Hit::Heal(heal, false), None);
+        }
+        Ok(())
+    }
+
     // ---- Combat ----
 
     /// The caster's target, if it's something they can attack.
@@ -917,14 +1123,24 @@ impl World {
         if e.gcd > 0.0 || e.cooldowns.contains_key(&id) {
             return Err("Ability is not ready yet.");
         }
+        if a.moves_caster() && e.rooted() {
+            return Err("Can't do that while rooted.");
+        }
         let target = self.resolve_target(caster, a, false)?;
+        if a.min_range > 0.0
+            && let Some(t) = target
+            && self.entities[&t].pos.distance(e.pos) < a.min_range
+        {
+            return Err("Too close.");
+        }
         if a.from_behind {
             let t = &self.entities[&target.unwrap()];
             if is_facing(t.pos, t.yaw, e.pos) {
                 return Err("You must be behind your target.");
             }
         }
-        if e.power < a.cost {
+        // Mobs don't pay for their spells.
+        if e.player().is_some() && e.power < a.cost {
             return Err(match e.player().map(|p| p.class.power_kind()) {
                 Some(PowerKind::Rage) => "Not enough rage.",
                 Some(PowerKind::Energy) => "Not enough energy.",
@@ -944,9 +1160,9 @@ impl World {
             self.complete(caster, id, target);
         }
         // Melee classes start swinging when they use an ability on an enemy.
-        if a.targeting == Targeting::Enemy
+        if a.targeting.needs_enemy()
             && let Some(p) = self.entities.get_mut(&caster).unwrap().player_mut()
-            && matches!(p.class, Class::Warrior | Class::Rogue)
+            && p.class.is_melee()
         {
             p.auto_attack = true;
         }
@@ -965,7 +1181,7 @@ impl World {
         let leeway = if finishing { 3.0 } else { 1.0 };
         let in_range = |t: &Entity| e.pos.distance(t.pos) <= a.range + leeway + t.reach();
         match a.targeting {
-            Targeting::Enemy => {
+            Targeting::Enemy | Targeting::AroundTarget(_) => {
                 let target = self.hostile_target(caster)?;
                 let t = &self.entities[&target];
                 if !in_range(t) {
@@ -995,6 +1211,24 @@ impl World {
         }
     }
 
+    /// Moves an entity (Charge, leaps) and tells its player.
+    fn relocate(&mut self, id: EntityId, pos: Vec3, yaw: f32) {
+        let e = self.entities.get_mut(&id).unwrap();
+        // Never jump into another zone.
+        let pos = if Zone::at(pos) == Zone::at(e.pos) {
+            pos
+        } else {
+            e.pos
+        };
+        e.pos = pos;
+        e.yaw = yaw;
+        e.moving = false;
+        if e.player().is_some() {
+            self.outbox
+                .push((Audience::Only(id), ServerMsg::SetPosition { pos, yaw }));
+        }
+    }
+
     fn roll(&mut self, min: f32, max: f32, scale: f32) -> (f32, bool) {
         let crit = self.rng.chance(CRIT_CHANCE);
         let amount = self.rng.range(min, max) * scale * if crit { CRIT_MULTIPLIER } else { 1.0 };
@@ -1006,7 +1240,9 @@ impl World {
         let a = ability(id);
         let (pos, scale) = {
             let e = self.entities.get_mut(&caster).unwrap();
-            e.power -= a.cost;
+            if e.player().is_some() {
+                e.power = (e.power - a.cost).max(0.0);
+            }
             if a.cooldown > 0.0 {
                 e.cooldowns.insert(id, (a.cooldown, a.cooldown));
             }
@@ -1041,6 +1277,23 @@ impl World {
                     })
                     .map(|t| t.id)
                     .collect()
+            }
+            Targeting::AroundTarget(radius) => {
+                let kind = self.entities[&caster].kind();
+                let center = target.map_or(pos, |t| self.pos_of(t));
+                let mut hit: Vec<EntityId> = target.into_iter().collect();
+                hit.extend(
+                    self.entities
+                        .values()
+                        .filter(|t| {
+                            Some(t.id) != target
+                                && !t.dead
+                                && kind.hostile_to(t.kind())
+                                && t.pos.distance(center) <= radius + t.reach()
+                        })
+                        .map(|t| t.id),
+                );
+                hit
             }
         };
         for t in targets {
@@ -1086,8 +1339,27 @@ impl World {
                         }
                     }
                     Effect::RestorePower(frac) => {
-                        let e = self.entities.get_mut(&t).unwrap();
+                        let e = self.entities.get_mut(&caster).unwrap();
                         e.power = (e.power + e.max_power * frac).min(e.max_power);
+                    }
+                    Effect::Charge => {
+                        let me = self.pos_of(caster);
+                        let to = self.pos_of(t);
+                        let gap = MELEE_RANGE * 0.6 + self.entities[&t].reach();
+                        let dir = (to - me).normalize_or_zero();
+                        let dest = to - dir * gap;
+                        self.relocate(caster, ground(dest.x, dest.z), yaw_towards(me, to));
+                    }
+                    Effect::Leap(distance) => {
+                        let e = &self.entities[&caster];
+                        let dest = e.pos + forward(e.yaw) * distance;
+                        let yaw = e.yaw;
+                        self.relocate(caster, clamp_to_world(ground(dest.x, dest.z)), yaw);
+                    }
+                    Effect::Drain { min, max } => {
+                        let (amount, crit) = self.roll(min, max, scale);
+                        self.apply_hit(caster, t, Hit::Damage(amount, crit), Some(id));
+                        self.apply_hit(caster, caster, Hit::Heal(amount, crit), Some(id));
                     }
                     Effect::ComboPoint => {
                         if let Some(p) = self.entities.get_mut(&caster).unwrap().player_mut() {
@@ -1246,10 +1518,12 @@ impl World {
         let pos = t.pos;
         match hit {
             Hit::Damage(amount, crit) => {
-                if t.evading() {
+                if t.evading() || matches!(t.brain, Brain::Npc(_)) {
                     self.send(Audience::Near(pos), GameEvent::Evade { target });
                     return;
                 }
+                // Buffs and curses on the attacker.
+                let amount = amount * self.entities.get(&source).map_or(1.0, |s| s.damage_done());
                 // Armor softens physical blows.
                 let physical = ability_id.is_none_or(|a| ability(a).school == School::Physical);
                 let attacker_level = self.entities.get(&source).map_or(1, |s| s.level);
@@ -1275,13 +1549,16 @@ impl World {
                 t.auras.retain(|a| a.remaining > 0.0);
                 t.hp -= left;
                 let target_level = t.level;
-                if t.player().is_some_and(|p| p.class == Class::Warrior) {
+                if t.player()
+                    .is_some_and(|p| p.class.power_kind() == PowerKind::Rage)
+                {
                     t.power = (t.power + left / level_scale(target_level) * 0.5).min(t.max_power);
                 }
                 let dead = t.hp <= 0.0;
                 if let Some(s) = self.entities.get_mut(&source)
                     && ability_id.is_none()
-                    && s.player().is_some_and(|p| p.class == Class::Warrior)
+                    && s.player()
+                        .is_some_and(|p| p.class.power_kind() == PowerKind::Rage)
                 {
                     s.power = (s.power + amount / level_scale(s.level) * 1.2).min(s.max_power);
                 }
@@ -1370,6 +1647,7 @@ impl World {
                 fighters = m.threat.drain(..).map(|(id, _)| id).collect();
                 mob_kind = Some(m.kind);
             }
+            Brain::Npc(_) => {}
         }
         self.send(Audience::Near(pos), GameEvent::Died { id: victim, killer });
         self.forget(victim);
@@ -1439,10 +1717,11 @@ impl World {
             self.tick_timers(id, dt);
             self.tick_auras(id, dt);
             self.tick_cast(id, dt);
-            if self.entities.get(&id).is_some_and(|e| e.player().is_some()) {
-                self.tick_player(id, dt);
-            } else {
-                self.tick_mob(id, dt);
+            match self.entities.get(&id).map(|e| &e.brain) {
+                Some(Brain::Player(_)) => self.tick_player(id, dt),
+                Some(Brain::Mob(_)) => self.tick_mob(id, dt),
+                Some(Brain::Npc(_)) => self.tick_npc(id),
+                None => {}
             }
         }
         // Players are in combat while any mob wants to hit them.
@@ -1536,11 +1815,12 @@ impl World {
 
     fn tick_player(&mut self, id: EntityId, dt: f32) {
         let e = self.entities.get_mut(&id).unwrap();
-        let speed = RUN_SPEED * e.slow();
+        let speed = RUN_SPEED * e.move_mult();
         let in_combat = e.in_combat;
         let p = e.player_mut().unwrap();
         p.move_budget = (p.move_budget + speed * 1.25 * dt).min(speed);
         p.since_spend += dt;
+        p.potion_cooldown = (p.potion_cooldown - dt).max(0.0);
         let since_spend = p.since_spend;
         let class = p.class;
         if e.dead {
@@ -1595,6 +1875,23 @@ impl World {
             self.entities.get_mut(&id).unwrap().swing_timer = aa.interval;
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
         }
+    }
+
+    /// Merchants turn to face the nearest player close by.
+    fn tick_npc(&mut self, id: EntityId) {
+        let me = self.entities[&id].pos;
+        let nearest = self
+            .entities
+            .values()
+            .filter(|e| e.player().is_some() && e.pos.distance(me) < MERCHANT_RANGE + 2.0)
+            .min_by(|a, b| a.pos.distance(me).total_cmp(&b.pos.distance(me)))
+            .map(|e| e.pos);
+        let e = self.entities.get_mut(&id).unwrap();
+        let Brain::Npc(n) = &e.brain else { return };
+        e.yaw = match nearest {
+            Some(p) => yaw_towards(me, p),
+            None => n.home_yaw,
+        };
     }
 
     fn tick_mob(&mut self, id: EntityId, dt: f32) {
@@ -1660,7 +1957,7 @@ impl World {
         }
         let e = self.entities.get_mut(&id).unwrap();
         let rooted = e.rooted();
-        let slow = e.slow();
+        let slow = e.move_mult();
         let m = mob_of(&mut e.brain);
         let speed = m.kind.template().speed * 0.35;
         let radius = self.camps[m.camp].radius * 0.5;
@@ -1746,7 +2043,7 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         let reach = MELEE_RANGE * 0.7 + t.size * 0.5;
         if dist > reach && !e.rooted() {
-            let step = t.speed * e.slow() * dt;
+            let step = t.speed * e.move_mult() * dt;
             let to = target_pos - (target_pos - e.pos).normalize_or_zero() * (reach * 0.8);
             move_towards(e, to, step);
             e.yaw = yaw_towards(e.pos, target_pos);
@@ -1886,7 +2183,7 @@ mod tests {
     #[test]
     fn abilities_unlock_with_levels() {
         let mut w = World::new(2);
-        let p = join(&mut w, "Novice", Class::Warrior, 1);
+        let p = join(&mut w, "Novice", Class::Barbarian, 1);
         engage(&mut w, p, MobKind::Boar);
         w.entities.get_mut(&p).unwrap().power = 100.0;
         assert_eq!(
@@ -1914,7 +2211,7 @@ mod tests {
     #[test]
     fn warrior_kills_a_boar_and_gains_xp_and_loot() {
         let mut w = World::new(7);
-        let p = join(&mut w, "Tank", Class::Warrior, 1);
+        let p = join(&mut w, "Tank", Class::Barbarian, 1);
         let boar = engage(&mut w, p, MobKind::Boar);
         w.handle(p, ClientMsg::StartAttack);
         for _ in 0..600 {
@@ -2038,7 +2335,7 @@ mod tests {
     #[test]
     fn rend_stacks_three_times() {
         let mut w = World::new(10);
-        let p = join(&mut w, "Bleeder", Class::Warrior, 10);
+        let p = join(&mut w, "Bleeder", Class::Barbarian, 10);
         let boar = engage(&mut w, p, MobKind::Boar);
         sturdy(&mut w, boar);
         for _ in 0..5 {
@@ -2148,7 +2445,7 @@ mod tests {
             (Class::Mage, ids::FIRE_BLAST, 18.0),
             (Class::Cleric, ids::SMITE, 25.0),
             (Class::Cleric, ids::SHADOW_WORD_PAIN, 25.0),
-            (Class::Warrior, ids::HEROIC_STRIKE, 2.5),
+            (Class::Barbarian, ids::HEROIC_STRIKE, 2.5),
             (Class::Rogue, ids::SINISTER_STRIKE, 2.5),
         ] {
             let mut w = World::new(14);
@@ -2253,7 +2550,7 @@ mod tests {
         w.entities.get_mut(&p).unwrap().pos = ground(mpos.x - range, mpos.z);
         w.entities.get_mut(&p).unwrap().target = Some(mob);
         w.handle(p, ClientMsg::StartAttack);
-        let melee = matches!(class, Class::Warrior | Class::Rogue);
+        let melee = class.is_melee();
         for _ in 0..(90.0 / DT) as usize {
             if w.entities[&mob].dead || w.entities[&p].dead {
                 break;
@@ -2326,7 +2623,7 @@ mod tests {
     #[test]
     fn range_facing_and_cooldowns_are_checked() {
         let mut w = World::new(9);
-        let p = join(&mut w, "Checker", Class::Warrior, 10);
+        let p = join(&mut w, "Checker", Class::Barbarian, 10);
         assert_eq!(w.try_use(p, ids::HEROIC_STRIKE), Err("You have no target."));
         let boar = engage(&mut w, p, MobKind::Boar);
         w.entities.get_mut(&p).unwrap().power = 100.0;
@@ -2341,14 +2638,14 @@ mod tests {
             Err("You are facing the wrong way!")
         );
         face(&mut w, p, boar);
-        w.try_use(p, ids::SHIELD_BASH).unwrap();
+        w.try_use(p, ids::SKULL_BASH).unwrap();
         assert_eq!(
             w.try_use(p, ids::HEROIC_STRIKE),
             Err("Ability is not ready yet.")
         );
         run(&mut w, GCD + 0.1);
         assert_eq!(
-            w.try_use(p, ids::SHIELD_BASH),
+            w.try_use(p, ids::SKULL_BASH),
             Err("Ability is not ready yet.")
         );
         assert!(w.entities[&boar].stunned() || w.entities[&boar].dead);
@@ -2381,7 +2678,7 @@ mod tests {
     fn heals_shields_and_levels() {
         let mut w = World::new(13);
         let healer = join(&mut w, "Healer", Class::Cleric, 10);
-        let tank = join(&mut w, "Tank", Class::Warrior, 1);
+        let tank = join(&mut w, "Tank", Class::Barbarian, 1);
         w.entities.get_mut(&tank).unwrap().hp = 10.0;
         w.handle(healer, ClientMsg::SetTarget(Some(tank)));
         w.try_use(healer, ids::HEAL).unwrap();
@@ -2408,7 +2705,7 @@ mod tests {
         w.give_xp(tank, 1000, "test");
         let t = &w.entities[&tank];
         assert!(t.level >= 4);
-        assert_eq!(t.max_hp, Class::Warrior.max_hp(t.level));
+        assert_eq!(t.max_hp, Class::Barbarian.max_hp(t.level));
     }
 
     #[test]
@@ -2451,7 +2748,7 @@ mod tests {
         w.handle(p, ClientMsg::ReleaseSpirit);
         let e = &w.entities[&p];
         assert!(!e.dead);
-        assert_eq!(flat_distance(e.pos, ground(GRAVEYARD.x, GRAVEYARD.y)), 0.0);
+        assert_eq!(flat_distance(e.pos, Zone::Amberfall.graveyard()), 0.0);
     }
 
     #[test]
@@ -2465,6 +2762,253 @@ mod tests {
             snap.entities
                 .iter()
                 .all(|e| e.pos.distance(w.entities[&p].pos) <= VIEW_DISTANCE)
+        );
+    }
+
+    #[test]
+    fn every_zone_has_its_own_mobs_and_a_merchant() {
+        let w = World::new(41);
+        for zone in Zone::ALL {
+            let kinds = MobKind::for_zone(zone);
+            let mobs: Vec<_> = w
+                .entities
+                .values()
+                .filter(|e| e.mob().is_some() && Zone::at(e.pos) == zone)
+                .collect();
+            assert!(mobs.len() >= 50, "{zone:?} has {} mobs", mobs.len());
+            assert!(mobs.iter().all(|m| kinds.contains(&m.mob().unwrap().kind)));
+            let merchant = w
+                .entities
+                .values()
+                .find(|e| matches!(e.brain, Brain::Npc(_)) && Zone::at(e.pos) == zone)
+                .expect("merchant");
+            assert!(zone.in_town(merchant.pos));
+            assert_eq!(merchant.kind(), EntityKind::Merchant(zone.race()));
+        }
+    }
+
+    #[test]
+    fn races_start_in_their_own_zone() {
+        let mut w = World::new(42);
+        for race in Race::ALL {
+            let c = Character::new(
+                "t",
+                "Newbie",
+                Class::Monk,
+                Appearance {
+                    race,
+                    ..Default::default()
+                },
+            );
+            let id = w.add_player(&c);
+            assert_eq!(Zone::at(w.entities[&id].pos), race.zone());
+            assert!(race.zone().in_town(w.entities[&id].pos));
+        }
+    }
+
+    #[test]
+    fn charge_rushes_to_the_target() {
+        let mut w = World::new(43);
+        let p = join(&mut w, "Charger", Class::Barbarian, 3);
+        let boar = engage(&mut w, p, MobKind::Boar);
+        sturdy(&mut w, boar);
+        assert_eq!(w.try_use(p, ids::CHARGE), Err("Too close."));
+        let bpos = w.entities[&boar].pos;
+        let e = w.entities.get_mut(&p).unwrap();
+        e.pos = ground(bpos.x - 15.0, bpos.z);
+        e.yaw = yaw_towards(e.pos, bpos);
+        w.drain_outbox();
+        w.try_use(p, ids::CHARGE).unwrap();
+        let e = &w.entities[&p];
+        assert!(e.pos.distance(bpos) < MELEE_RANGE, "charged to {:?}", e.pos);
+        assert!((e.power - 15.0).abs() < 0.01);
+        assert!(w.entities[&boar].stunned());
+        assert!(
+            w.drain_outbox()
+                .iter()
+                .any(|(to, m)| matches!(to, Audience::Only(id) if *id == p)
+                    && matches!(m, ServerMsg::SetPosition { .. }))
+        );
+    }
+
+    #[test]
+    fn leaps_go_forward_and_back() {
+        let mut w = World::new(44);
+        let mage = join(&mut w, "Blinker", Class::Mage, 3);
+        let start = w.entities[&mage].pos;
+        w.entities.get_mut(&mage).unwrap().yaw = 0.0;
+        w.try_use(mage, ids::BLINK).unwrap();
+        let moved = w.entities[&mage].pos - start;
+        assert!(
+            (moved.z - 15.0).abs() < 0.01 && moved.x.abs() < 0.01,
+            "{moved:?}"
+        );
+
+        let ranger = join(&mut w, "Leaper", Class::Ranger, 3);
+        let start = w.entities[&ranger].pos;
+        w.entities.get_mut(&ranger).unwrap().yaw = 0.0;
+        w.try_use(ranger, ids::DISENGAGE).unwrap();
+        assert!((w.entities[&ranger].pos.z - (start.z - 12.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn multi_shot_hits_everything_around_the_target() {
+        let mut w = World::new(45);
+        let p = join(&mut w, "Archer", Class::Ranger, 6);
+        let boar = engage(&mut w, p, MobKind::Boar);
+        let bpos = w.entities[&boar].pos;
+        let other = w
+            .entities
+            .values()
+            .find(|e| e.id != boar && e.mob().is_some_and(|m| m.kind == MobKind::Boar))
+            .unwrap()
+            .id;
+        let far = w
+            .entities
+            .values()
+            .find(|e| e.mob().is_some_and(|m| m.kind == MobKind::Wolf))
+            .unwrap()
+            .id;
+        w.entities.get_mut(&other).unwrap().pos = ground(bpos.x, bpos.z + 3.0);
+        w.entities.get_mut(&far).unwrap().pos = ground(bpos.x, bpos.z + 20.0);
+        for id in [boar, other, far] {
+            sturdy(&mut w, id);
+        }
+        let e = w.entities.get_mut(&p).unwrap();
+        e.pos = ground(bpos.x - 20.0, bpos.z);
+        e.yaw = yaw_towards(e.pos, bpos);
+        w.try_use(p, ids::MULTI_SHOT).unwrap();
+        let hurt = |w: &World, id| w.entities[&id].hp < w.entities[&id].max_hp;
+        assert!(hurt(&w, boar) && hurt(&w, other));
+        assert!(!hurt(&w, far));
+    }
+
+    #[test]
+    fn drain_life_heals_the_warlock() {
+        let mut w = World::new(46);
+        let p = join(&mut w, "Leech", Class::Warlock, 4);
+        let boar = engage(&mut w, p, MobKind::Boar);
+        sturdy(&mut w, boar);
+        w.entities.get_mut(&p).unwrap().hp = 20.0;
+        w.try_use(p, ids::DRAIN_LIFE).unwrap();
+        run(&mut w, 1.6);
+        assert!(w.entities[&p].hp > 20.0 + 8.0);
+        assert!(w.entities[&boar].hp < w.entities[&boar].max_hp);
+    }
+
+    #[test]
+    fn damage_buffs_and_curses() {
+        let mut w = World::new(47);
+        let p = join(&mut w, "Berserk", Class::Barbarian, 10);
+        let boar = engage(&mut w, p, MobKind::Boar);
+        sturdy(&mut w, boar);
+        let hit = |w: &mut World, from, to| {
+            let before = w.entities[&to].hp;
+            w.apply_hit(from, to, Hit::Damage(20.0, false), Some(ids::FIREBALL));
+            before - w.entities[&to].hp
+        };
+        assert_eq!(hit(&mut w, p, boar), 20.0);
+        w.try_use(p, ids::RECKLESSNESS).unwrap();
+        assert_eq!(hit(&mut w, p, boar), 26.0);
+
+        let warlock = join(&mut w, "Curser", Class::Warlock, 10);
+        engage(&mut w, warlock, MobKind::Boar);
+        w.entities.get_mut(&warlock).unwrap().target = Some(boar);
+        face(&mut w, warlock, boar);
+        w.try_use(warlock, ids::CURSE_OF_WEAKNESS).unwrap();
+        assert_eq!(hit(&mut w, boar, warlock), 14.0);
+    }
+
+    #[test]
+    fn merchants_sell_potions_and_buy_loot() {
+        let mut w = World::new(48);
+        let p = join(&mut w, "Shopper", Class::Paladin, 1);
+        let merchant = w
+            .entities
+            .values()
+            .find(|e| matches!(e.brain, Brain::Npc(_)) && Zone::at(e.pos) == Zone::Amberfall)
+            .unwrap()
+            .id;
+        let mpos = w.entities[&merchant].pos;
+        w.entities.get_mut(&p).unwrap().pos = mpos + Vec3::new(30.0, 0.0, 0.0);
+        assert_eq!(
+            w.buy(p, merchant, items::HEALING_POTION),
+            Err("You are too far away.")
+        );
+        w.entities.get_mut(&p).unwrap().pos = mpos + Vec3::new(2.0, 0.0, 0.0);
+        assert_eq!(
+            w.buy(p, merchant, items::HEALING_POTION),
+            Err("You don't have enough money.")
+        );
+        assert_eq!(
+            w.buy(p, merchant, items::ANCIENT_CORE),
+            Err("That isn't for sale.")
+        );
+
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        pd.money = 120;
+        add_item(&mut pd.bags, items::LIGHT_LEATHER, 4);
+        w.buy(p, merchant, items::HEALING_POTION).unwrap();
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(pd.money, 70);
+        assert_eq!(count_item(&pd.bags, items::HEALING_POTION), 1);
+        let leather = pd
+            .bags
+            .iter()
+            .position(|s| matches!(s, Some((i, _)) if *i == items::LIGHT_LEATHER))
+            .unwrap();
+        w.sell(p, merchant, leather).unwrap();
+        assert_eq!(
+            w.entities[&p].player().unwrap().money,
+            70 + 4 * item(items::LIGHT_LEATHER).sell_price()
+        );
+
+        // Drinking it heals and starts the cooldown.
+        w.entities.get_mut(&p).unwrap().hp = 10.0;
+        let slot = w.entities[&p]
+            .player()
+            .unwrap()
+            .bags
+            .iter()
+            .position(|s| matches!(s, Some((i, _)) if *i == items::HEALING_POTION))
+            .unwrap();
+        w.use_item(p, slot).unwrap();
+        assert!(w.entities[&p].hp > 10.0 + 0.3 * w.entities[&p].max_hp);
+        assert_eq!(
+            count_item(
+                &w.entities[&p].player().unwrap().bags,
+                items::HEALING_POTION
+            ),
+            0
+        );
+        assert_eq!(w.use_item(p, slot), Err("That slot is empty."));
+
+        // Merchants can't be attacked.
+        let hp = w.entities[&merchant].hp;
+        w.apply_hit(p, merchant, Hit::Damage(50.0, false), None);
+        assert_eq!(w.entities[&merchant].hp, hp);
+    }
+
+    #[test]
+    fn mobs_cast_player_spells_for_free() {
+        let mut w = World::new(49);
+        let p = join(&mut w, "Target", Class::Mage, 5);
+        let shaman = w
+            .entities
+            .values()
+            .find(|e| e.mob().is_some_and(|m| m.kind == MobKind::FrostTrollShaman))
+            .unwrap()
+            .id;
+        let spos = w.entities[&shaman].pos;
+        w.entities.get_mut(&p).unwrap().pos = ground(spos.x + 15.0, spos.z);
+        w.entities.get_mut(&shaman).unwrap().target = Some(p);
+        assert_eq!(w.try_use(shaman, ids::FROSTBOLT), Ok(()));
+        run(&mut w, 2.1);
+        assert!(
+            w.entities[&p]
+                .auras
+                .iter()
+                .any(|a| a.ability == ids::FROSTBOLT)
         );
     }
 }

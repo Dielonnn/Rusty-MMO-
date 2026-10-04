@@ -1,10 +1,11 @@
 //! The 2D interface drawn over the world: unit frames, action bar, cast bar,
 //! nameplates, chat, minimap, floating combat text and the bag, character
-//! and crafting windows.
+//! crafting and merchant windows.
 
 use macroquad::prelude::*;
 use shared::data::*;
 use shared::protocol::*;
+use shared::world::Zone;
 
 use crate::game::{Game, Windows, wrap_angle};
 use crate::render;
@@ -32,6 +33,8 @@ pub struct Layout {
     pub gear_slots: Vec<Rect>,
     pub crafting: Option<Rect>,
     pub craft_buttons: Vec<Rect>,
+    pub vendor: Option<Rect>,
+    pub vendor_buttons: Vec<Rect>,
 }
 
 impl Layout {
@@ -99,6 +102,33 @@ impl Layout {
         } else {
             Vec::new()
         };
+        let vendor_x = 16.0
+            + if windows.character { 296.0 } else { 0.0 }
+            + if windows.crafting {
+                craft_rect.w + 16.0
+            } else {
+                0.0
+            };
+        let vendor_rect = Rect::new(
+            vendor_x,
+            150.0,
+            340.0,
+            70.0 + MERCHANT_GOODS.len() as f32 * 40.0,
+        );
+        let vendor_buttons = if windows.vendor.is_some() {
+            (0..MERCHANT_GOODS.len())
+                .map(|i| {
+                    Rect::new(
+                        vendor_rect.right() - 82.0,
+                        vendor_rect.y + 40.0 + i as f32 * 40.0,
+                        70.0,
+                        30.0,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Self {
             player_frame: Rect::new(16.0, 16.0, 250.0, 66.0),
             target_frame: Rect::new(282.0, 16.0, 250.0, 66.0),
@@ -117,6 +147,8 @@ impl Layout {
             gear_slots,
             crafting: windows.crafting.then_some(craft_rect),
             craft_buttons,
+            vendor: windows.vendor.is_some().then_some(vendor_rect),
+            vendor_buttons,
         }
     }
 
@@ -127,7 +159,7 @@ impl Layout {
             || (has_target && self.target_frame.contains(mouse))
             || (dead && self.release_button.contains(mouse))
             || self.minimap.0.distance(mouse) < self.minimap.1
-            || [self.bags, self.character, self.crafting]
+            || [self.bags, self.character, self.crafting, self.vendor]
                 .iter()
                 .flatten()
                 .any(|r| r.contains(mouse))
@@ -189,10 +221,19 @@ pub fn reaction_color(view: &EntityView, my_class: Class) -> Color {
 
 pub fn class_color(class: Class) -> Color {
     match class {
-        Class::Warrior => Color::new(0.78, 0.61, 0.43, 1.0),
-        Class::Mage => Color::new(0.41, 0.8, 0.94, 1.0),
-        Class::Cleric => Color::new(0.95, 0.95, 0.95, 1.0),
+        Class::Barbarian => Color::new(0.78, 0.61, 0.43, 1.0),
+        Class::Fighter => Color::new(0.68, 0.7, 0.78, 1.0),
+        Class::Paladin => Color::new(0.96, 0.55, 0.73, 1.0),
+        Class::Monk => Color::new(0.0, 1.0, 0.6, 1.0),
         Class::Rogue => Color::new(1.0, 0.96, 0.41, 1.0),
+        Class::Ranger => Color::new(0.67, 0.83, 0.45, 1.0),
+        Class::Artificer => Color::new(0.85, 0.65, 0.3, 1.0),
+        Class::Bard => Color::new(0.95, 0.45, 0.85, 1.0),
+        Class::Cleric => Color::new(0.95, 0.95, 0.95, 1.0),
+        Class::Druid => Color::new(1.0, 0.49, 0.04, 1.0),
+        Class::Mage => Color::new(0.41, 0.8, 0.94, 1.0),
+        Class::Sorcerer => Color::new(0.95, 0.3, 0.3, 1.0),
+        Class::Warlock => Color::new(0.58, 0.51, 0.79, 1.0),
     }
 }
 
@@ -465,7 +506,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     // Unit frames.
     unit_frame(layout.player_frame, me, game);
     let mut below = layout.player_frame.bottom() + 6.0;
-    if game.class == Class::Rogue {
+    if game.class.uses_combo_points() {
         for i in 0..MAX_COMBO_POINTS {
             let lit = i < game.me.combo_points;
             let c = vec2(layout.player_frame.x + 16.0 + i as f32 * 20.0, below + 8.0);
@@ -590,6 +631,9 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if let Some(r) = layout.crafting {
         crafting(game, layout, r);
     }
+    if let Some(r) = layout.vendor {
+        vendor(game, layout, r);
+    }
 
     // Errors and banners.
     for (i, (msg, t)) in game.errors.iter().enumerate() {
@@ -703,7 +747,7 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
                 r.h - 8.0,
                 Color::new(c.r * 0.7, c.g * 0.7, c.b * 0.7, 1.0),
             );
-            let out_of_range = a.targeting == Targeting::Enemy
+            let out_of_range = a.targeting.needs_enemy()
                 && target.is_some_and(|t| {
                     game.is_hostile(&t.view)
                         && t.pos.distance(game.pos)
@@ -757,8 +801,13 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
                 }
             }
         }
+        let key = if i == E_SLOT {
+            "E".to_string()
+        } else {
+            (i + 1).to_string()
+        };
         text(
-            &(i + 1).to_string(),
+            &key,
             r.x + 4.0,
             r.y + 14.0,
             15.0,
@@ -805,6 +854,7 @@ fn ability_tooltip(a: &Ability, slot: Rect, class: Class, locked_until: Option<u
     }
     match a.targeting {
         Targeting::Enemy | Targeting::Friendly => stats.push(format!("{} yd range", a.range)),
+        Targeting::AroundTarget(r) => stats.push(format!("{} yd range, {r} yd radius", a.range)),
         Targeting::AroundCaster(r) => stats.push(format!("{r} yd radius")),
         Targeting::Caster => {}
     }
@@ -837,6 +887,16 @@ fn item_lines(id: ItemId) -> Vec<(String, Color)> {
     let mut lines = vec![(it.name.to_string(), quality_color(it.quality))];
     match it.kind {
         ItemKind::Material => lines.push(("Crafting material".into(), grey)),
+        ItemKind::Potion { health, power } => {
+            let mut what = Vec::new();
+            if health > 0.0 {
+                what.push(format!("{health:.0} health"));
+            }
+            if power > 0.0 {
+                what.push(format!("{power:.0} mana or energy"));
+            }
+            lines.push((format!("Use: restores {}", what.join(" and ")), green));
+        }
         ItemKind::Armor {
             slot,
             armor,
@@ -866,10 +926,28 @@ fn item_tooltips(game: &Game, layout: &Layout) {
             && let Some(Some((id, _))) = game.me.bags.get(i)
         {
             let mut lines = item_lines(*id);
-            if matches!(item(*id).kind, ItemKind::Armor { .. }) {
-                lines.push(("Click to wear".into(), Color::new(0.6, 0.8, 1.0, 1.0)));
+            let hint = Color::new(0.6, 0.8, 1.0, 1.0);
+            if game.windows.vendor.is_some() {
+                let n = game.me.bags[i].map_or(1, |(_, n)| n) as u32;
+                lines.push((
+                    format!(
+                        "Right-click to sell for {}",
+                        format_money(item(*id).sell_price() * n)
+                    ),
+                    hint,
+                ));
+            } else if matches!(item(*id).kind, ItemKind::Armor { .. }) {
+                lines.push(("Click to wear".into(), hint));
+            } else if matches!(item(*id).kind, ItemKind::Potion { .. }) {
+                lines.push(("Right-click to drink".into(), hint));
             }
             tooltip_box(&lines, *r, true);
+        }
+    }
+    for (r, id) in layout.vendor_buttons.iter().zip(MERCHANT_GOODS) {
+        let row = Rect::new(r.x - 250.0, r.y, r.w + 250.0, r.h);
+        if row.contains(mouse) {
+            tooltip_box(&item_lines(id), *r, false);
         }
     }
     let Some(me) = game.my_view() else { return };
@@ -1063,6 +1141,48 @@ fn crafting(game: &Game, layout: &Layout, r: Rect) {
     }
 }
 
+fn vendor(game: &Game, layout: &Layout, r: Rect) {
+    let name = game
+        .windows
+        .vendor
+        .and_then(|id| game.entities.get(&id))
+        .map_or("Merchant".to_string(), |m| m.view.name.clone());
+    window(r, &name);
+    for (b, id) in layout.vendor_buttons.iter().zip(MERCHANT_GOODS) {
+        let it = item(id);
+        let icon = Rect::new(r.x + 12.0, b.y - 3.0, 36.0, 36.0);
+        item_icon(icon, id, 1);
+        text(
+            it.name,
+            icon.right() + 8.0,
+            b.y + 13.0,
+            17.0,
+            quality_color(it.quality),
+        );
+        let affordable = game.me.money >= it.price;
+        let price_color = if affordable {
+            GOLD
+        } else {
+            Color::new(0.9, 0.4, 0.35, 1.0)
+        };
+        text(
+            &format_money(it.price),
+            icon.right() + 8.0,
+            b.y + 30.0,
+            15.0,
+            price_color,
+        );
+        button_ex(*b, "Buy", affordable);
+    }
+    text(
+        "Right-click items in your bags to sell them.",
+        r.x + 12.0,
+        r.bottom() - 12.0,
+        15.0,
+        Color::new(0.75, 0.75, 0.75, 1.0),
+    );
+}
+
 pub fn wrap(s: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -1090,7 +1210,7 @@ fn nameplates(game: &Game, cam: &Camera3D) {
             let h = if e.view.dead {
                 0.9
             } else {
-                render::model_height(e.view.kind)
+                render::model_height(e.view.kind, e.view.appearance)
             };
             let head = e.pos + Vec3::Y * (h + 0.45);
             project(cam, head).map(|p| (e.pos.distance(cam.position), p, e))
@@ -1116,6 +1236,11 @@ fn nameplates(game: &Game, cam: &Camera3D) {
         } else {
             format!("{} ({})", v.name, level_label(v))
         };
+        if matches!(v.kind, EntityKind::Merchant(_)) {
+            text_centered(&v.name, p.x, p.y - 8.0, size, color);
+            text_centered("<Merchant>", p.x, p.y + 8.0, size * 0.85, color);
+            continue;
+        }
         text_centered(&label, p.x, p.y - 8.0, size, color);
         if !v.kind.is_player() && !v.dead && (targeted || v.hp < v.max_hp || v.in_combat) {
             let w = 70.0;
@@ -1149,10 +1274,9 @@ fn nameplates(game: &Game, cam: &Camera3D) {
 
 fn floating_text(game: &Game, cam: &Camera3D) {
     for f in &game.floats {
-        let height = game
-            .entities
-            .get(&f.entity)
-            .map_or(2.0, |e| render::model_height(e.view.kind));
+        let height = game.entities.get(&f.entity).map_or(2.0, |e| {
+            render::model_height(e.view.kind, e.view.appearance)
+        });
         let p = f.anchor + Vec3::Y * (height + 0.5 + f.age * 1.1);
         let Some(s) = project(cam, p) else { continue };
         let pop = if f.age < 0.12 {
@@ -1170,15 +1294,22 @@ fn floating_text(game: &Game, cam: &Camera3D) {
 fn minimap(game: &Game, layout: &Layout) {
     let (c, radius) = layout.minimap;
     let range = 90.0;
-    let in_town = vec2(game.pos.x, game.pos.z).length() < shared::world::TOWN_RADIUS;
-    let place = if in_town {
-        render::TOWN_NAME
+    let zone = Zone::at(game.pos);
+    let place = if zone.in_town(game.pos) {
+        zone.town_name()
     } else {
-        render::ZONE_NAME
+        zone.name()
     };
     text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
+    let t = render::theme(zone);
+    let ground = render::mix(t.fog, Color::new(0.1, 0.1, 0.1, 1.0), 0.45);
     draw_circle(c.x, c.y, radius + 3.0, BORDER);
-    draw_circle(c.x, c.y, radius, Color::new(0.38, 0.32, 0.17, 0.92));
+    draw_circle(
+        c.x,
+        c.y,
+        radius,
+        Color::new(ground.r, ground.g, ground.b, 0.92),
+    );
     // Map up is where the camera faces.
     let f = vec2(game.cam_yaw.sin(), game.cam_yaw.cos());
     let r = vec2(-f.y, f.x);
@@ -1186,7 +1317,8 @@ fn minimap(game: &Game, layout: &Layout) {
         let rel = vec2(p.x - game.pos.x, p.z - game.pos.z);
         vec2(rel.dot(r), -rel.dot(f)) * (radius / range)
     };
-    let town = to_map(Vec3::ZERO);
+    let center = zone.center();
+    let town = to_map(vec3(center.x, 0.0, center.y));
     if town.length() < radius + 30.0 {
         let tr = shared::world::TOWN_RADIUS * radius / range;
         draw_circle(
@@ -1206,6 +1338,8 @@ fn minimap(game: &Game, layout: &Layout) {
         }
         let color = if e.view.lootable {
             GOLD
+        } else if matches!(e.view.kind, EntityKind::Merchant(_)) {
+            Color::new(1.0, 0.75, 0.2, 1.0)
         } else if e.view.dead {
             Color::new(0.5, 0.5, 0.5, 1.0)
         } else if e.view.kind.is_player() {
@@ -1230,7 +1364,8 @@ fn minimap(game: &Game, layout: &Layout) {
         c - dir * 5.0 - side * 5.0,
         Color::new(1.0, 0.95, 0.4, 1.0),
     );
-    let label = format!("{:.0}, {:.0}", game.pos.x, game.pos.z);
+    let local = zone.to_local(vec2(game.pos.x, game.pos.z));
+    let label = format!("{:.0}, {:.0}", local.x, local.y);
     text_centered(
         &label,
         c.x,
@@ -1300,7 +1435,7 @@ fn chat(game: &Game) {
 fn help() {
     let lines = [
         ("W S / arrows", "Run forward and back"),
-        ("A D  (Q E)", "Strafe left and right"),
+        ("A D", "Strafe left and right"),
         ("Left / Right", "Turn"),
         ("Space", "Jump"),
         ("Left drag", "Look around"),
@@ -1309,8 +1444,8 @@ fn help() {
         ("Mouse wheel", "Zoom"),
         ("Tab", "Target the next enemy"),
         ("Left click", "Target"),
-        ("Right click", "Attack, or loot a corpse"),
-        ("1 - 6", "Use abilities"),
+        ("Right click", "Attack, loot, or trade"),
+        ("1 - 6, E", "Use abilities"),
         ("T  /  F1", "Toggle attack / target self"),
         ("B  C  K", "Bags, character, crafting"),
         ("Esc", "Close / clear target / menu"),

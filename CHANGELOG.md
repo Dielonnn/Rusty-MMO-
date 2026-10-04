@@ -5,6 +5,35 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v3.0
+
+Commit: the one titled "v3.0: races, six starting areas, nine new classes, merchants, collision".
+
+- **Races**: Human, Orc, Elf, Goblin, Gnome and Undead, chosen at character
+  creation. Each has its own build and features (orc tusks, elf ears, small
+  goblins and gnomes with big heads, undead with glowing eyes) and its own skin
+  tones
+- **Six starting areas**, one per race, and you start in yours: Amberfall Vale
+  (human, autumn dusk), Scorchsand Wastes (orc, desert), Silverbough Glade
+  (elf, twilight forest), Grubdeep Caverns (goblin, glowing cave), Frostcog
+  Peaks (gnome, snow) and Witherwood (undead, dying forest). Each has its own
+  town, buildings, scenery, lighting, five kinds of mobs and an elite
+- **Nine new classes**: Ranger, Sorcerer, Paladin, Druid, Artificer, Warlock,
+  Fighter, Monk and Bard, each with its own gear on the character model
+- The Warrior is now the **Barbarian**, with Charge on `E`; existing Warrior
+  characters load as Barbarians
+- Every class has a **seventh ability on `E`**, learned at level 3 (Charge,
+  Blink, Disengage, Roll, Sprint, Misty Step, Rocket Boots...). `Q` and `E` no
+  longer strafe; use `A` and `D`
+- **Merchants** in every town square: buy Healing and Mana Potions and crafting
+  materials, sell your loot, and drink potions from your bags
+- **Collision**: buildings, trees, rocks, fences, tents and other scenery are
+  solid
+- Fixed the mage hat and the boar's body turning the wrong way when facing
+  different directions: rounded parts now turn with the model
+- The Golem Core is now the Ancient Core (every elite drops one) and the
+  Golemheart Chestguard is the Heartstone Chestguard
+
 ## v2.0
 
 Commit: the one titled "v2.0: Rogue, unlocks, saves, loot and crafting, autumn dusk".

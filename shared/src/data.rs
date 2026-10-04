@@ -1,7 +1,9 @@
-//! Game data: classes, abilities, mobs, items, recipes and the numbers that
-//! balance them.
+//! Game data: races, classes, abilities, mobs, items, recipes and the numbers
+//! that balance them.
 
 use serde::{Deserialize, Serialize};
+
+use crate::world::Zone;
 
 pub const MAX_LEVEL: u8 = 10;
 /// The global cooldown every ability triggers.
@@ -18,22 +20,93 @@ pub const MANA_REGEN_DELAY: f32 = 5.0;
 /// Energy comes back this fast, in or out of combat.
 pub const ENERGY_PER_SECOND: f32 = 10.0;
 pub const MAX_COMBO_POINTS: u8 = 5;
-/// Maximum number of abilities on a class's action bar.
-pub const ACTION_BAR_SLOTS: usize = 6;
-/// The level each action bar slot's ability is learned at.
-pub const UNLOCK_LEVELS: [u8; ACTION_BAR_SLOTS] = [1, 2, 4, 6, 8, 10];
+/// Abilities per class: keys 1-6 and E.
+pub const ACTION_BAR_SLOTS: usize = 7;
+/// The action bar slot bound to the E key.
+pub const E_SLOT: usize = 6;
+/// The level each action bar slot's ability is learned at (the last is E).
+pub const UNLOCK_LEVELS: [u8; ACTION_BAR_SLOTS] = [1, 2, 4, 6, 8, 10, 3];
 pub const BAG_SLOTS: usize = 20;
 /// How close you have to be to loot a corpse.
 pub const LOOT_RANGE: f32 = 6.0;
+/// How close you have to be to trade with a merchant.
+pub const MERCHANT_RANGE: f32 = 8.0;
 /// Extra health per point of stamina.
 pub const HP_PER_STAMINA: f32 = 8.0;
+/// Potions share one cooldown.
+pub const POTION_COOLDOWN: f32 = 30.0;
+
+// ---- Races ----
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Race {
+    #[default]
+    Human,
+    Orc,
+    Elf,
+    Goblin,
+    Gnome,
+    Undead,
+}
+
+impl Race {
+    pub const ALL: [Race; 6] = [
+        Race::Human,
+        Race::Orc,
+        Race::Elf,
+        Race::Goblin,
+        Race::Gnome,
+        Race::Undead,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Race::Human => "Human",
+            Race::Orc => "Orc",
+            Race::Elf => "Elf",
+            Race::Goblin => "Goblin",
+            Race::Gnome => "Gnome",
+            Race::Undead => "Undead",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Race::Human => {
+                "Hardy and adaptable, humans begin in the autumn hills of Amberfall Vale."
+            }
+            Race::Orc => {
+                "Proud warriors of the desert, orcs begin in the sun-baked Scorchsand Wastes."
+            }
+            Race::Elf => {
+                "Graceful and ancient, elves begin beneath the great trees of Silverbough Glade."
+            }
+            Race::Goblin => "Clever and greedy, goblins begin in the glowing Grubdeep Caverns.",
+            Race::Gnome => "Tiny tinkerers, gnomes begin among the snowy Frostcog Peaks.",
+            Race::Undead => "Risen from the grave, the undead begin in the dying Witherwood.",
+        }
+    }
+}
+
+// ---- Classes ----
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Class {
-    Warrior,
+    /// Called Warrior before v3.0; old saves still load.
+    #[serde(alias = "Warrior")]
+    Barbarian,
     Mage,
     Cleric,
     Rogue,
+    Ranger,
+    Sorcerer,
+    Paladin,
+    Druid,
+    Artificer,
+    Warlock,
+    Fighter,
+    Monk,
+    Bard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,60 +138,140 @@ pub struct AutoAttack {
     pub max: f32,
 }
 
+const fn melee(interval: f32, min: f32, max: f32) -> AutoAttack {
+    AutoAttack {
+        range: MELEE_RANGE,
+        interval,
+        min,
+        max,
+    }
+}
+
+/// Wands, bows and guns.
+const fn ranged(range: f32, interval: f32, min: f32, max: f32) -> AutoAttack {
+    AutoAttack {
+        range,
+        interval,
+        min,
+        max,
+    }
+}
+
 impl Class {
-    pub const ALL: [Class; 4] = [Class::Warrior, Class::Mage, Class::Cleric, Class::Rogue];
+    pub const ALL: [Class; 13] = [
+        Class::Barbarian,
+        Class::Fighter,
+        Class::Paladin,
+        Class::Monk,
+        Class::Rogue,
+        Class::Ranger,
+        Class::Artificer,
+        Class::Bard,
+        Class::Cleric,
+        Class::Druid,
+        Class::Mage,
+        Class::Sorcerer,
+        Class::Warlock,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
-            Class::Warrior => "Warrior",
+            Class::Barbarian => "Barbarian",
             Class::Mage => "Mage",
             Class::Cleric => "Cleric",
             Class::Rogue => "Rogue",
+            Class::Ranger => "Ranger",
+            Class::Sorcerer => "Sorcerer",
+            Class::Paladin => "Paladin",
+            Class::Druid => "Druid",
+            Class::Artificer => "Artificer",
+            Class::Warlock => "Warlock",
+            Class::Fighter => "Fighter",
+            Class::Monk => "Monk",
+            Class::Bard => "Bard",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            Class::Warrior => {
-                "A sturdy melee fighter. Builds rage by dealing and taking damage, holds enemies' attention with Taunt and Thunder Clap, and interrupts casters with Shield Bash."
+            Class::Barbarian => {
+                "A furious two-handed brawler. Builds rage by fighting, charges into battle (E) and cuts down crowds with Whirlwind."
             }
-            Class::Mage => {
-                "A fragile spellcaster with the highest damage. Burns enemies with fire, slows and roots them with frost, and shields itself with Ice Barrier."
+            Class::Fighter => {
+                "A disciplined soldier with sword and shield. Holds enemies' attention, interrupts casters and shrugs off blows."
+            }
+            Class::Paladin => {
+                "A holy knight in plate. Fights up close, heals with the Light and protects allies."
+            }
+            Class::Monk => {
+                "A martial artist who runs on energy. Builds chi with Tiger Palm and Rising Sun Kick, then spends it on Blackout Kick."
+            }
+            Class::Rogue => {
+                "A quick melee fighter who runs on energy. Builds combo points with Sinister Strike and Backstab, then spends them on a deadly Eviscerate."
+            }
+            Class::Ranger => {
+                "A hunter with a longbow. Shoots from afar, slows and stings enemies, and leaps away from danger (E)."
+            }
+            Class::Artificer => {
+                "An inventor with a rifle and gadgets. Throws grenades and nets, and rockets around on boots (E)."
+            }
+            Class::Bard => {
+                "A performer whose words wound and heal. Mocks enemies, inspires allies and lulls foes to sleep."
             }
             Class::Cleric => {
                 "A healer who can hold their own. Heals and shields allies, and wears enemies down with Smite and Shadow Word: Pain."
             }
-            Class::Rogue => {
-                "A quick melee fighter who runs on energy. Builds combo points with Sinister Strike and Backstab, then spends them on a deadly Eviscerate."
+            Class::Druid => {
+                "A keeper of nature. Calls down wrath and moonfire, roots enemies, and heals over time."
+            }
+            Class::Mage => {
+                "A fragile spellcaster with high damage. Burns enemies with fire, slows and roots them with frost, and blinks away (E)."
+            }
+            Class::Sorcerer => {
+                "Born with wild magic. Hurls chaos bolts and meteors, holds enemies in place and surges with power."
+            }
+            Class::Warlock => {
+                "A caster who made a dark pact. Curses and drains enemies, siphoning their life to heal itself."
             }
         }
     }
 
     pub fn power_kind(self) -> PowerKind {
         match self {
-            Class::Warrior => PowerKind::Rage,
-            Class::Mage | Class::Cleric => PowerKind::Mana,
-            Class::Rogue => PowerKind::Energy,
+            Class::Barbarian | Class::Fighter => PowerKind::Rage,
+            Class::Rogue | Class::Monk | Class::Ranger => PowerKind::Energy,
+            _ => PowerKind::Mana,
         }
     }
 
     /// Health from the class and level alone, before gear.
     pub fn max_hp(self, level: u8) -> f32 {
         let l = (level.max(1) - 1) as f32;
-        match self {
-            Class::Warrior => 140.0 + 35.0 * l,
-            Class::Mage => 90.0 + 22.0 * l,
-            Class::Cleric => 100.0 + 25.0 * l,
-            Class::Rogue => 115.0 + 28.0 * l,
-        }
+        let (base, per) = match self {
+            Class::Barbarian => (140.0, 35.0),
+            Class::Fighter => (135.0, 33.0),
+            Class::Paladin => (130.0, 32.0),
+            Class::Monk => (120.0, 29.0),
+            Class::Rogue => (115.0, 28.0),
+            Class::Ranger => (110.0, 26.0),
+            Class::Artificer => (105.0, 25.0),
+            Class::Bard | Class::Cleric | Class::Druid => (100.0, 25.0),
+            Class::Warlock => (95.0, 23.0),
+            Class::Mage | Class::Sorcerer => (90.0, 22.0),
+        };
+        base + per * l
     }
 
     pub fn max_power(self, level: u8) -> f32 {
         let l = (level.max(1) - 1) as f32;
-        match self {
-            Class::Warrior | Class::Rogue => 100.0,
-            Class::Mage => 120.0 + 18.0 * l,
-            Class::Cleric => 130.0 + 18.0 * l,
+        match self.power_kind() {
+            PowerKind::Rage | PowerKind::Energy => 100.0,
+            PowerKind::Mana => match self {
+                Class::Paladin => 110.0 + 16.0 * l,
+                Class::Mage => 120.0 + 18.0 * l,
+                Class::Artificer => 120.0 + 16.0 * l,
+                _ => 128.0 + 18.0 * l,
+            },
         }
     }
 
@@ -132,48 +285,99 @@ impl Class {
 
     pub fn auto_attack(self) -> AutoAttack {
         match self {
-            Class::Warrior => AutoAttack {
-                range: MELEE_RANGE,
-                interval: 2.2,
-                min: 8.0,
-                max: 12.0,
-            },
-            Class::Rogue => AutoAttack {
-                range: MELEE_RANGE,
-                interval: 1.6,
-                min: 5.0,
-                max: 8.0,
-            },
+            Class::Barbarian => melee(2.4, 10.0, 14.0),
+            Class::Fighter => melee(2.2, 8.0, 12.0),
+            Class::Paladin => melee(2.4, 9.0, 13.0),
+            Class::Monk | Class::Rogue => melee(1.6, 5.0, 8.0),
+            Class::Ranger => ranged(30.0, 2.0, 6.0, 9.0),
+            Class::Artificer => ranged(25.0, 2.0, 5.0, 8.0),
             // Casters shoot a wand.
-            Class::Mage | Class::Cleric => AutoAttack {
-                range: 25.0,
-                interval: 1.8,
-                min: 3.0,
-                max: 5.0,
-            },
+            _ => ranged(25.0, 1.8, 3.0, 5.0),
         }
     }
 
-    /// The class's action bar, in key order. Slot `i` is learned at
+    /// Whether the class fights up close (and starts swinging when it uses
+    /// an ability).
+    pub fn is_melee(self) -> bool {
+        self.auto_attack().range <= MELEE_RANGE
+    }
+
+    /// The class's action bar: keys 1-6, then E. Slot `i` is learned at
     /// `UNLOCK_LEVELS[i]`.
     pub fn abilities(self) -> [AbilityId; ACTION_BAR_SLOTS] {
         use ids::*;
         match self {
-            Class::Warrior => [
+            Class::Barbarian => [
                 HEROIC_STRIKE,
                 REND,
+                WHIRLWIND,
+                SKULL_BASH,
+                TAUNT,
+                RECKLESSNESS,
+                CHARGE,
+            ],
+            Class::Fighter => [
+                POWER_STRIKE,
                 THUNDER_CLAP,
                 SHIELD_BASH,
                 TAUNT,
+                SHIELD_WALL,
                 SECOND_WIND,
+                SHIELD_BLOCK,
             ],
-            Class::Mage => [
-                FIREBALL,
-                FROSTBOLT,
-                FIRE_BLAST,
-                FROST_NOVA,
-                ICE_BARRIER,
-                EVOCATION,
+            Class::Paladin => [
+                CRUSADER_STRIKE,
+                HOLY_LIGHT,
+                JUDGMENT,
+                HAMMER_OF_JUSTICE,
+                DIVINE_PROTECTION,
+                CONSECRATION,
+                LAY_ON_HANDS,
+            ],
+            Class::Monk => [
+                TIGER_PALM,
+                BLACKOUT_KICK,
+                RISING_SUN_KICK,
+                LEG_SWEEP,
+                FORTIFYING_BREW,
+                SPINNING_CRANE_KICK,
+                ROLL,
+            ],
+            Class::Rogue => [
+                SINISTER_STRIKE,
+                EVISCERATE,
+                BACKSTAB,
+                GOUGE,
+                EVASION,
+                KICK,
+                SPRINT,
+            ],
+            Class::Ranger => [
+                STEADY_SHOT,
+                SERPENT_STING,
+                CONCUSSIVE_SHOT,
+                MULTI_SHOT,
+                HAWK_EYE,
+                KILL_SHOT,
+                DISENGAGE,
+            ],
+            Class::Artificer => [
+                ARCANE_RIFLE,
+                ACID_FLASK,
+                SHOCK_NET,
+                THUNDER_GRENADE,
+                ARCANE_ARMOR,
+                INFUSED_TONIC,
+                ROCKET_BOOTS,
+            ],
+            Class::Bard => [
+                VICIOUS_MOCKERY,
+                HEALING_WORD,
+                THUNDERWAVE,
+                SONG_OF_REST,
+                INSPIRE,
+                HYPNOTIC_PATTERN,
+                DISSONANT_WHISPERS,
             ],
             Class::Cleric => [
                 SMITE,
@@ -182,8 +386,44 @@ impl Class {
                 RENEW,
                 POWER_WORD_SHIELD,
                 HOLY_NOVA,
+                FLASH_HEAL,
             ],
-            Class::Rogue => [SINISTER_STRIKE, EVISCERATE, BACKSTAB, GOUGE, EVASION, KICK],
+            Class::Druid => [
+                WRATH,
+                REJUVENATION,
+                MOONFIRE,
+                ENTANGLING_ROOTS,
+                HEALING_TOUCH,
+                STARFALL,
+                DASH,
+            ],
+            Class::Mage => [
+                FIREBALL,
+                FROSTBOLT,
+                FIRE_BLAST,
+                FROST_NOVA,
+                ICE_BARRIER,
+                EVOCATION,
+                BLINK,
+            ],
+            Class::Sorcerer => [
+                CHAOS_BOLT,
+                ARCANE_BARRAGE,
+                HOLD_PERSON,
+                METEOR,
+                MANA_SHIELD,
+                WILD_SURGE,
+                MISTY_STEP,
+            ],
+            Class::Warlock => [
+                ELDRITCH_BLAST,
+                CORRUPTION,
+                DRAIN_LIFE,
+                CURSE_OF_WEAKNESS,
+                SHADOW_WARD,
+                SOUL_FIRE,
+                SIPHON_SOUL,
+            ],
         }
     }
 
@@ -202,6 +442,13 @@ impl Class {
             .zip(UNLOCK_LEVELS)
             .filter(move |(_, l)| *l <= level)
             .map(|(a, _)| a)
+    }
+
+    /// Rogues and monks build points to spend on finishers.
+    pub fn uses_combo_points(self) -> bool {
+        self.abilities()
+            .iter()
+            .any(|a| ability(*a).needs_combo_points())
     }
 }
 
@@ -252,6 +499,8 @@ pub fn format_money(copper: u32) -> String {
     parts.join(" ")
 }
 
+// ---- Abilities ----
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AbilityId(pub u16);
 
@@ -265,6 +514,15 @@ pub enum Targeting {
     Caster,
     /// Every enemy within this radius of you.
     AroundCaster(f32),
+    /// Your hostile target and every enemy within this radius of it.
+    AroundTarget(f32),
+}
+
+impl Targeting {
+    /// Needs a hostile target to aim at.
+    pub fn needs_enemy(self) -> bool {
+        matches!(self, Targeting::Enemy | Targeting::AroundTarget(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,8 +542,10 @@ pub enum AuraKind {
     Dot { per_tick: f32, interval: f32 },
     /// Healing every `interval` seconds.
     Hot { per_tick: f32, interval: f32 },
-    /// Movement speed is multiplied by this.
+    /// Movement speed is multiplied by this (less than 1).
     Slow(f32),
+    /// Movement speed is multiplied by this (more than 1).
+    Speed(f32),
     /// Can't move, act or cast.
     Stun,
     /// Can't move.
@@ -294,14 +554,18 @@ pub enum AuraKind {
     Absorb(f32),
     /// Damage taken is multiplied by this.
     DamageTaken(f32),
+    /// Damage done is multiplied by this.
+    DamageDone(f32),
 }
 
 impl AuraKind {
     pub fn harmful(self) -> bool {
-        matches!(
-            self,
-            AuraKind::Dot { .. } | AuraKind::Slow(_) | AuraKind::Stun | AuraKind::Root
-        )
+        match self {
+            AuraKind::Dot { .. } | AuraKind::Slow(_) | AuraKind::Stun | AuraKind::Root => true,
+            AuraKind::DamageTaken(f) => f > 1.0,
+            AuraKind::DamageDone(f) => f < 1.0,
+            AuraKind::Hot { .. } | AuraKind::Speed(_) | AuraKind::Absorb(_) => false,
+        }
     }
 }
 
@@ -323,15 +587,24 @@ pub enum Effect {
     Interrupt,
     /// Makes a mob attack you.
     Taunt,
-    /// Gives back this fraction of the caster's maximum power.
+    /// Gives the caster back this fraction of their maximum power.
     RestorePower(f32),
-    /// Adds a combo point (rogues).
+    /// Adds a combo point (rogues) or chi (monks).
     ComboPoint,
     /// Spends every combo point for damage.
     Finisher {
         min: f32,
         max: f32,
         per_point: f32,
+    },
+    /// Rush to the target.
+    Charge,
+    /// Jump this far along your facing (negative: backwards).
+    Leap(f32),
+    /// Damages the target and heals the caster by as much.
+    Drain {
+        min: f32,
+        max: f32,
     },
 }
 
@@ -342,6 +615,8 @@ pub struct Ability {
     pub school: School,
     pub targeting: Targeting,
     pub range: f32,
+    /// Too close to use it (Charge).
+    pub min_range: f32,
     pub cast_time: f32,
     pub cooldown: f32,
     pub cost: f32,
@@ -362,6 +637,13 @@ impl Ability {
             .iter()
             .any(|e| matches!(e, Effect::Finisher { .. }))
     }
+
+    /// Whether it moves the caster.
+    pub fn moves_caster(&self) -> bool {
+        self.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Charge | Effect::Leap(_)))
+    }
 }
 
 pub fn ability(id: AbilityId) -> &'static Ability {
@@ -371,38 +653,117 @@ pub fn ability(id: AbilityId) -> &'static Ability {
 pub mod ids {
     use super::AbilityId;
 
+    // Barbarian (originally the Warrior) and Fighter.
     pub const HEROIC_STRIKE: AbilityId = AbilityId(0);
     pub const REND: AbilityId = AbilityId(1);
     pub const SHIELD_BASH: AbilityId = AbilityId(2);
     pub const THUNDER_CLAP: AbilityId = AbilityId(3);
     pub const TAUNT: AbilityId = AbilityId(4);
     pub const SECOND_WIND: AbilityId = AbilityId(5);
-
+    // Mage
     pub const FIREBALL: AbilityId = AbilityId(6);
     pub const FROSTBOLT: AbilityId = AbilityId(7);
     pub const FIRE_BLAST: AbilityId = AbilityId(8);
     pub const FROST_NOVA: AbilityId = AbilityId(9);
     pub const ICE_BARRIER: AbilityId = AbilityId(10);
     pub const EVOCATION: AbilityId = AbilityId(11);
-
+    // Cleric
     pub const SMITE: AbilityId = AbilityId(12);
     pub const SHADOW_WORD_PAIN: AbilityId = AbilityId(13);
     pub const HEAL: AbilityId = AbilityId(14);
     pub const RENEW: AbilityId = AbilityId(15);
     pub const POWER_WORD_SHIELD: AbilityId = AbilityId(16);
     pub const HOLY_NOVA: AbilityId = AbilityId(17);
-
-    // Used by mobs.
+    // Mobs
     pub const SAVAGE_BITE: AbilityId = AbilityId(18);
     pub const SHADOW_BOLT: AbilityId = AbilityId(19);
     pub const GROUND_SLAM: AbilityId = AbilityId(20);
-
+    // Rogue
     pub const SINISTER_STRIKE: AbilityId = AbilityId(21);
     pub const EVISCERATE: AbilityId = AbilityId(22);
     pub const BACKSTAB: AbilityId = AbilityId(23);
     pub const GOUGE: AbilityId = AbilityId(24);
     pub const EVASION: AbilityId = AbilityId(25);
     pub const KICK: AbilityId = AbilityId(26);
+    // E abilities and the rest of the Barbarian and Fighter.
+    pub const CHARGE: AbilityId = AbilityId(27);
+    pub const WHIRLWIND: AbilityId = AbilityId(28);
+    pub const SKULL_BASH: AbilityId = AbilityId(29);
+    pub const RECKLESSNESS: AbilityId = AbilityId(30);
+    pub const POWER_STRIKE: AbilityId = AbilityId(31);
+    pub const SHIELD_WALL: AbilityId = AbilityId(32);
+    pub const SHIELD_BLOCK: AbilityId = AbilityId(33);
+    pub const BLINK: AbilityId = AbilityId(34);
+    pub const FLASH_HEAL: AbilityId = AbilityId(35);
+    pub const SPRINT: AbilityId = AbilityId(36);
+    // Ranger
+    pub const STEADY_SHOT: AbilityId = AbilityId(37);
+    pub const SERPENT_STING: AbilityId = AbilityId(38);
+    pub const MULTI_SHOT: AbilityId = AbilityId(39);
+    pub const CONCUSSIVE_SHOT: AbilityId = AbilityId(40);
+    pub const HAWK_EYE: AbilityId = AbilityId(41);
+    pub const KILL_SHOT: AbilityId = AbilityId(42);
+    pub const DISENGAGE: AbilityId = AbilityId(43);
+    // Sorcerer
+    pub const CHAOS_BOLT: AbilityId = AbilityId(44);
+    pub const ARCANE_BARRAGE: AbilityId = AbilityId(45);
+    pub const METEOR: AbilityId = AbilityId(46);
+    pub const HOLD_PERSON: AbilityId = AbilityId(47);
+    pub const MANA_SHIELD: AbilityId = AbilityId(48);
+    pub const WILD_SURGE: AbilityId = AbilityId(49);
+    pub const MISTY_STEP: AbilityId = AbilityId(50);
+    // Paladin
+    pub const CRUSADER_STRIKE: AbilityId = AbilityId(51);
+    pub const HOLY_LIGHT: AbilityId = AbilityId(52);
+    pub const JUDGMENT: AbilityId = AbilityId(53);
+    pub const HAMMER_OF_JUSTICE: AbilityId = AbilityId(54);
+    pub const DIVINE_PROTECTION: AbilityId = AbilityId(55);
+    pub const CONSECRATION: AbilityId = AbilityId(56);
+    pub const LAY_ON_HANDS: AbilityId = AbilityId(57);
+    // Druid
+    pub const WRATH: AbilityId = AbilityId(58);
+    pub const REJUVENATION: AbilityId = AbilityId(59);
+    pub const MOONFIRE: AbilityId = AbilityId(60);
+    pub const ENTANGLING_ROOTS: AbilityId = AbilityId(61);
+    pub const HEALING_TOUCH: AbilityId = AbilityId(62);
+    pub const STARFALL: AbilityId = AbilityId(63);
+    pub const DASH: AbilityId = AbilityId(64);
+    // Artificer
+    pub const ARCANE_RIFLE: AbilityId = AbilityId(65);
+    pub const ACID_FLASK: AbilityId = AbilityId(66);
+    pub const THUNDER_GRENADE: AbilityId = AbilityId(67);
+    pub const SHOCK_NET: AbilityId = AbilityId(68);
+    pub const ARCANE_ARMOR: AbilityId = AbilityId(69);
+    pub const INFUSED_TONIC: AbilityId = AbilityId(70);
+    pub const ROCKET_BOOTS: AbilityId = AbilityId(71);
+    // Warlock
+    pub const ELDRITCH_BLAST: AbilityId = AbilityId(72);
+    pub const CORRUPTION: AbilityId = AbilityId(73);
+    pub const DRAIN_LIFE: AbilityId = AbilityId(74);
+    pub const CURSE_OF_WEAKNESS: AbilityId = AbilityId(75);
+    pub const SHADOW_WARD: AbilityId = AbilityId(76);
+    pub const SOUL_FIRE: AbilityId = AbilityId(77);
+    pub const SIPHON_SOUL: AbilityId = AbilityId(78);
+    // Monk
+    pub const TIGER_PALM: AbilityId = AbilityId(79);
+    pub const BLACKOUT_KICK: AbilityId = AbilityId(80);
+    pub const RISING_SUN_KICK: AbilityId = AbilityId(81);
+    pub const LEG_SWEEP: AbilityId = AbilityId(82);
+    pub const FORTIFYING_BREW: AbilityId = AbilityId(83);
+    pub const SPINNING_CRANE_KICK: AbilityId = AbilityId(84);
+    pub const ROLL: AbilityId = AbilityId(85);
+    // Bard
+    pub const VICIOUS_MOCKERY: AbilityId = AbilityId(86);
+    pub const HEALING_WORD: AbilityId = AbilityId(87);
+    pub const THUNDERWAVE: AbilityId = AbilityId(88);
+    pub const SONG_OF_REST: AbilityId = AbilityId(89);
+    pub const INSPIRE: AbilityId = AbilityId(90);
+    pub const HYPNOTIC_PATTERN: AbilityId = AbilityId(91);
+    pub const DISSONANT_WHISPERS: AbilityId = AbilityId(92);
+    // More mob abilities.
+    pub const VENOM_STING: AbilityId = AbilityId(93);
+    pub const WEB: AbilityId = AbilityId(94);
+    pub const LIGHTNING_BOLT: AbilityId = AbilityId(95);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -423,6 +784,7 @@ const fn ab(
         school,
         targeting,
         range,
+        min_range: 0.0,
         cast_time,
         cooldown,
         cost,
@@ -454,28 +816,35 @@ const fn behind(mut a: Ability) -> Ability {
     a
 }
 
+const fn min_range(mut a: Ability, min: f32) -> Ability {
+    a.min_range = min;
+    a
+}
+
 use AuraKind as A;
 use Effect as E;
 use School as S;
 use Targeting as T;
 
+const M: f32 = MELEE_RANGE;
+
 /// Every ability, indexed by `AbilityId`. Damage and healing are at level 1
 /// and grow with `level_scale`.
-pub static ABILITIES: [Ability; 27] = [
-    // Warrior
+pub static ABILITIES: &[Ability] = &[
+    // 0-5: Barbarian and Fighter
     threat(
         ab(
-            "Heroic Strike",
-            "A strong attack that causes a high amount of threat.",
+            "Savage Strike",
+            "A brutal blow that causes a high amount of threat.",
             S::Physical,
             T::Enemy,
-            MELEE_RANGE,
+            M,
             0.0,
             0.0,
             15.0,
             &[E::Damage {
-                min: 14.0,
-                max: 18.0,
+                min: 15.0,
+                max: 19.0,
             }],
         ),
         1.8,
@@ -486,7 +855,7 @@ pub static ABILITIES: [Ability; 27] = [
             "Wounds the target, causing it to bleed over 15 sec. Stacks up to 3 times.",
             S::Physical,
             T::Enemy,
-            MELEE_RANGE,
+            M,
             0.0,
             0.0,
             10.0,
@@ -502,10 +871,10 @@ pub static ABILITIES: [Ability; 27] = [
     ),
     ab(
         "Shield Bash",
-        "Bashes the target, interrupting spellcasting and stunning it for 2 sec.",
+        "Bashes the target with your shield, interrupting spellcasting and stunning it for 2 sec.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         12.0,
         10.0,
@@ -569,7 +938,7 @@ pub static ABILITIES: [Ability; 27] = [
             duration: 10.0,
         }],
     ),
-    // Mage
+    // 6-11: Mage
     projectile(ab(
         "Fireball",
         "Hurls a fiery ball that sets the target ablaze for 6 sec.",
@@ -669,7 +1038,7 @@ pub static ABILITIES: [Ability; 27] = [
         0.0,
         &[E::RestorePower(0.4)],
     ),
-    // Cleric
+    // 12-17: Cleric
     projectile(ab(
         "Smite",
         "Smites the target with holy light.",
@@ -760,13 +1129,13 @@ pub static ABILITIES: [Ability; 27] = [
             max: 12.0,
         }],
     ),
-    // Mobs
+    // 18-20: Mobs
     ab(
         "Savage Bite",
         "A bite that bleeds over 9 sec.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         0.0,
         0.0,
@@ -809,13 +1178,13 @@ pub static ABILITIES: [Ability; 27] = [
             max: 28.0,
         }],
     ),
-    // Rogue
+    // 21-26: Rogue
     ab(
         "Sinister Strike",
         "A quick strike that adds a combo point.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         0.0,
         40.0,
@@ -832,7 +1201,7 @@ pub static ABILITIES: [Ability; 27] = [
         "A finishing move that spends every combo point. More points, more damage.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         0.0,
         35.0,
@@ -847,7 +1216,7 @@ pub static ABILITIES: [Ability; 27] = [
         "Stabs the target from behind for heavy damage. Adds a combo point.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         0.0,
         60.0,
@@ -864,7 +1233,7 @@ pub static ABILITIES: [Ability; 27] = [
         "Gouges the target, interrupting it and stunning it for 4 sec. Adds a combo point.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         15.0,
         45.0,
@@ -897,12 +1266,1078 @@ pub static ABILITIES: [Ability; 27] = [
         "Kicks the target, interrupting spellcasting.",
         S::Physical,
         T::Enemy,
-        MELEE_RANGE,
+        M,
         0.0,
         10.0,
         25.0,
         &[E::Damage { min: 4.0, max: 5.0 }, E::Interrupt],
     ),
+    // 27-36: E abilities, and the rest of the Barbarian and Fighter
+    min_range(
+        ab(
+            "Charge",
+            "Rush to an enemy 8 to 25 yards away, stunning it for 1 sec and gaining 15 rage.",
+            S::Physical,
+            T::Enemy,
+            25.0,
+            0.0,
+            15.0,
+            0.0,
+            &[
+                E::Charge,
+                E::Aura {
+                    kind: A::Stun,
+                    duration: 1.0,
+                },
+                E::RestorePower(0.15),
+            ],
+        ),
+        8.0,
+    ),
+    threat(
+        ab(
+            "Whirlwind",
+            "Spin with your weapon, hitting every enemy within 8 yards.",
+            S::Physical,
+            T::AroundCaster(8.0),
+            0.0,
+            0.0,
+            8.0,
+            20.0,
+            &[E::Damage {
+                min: 12.0,
+                max: 15.0,
+            }],
+        ),
+        1.5,
+    ),
+    ab(
+        "Skull Bash",
+        "Bashes the target's skull, interrupting spellcasting and stunning it for 2 sec.",
+        S::Physical,
+        T::Enemy,
+        M,
+        0.0,
+        12.0,
+        10.0,
+        &[
+            E::Damage { min: 7.0, max: 9.0 },
+            E::Interrupt,
+            E::Aura {
+                kind: A::Stun,
+                duration: 2.0,
+            },
+        ],
+    ),
+    ab(
+        "Recklessness",
+        "Fly into a rage: you deal 30% more damage for 12 sec.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        60.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.3),
+            duration: 12.0,
+        }],
+    ),
+    threat(
+        ab(
+            "Power Strike",
+            "A strong, well-aimed sword strike.",
+            S::Physical,
+            T::Enemy,
+            M,
+            0.0,
+            0.0,
+            12.0,
+            &[E::Damage {
+                min: 13.0,
+                max: 17.0,
+            }],
+        ),
+        1.5,
+    ),
+    ab(
+        "Shield Wall",
+        "Take 50% less damage for 10 sec.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        60.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageTaken(0.5),
+            duration: 10.0,
+        }],
+    ),
+    ab(
+        "Shield Block",
+        "Raise your shield, absorbing damage for 6 sec.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        12.0,
+        10.0,
+        &[E::Aura {
+            kind: A::Absorb(35.0),
+            duration: 6.0,
+        }],
+    ),
+    ab(
+        "Blink",
+        "Teleport 15 yards forward.",
+        S::Arcane,
+        T::Caster,
+        0.0,
+        0.0,
+        15.0,
+        10.0,
+        &[E::Leap(15.0)],
+    ),
+    ab(
+        "Flash Heal",
+        "A quick heal on a friendly target.",
+        S::Holy,
+        T::Friendly,
+        40.0,
+        1.0,
+        0.0,
+        16.0,
+        &[E::Heal {
+            min: 22.0,
+            max: 27.0,
+        }],
+    ),
+    ab(
+        "Sprint",
+        "Run 70% faster for 6 sec.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        30.0,
+        0.0,
+        &[E::Aura {
+            kind: A::Speed(1.7),
+            duration: 6.0,
+        }],
+    ),
+    // 37-43: Ranger
+    projectile(ab(
+        "Steady Shot",
+        "A carefully aimed arrow.",
+        S::Physical,
+        T::Enemy,
+        30.0,
+        1.5,
+        0.0,
+        20.0,
+        &[E::Damage {
+            min: 15.0,
+            max: 18.0,
+        }],
+    )),
+    ab(
+        "Serpent Sting",
+        "Poisons the target over 15 sec.",
+        S::Nature,
+        T::Enemy,
+        30.0,
+        0.0,
+        0.0,
+        15.0,
+        &[E::Aura {
+            kind: A::Dot {
+                per_tick: 6.0,
+                interval: 3.0,
+            },
+            duration: 15.0,
+        }],
+    ),
+    projectile(ab(
+        "Multi-Shot",
+        "Shoots your target and every enemy within 6 yards of it.",
+        S::Physical,
+        T::AroundTarget(6.0),
+        30.0,
+        0.0,
+        8.0,
+        30.0,
+        &[E::Damage {
+            min: 9.0,
+            max: 11.0,
+        }],
+    )),
+    projectile(ab(
+        "Concussive Shot",
+        "Dazes the target, slowing it by 50% for 6 sec.",
+        S::Physical,
+        T::Enemy,
+        30.0,
+        0.0,
+        10.0,
+        15.0,
+        &[
+            E::Damage { min: 5.0, max: 6.0 },
+            E::Aura {
+                kind: A::Slow(0.5),
+                duration: 6.0,
+            },
+        ],
+    )),
+    ab(
+        "Hawk Eye",
+        "Your focus sharpens: you deal 20% more damage for 20 sec.",
+        S::Nature,
+        T::Caster,
+        0.0,
+        0.0,
+        45.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.2),
+            duration: 20.0,
+        }],
+    ),
+    projectile(ab(
+        "Kill Shot",
+        "A powerful shot.",
+        S::Physical,
+        T::Enemy,
+        30.0,
+        0.0,
+        10.0,
+        35.0,
+        &[E::Damage {
+            min: 26.0,
+            max: 31.0,
+        }],
+    )),
+    ab(
+        "Disengage",
+        "Leap 12 yards backwards.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        15.0,
+        0.0,
+        &[E::Leap(-12.0)],
+    ),
+    // 44-50: Sorcerer
+    projectile(ab(
+        "Chaos Bolt",
+        "A bolt of raw, wild magic.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        2.0,
+        0.0,
+        13.0,
+        &[E::Damage {
+            min: 20.0,
+            max: 26.0,
+        }],
+    )),
+    projectile(ab(
+        "Arcane Barrage",
+        "Instantly fires a volley of arcane missiles.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        0.0,
+        6.0,
+        12.0,
+        &[E::Damage {
+            min: 13.0,
+            max: 16.0,
+        }],
+    )),
+    ab(
+        "Meteor",
+        "Calls down a meteor that hits your target and every enemy within 7 yards of it.",
+        S::Fire,
+        T::AroundTarget(7.0),
+        30.0,
+        2.5,
+        12.0,
+        22.0,
+        &[E::Damage {
+            min: 20.0,
+            max: 24.0,
+        }],
+    ),
+    ab(
+        "Hold Person",
+        "Holds the target in place, stunning it for 4 sec.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        0.0,
+        20.0,
+        12.0,
+        &[
+            E::Interrupt,
+            E::Aura {
+                kind: A::Stun,
+                duration: 4.0,
+            },
+        ],
+    ),
+    ab(
+        "Mana Shield",
+        "Shields you, absorbing damage for 30 sec.",
+        S::Arcane,
+        T::Caster,
+        0.0,
+        0.0,
+        30.0,
+        16.0,
+        &[E::Aura {
+            kind: A::Absorb(50.0),
+            duration: 30.0,
+        }],
+    ),
+    ab(
+        "Wild Surge",
+        "Wild magic surges through you: you deal 35% more damage for 15 sec.",
+        S::Arcane,
+        T::Caster,
+        0.0,
+        0.0,
+        90.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.35),
+            duration: 15.0,
+        }],
+    ),
+    ab(
+        "Misty Step",
+        "Vanish in silver mist and reappear 12 yards ahead.",
+        S::Arcane,
+        T::Caster,
+        0.0,
+        0.0,
+        12.0,
+        8.0,
+        &[E::Leap(12.0)],
+    ),
+    // 51-57: Paladin
+    ab(
+        "Crusader Strike",
+        "A holy-charged melee strike.",
+        S::Holy,
+        T::Enemy,
+        M,
+        0.0,
+        0.0,
+        10.0,
+        &[E::Damage {
+            min: 12.0,
+            max: 15.0,
+        }],
+    ),
+    ab(
+        "Holy Light",
+        "Heals a friendly target.",
+        S::Holy,
+        T::Friendly,
+        40.0,
+        2.0,
+        0.0,
+        16.0,
+        &[E::Heal {
+            min: 30.0,
+            max: 36.0,
+        }],
+    ),
+    ab(
+        "Judgment",
+        "Unleashes holy judgment on an enemy within 10 yards.",
+        S::Holy,
+        T::Enemy,
+        10.0,
+        0.0,
+        8.0,
+        12.0,
+        &[E::Damage {
+            min: 14.0,
+            max: 18.0,
+        }],
+    ),
+    ab(
+        "Hammer of Justice",
+        "Stuns the target for 4 sec.",
+        S::Holy,
+        T::Enemy,
+        10.0,
+        0.0,
+        30.0,
+        10.0,
+        &[
+            E::Interrupt,
+            E::Aura {
+                kind: A::Stun,
+                duration: 4.0,
+            },
+        ],
+    ),
+    ab(
+        "Divine Protection",
+        "Take 50% less damage for 8 sec.",
+        S::Holy,
+        T::Caster,
+        0.0,
+        0.0,
+        60.0,
+        10.0,
+        &[E::Aura {
+            kind: A::DamageTaken(0.5),
+            duration: 8.0,
+        }],
+    ),
+    ab(
+        "Consecration",
+        "Consecrates the ground, burning every enemy within 8 yards over 8 sec.",
+        S::Holy,
+        T::AroundCaster(8.0),
+        0.0,
+        0.0,
+        10.0,
+        18.0,
+        &[E::Aura {
+            kind: A::Dot {
+                per_tick: 5.0,
+                interval: 2.0,
+            },
+            duration: 8.0,
+        }],
+    ),
+    ab(
+        "Lay on Hands",
+        "Heals a friendly target for a huge amount.",
+        S::Holy,
+        T::Friendly,
+        40.0,
+        0.0,
+        120.0,
+        0.0,
+        &[E::Heal {
+            min: 80.0,
+            max: 90.0,
+        }],
+    ),
+    // 58-64: Druid
+    projectile(ab(
+        "Wrath",
+        "Hurls a ball of nature's fury at the target.",
+        S::Nature,
+        T::Enemy,
+        30.0,
+        2.0,
+        0.0,
+        10.0,
+        &[E::Damage {
+            min: 16.0,
+            max: 20.0,
+        }],
+    )),
+    ab(
+        "Rejuvenation",
+        "Heals a friendly target over 12 sec.",
+        S::Nature,
+        T::Friendly,
+        40.0,
+        0.0,
+        0.0,
+        12.0,
+        &[E::Aura {
+            kind: A::Hot {
+                per_tick: 8.0,
+                interval: 2.0,
+            },
+            duration: 12.0,
+        }],
+    ),
+    ab(
+        "Moonfire",
+        "Burns the target with moonlight, then more over 12 sec.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        0.0,
+        0.0,
+        12.0,
+        &[
+            E::Damage { min: 6.0, max: 8.0 },
+            E::Aura {
+                kind: A::Dot {
+                    per_tick: 4.0,
+                    interval: 3.0,
+                },
+                duration: 12.0,
+            },
+        ],
+    ),
+    ab(
+        "Entangling Roots",
+        "Roots the target in place for 8 sec.",
+        S::Nature,
+        T::Enemy,
+        30.0,
+        1.5,
+        0.0,
+        12.0,
+        &[E::Aura {
+            kind: A::Root,
+            duration: 8.0,
+        }],
+    ),
+    ab(
+        "Healing Touch",
+        "A slow but powerful heal.",
+        S::Nature,
+        T::Friendly,
+        40.0,
+        2.5,
+        0.0,
+        20.0,
+        &[E::Heal {
+            min: 44.0,
+            max: 52.0,
+        }],
+    ),
+    ab(
+        "Starfall",
+        "Stars rain down on every enemy within 10 yards.",
+        S::Arcane,
+        T::AroundCaster(10.0),
+        0.0,
+        0.0,
+        12.0,
+        18.0,
+        &[E::Damage {
+            min: 12.0,
+            max: 15.0,
+        }],
+    ),
+    ab(
+        "Dash",
+        "Take cat form and run 70% faster for 5 sec.",
+        S::Nature,
+        T::Caster,
+        0.0,
+        0.0,
+        25.0,
+        6.0,
+        &[E::Aura {
+            kind: A::Speed(1.7),
+            duration: 5.0,
+        }],
+    ),
+    // 65-71: Artificer
+    projectile(ab(
+        "Arcane Rifle",
+        "Fires an arcane-charged round.",
+        S::Arcane,
+        T::Enemy,
+        25.0,
+        0.0,
+        0.0,
+        12.0,
+        &[E::Damage {
+            min: 12.0,
+            max: 15.0,
+        }],
+    )),
+    projectile(ab(
+        "Acid Flask",
+        "Throws a flask of acid that burns over 12 sec.",
+        S::Nature,
+        T::Enemy,
+        25.0,
+        0.0,
+        0.0,
+        10.0,
+        &[
+            E::Damage { min: 3.0, max: 4.0 },
+            E::Aura {
+                kind: A::Dot {
+                    per_tick: 5.0,
+                    interval: 3.0,
+                },
+                duration: 12.0,
+            },
+        ],
+    )),
+    projectile(ab(
+        "Thunder Grenade",
+        "Hits your target and every enemy within 6 yards of it, slowing them.",
+        S::Nature,
+        T::AroundTarget(6.0),
+        25.0,
+        0.0,
+        10.0,
+        18.0,
+        &[
+            E::Damage {
+                min: 11.0,
+                max: 14.0,
+            },
+            E::Aura {
+                kind: A::Slow(0.6),
+                duration: 6.0,
+            },
+        ],
+    )),
+    projectile(ab(
+        "Shock Net",
+        "Entangles the target in a crackling net for 5 sec.",
+        S::Arcane,
+        T::Enemy,
+        25.0,
+        0.0,
+        15.0,
+        10.0,
+        &[
+            E::Damage { min: 3.0, max: 4.0 },
+            E::Aura {
+                kind: A::Root,
+                duration: 5.0,
+            },
+        ],
+    )),
+    ab(
+        "Arcane Armor",
+        "Arcane plates absorb damage for 30 sec.",
+        S::Arcane,
+        T::Caster,
+        0.0,
+        0.0,
+        30.0,
+        15.0,
+        &[E::Aura {
+            kind: A::Absorb(45.0),
+            duration: 30.0,
+        }],
+    ),
+    ab(
+        "Infused Tonic",
+        "A healing tonic that works over 10 sec.",
+        S::Nature,
+        T::Friendly,
+        40.0,
+        0.0,
+        12.0,
+        14.0,
+        &[
+            E::Heal {
+                min: 12.0,
+                max: 15.0,
+            },
+            E::Aura {
+                kind: A::Hot {
+                    per_tick: 8.0,
+                    interval: 2.0,
+                },
+                duration: 10.0,
+            },
+        ],
+    ),
+    ab(
+        "Rocket Boots",
+        "Blast 14 yards forward.",
+        S::Fire,
+        T::Caster,
+        0.0,
+        0.0,
+        15.0,
+        8.0,
+        &[E::Leap(14.0)],
+    ),
+    // 72-78: Warlock
+    projectile(ab(
+        "Eldritch Blast",
+        "A crackling beam of dark energy.",
+        S::Shadow,
+        T::Enemy,
+        30.0,
+        2.0,
+        0.0,
+        12.0,
+        &[E::Damage {
+            min: 18.0,
+            max: 22.0,
+        }],
+    )),
+    ab(
+        "Corruption",
+        "Corrupts the target, dealing shadow damage over 18 sec.",
+        S::Shadow,
+        T::Enemy,
+        30.0,
+        0.0,
+        0.0,
+        10.0,
+        &[E::Aura {
+            kind: A::Dot {
+                per_tick: 6.0,
+                interval: 3.0,
+            },
+            duration: 18.0,
+        }],
+    ),
+    ab(
+        "Drain Life",
+        "Drains life from the target, healing you as much.",
+        S::Shadow,
+        T::Enemy,
+        30.0,
+        1.5,
+        6.0,
+        14.0,
+        &[E::Drain {
+            min: 12.0,
+            max: 15.0,
+        }],
+    ),
+    ab(
+        "Curse of Weakness",
+        "The target deals 30% less damage for 15 sec.",
+        S::Shadow,
+        T::Enemy,
+        30.0,
+        0.0,
+        0.0,
+        10.0,
+        &[E::Aura {
+            kind: A::DamageDone(0.7),
+            duration: 15.0,
+        }],
+    ),
+    ab(
+        "Shadow Ward",
+        "Shields you, absorbing damage for 30 sec.",
+        S::Shadow,
+        T::Caster,
+        0.0,
+        0.0,
+        30.0,
+        15.0,
+        &[E::Aura {
+            kind: A::Absorb(45.0),
+            duration: 30.0,
+        }],
+    ),
+    projectile(ab(
+        "Soul Fire",
+        "A slow, devastating bolt of fel fire.",
+        S::Fire,
+        T::Enemy,
+        30.0,
+        3.0,
+        15.0,
+        20.0,
+        &[E::Damage {
+            min: 40.0,
+            max: 48.0,
+        }],
+    )),
+    ab(
+        "Siphon Soul",
+        "Instantly rips life from the target, healing you as much.",
+        S::Shadow,
+        T::Enemy,
+        30.0,
+        0.0,
+        20.0,
+        12.0,
+        &[E::Drain {
+            min: 16.0,
+            max: 20.0,
+        }],
+    ),
+    // 79-85: Monk
+    ab(
+        "Tiger Palm",
+        "A quick palm strike that builds chi.",
+        S::Physical,
+        T::Enemy,
+        M,
+        0.0,
+        0.0,
+        40.0,
+        &[
+            E::Damage {
+                min: 11.0,
+                max: 14.0,
+            },
+            E::ComboPoint,
+        ],
+    ),
+    ab(
+        "Blackout Kick",
+        "A finishing kick that spends all your chi. More chi, more damage.",
+        S::Physical,
+        T::Enemy,
+        M,
+        0.0,
+        0.0,
+        30.0,
+        &[E::Finisher {
+            min: 6.0,
+            max: 9.0,
+            per_point: 10.0,
+        }],
+    ),
+    ab(
+        "Rising Sun Kick",
+        "A powerful rising kick that builds chi.",
+        S::Physical,
+        T::Enemy,
+        M,
+        0.0,
+        8.0,
+        40.0,
+        &[
+            E::Damage {
+                min: 18.0,
+                max: 22.0,
+            },
+            E::ComboPoint,
+        ],
+    ),
+    ab(
+        "Leg Sweep",
+        "Sweeps the legs of every enemy within 6 yards, stunning them for 2 sec.",
+        S::Physical,
+        T::AroundCaster(6.0),
+        0.0,
+        0.0,
+        20.0,
+        25.0,
+        &[
+            E::Interrupt,
+            E::Aura {
+                kind: A::Stun,
+                duration: 2.0,
+            },
+        ],
+    ),
+    ab(
+        "Fortifying Brew",
+        "Take 40% less damage for 10 sec.",
+        S::Nature,
+        T::Caster,
+        0.0,
+        0.0,
+        60.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageTaken(0.6),
+            duration: 10.0,
+        }],
+    ),
+    ab(
+        "Spinning Crane Kick",
+        "Spin and kick every enemy within 8 yards.",
+        S::Physical,
+        T::AroundCaster(8.0),
+        0.0,
+        0.0,
+        8.0,
+        40.0,
+        &[E::Damage {
+            min: 11.0,
+            max: 14.0,
+        }],
+    ),
+    ab(
+        "Roll",
+        "Roll 10 yards forward.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        10.0,
+        0.0,
+        &[E::Leap(10.0)],
+    ),
+    // 86-92: Bard
+    ab(
+        "Vicious Mockery",
+        "A cutting insult that hurts and makes the target deal 15% less damage for 6 sec.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        0.0,
+        0.0,
+        10.0,
+        &[
+            E::Damage {
+                min: 14.0,
+                max: 17.0,
+            },
+            E::Aura {
+                kind: A::DamageDone(0.85),
+                duration: 6.0,
+            },
+        ],
+    ),
+    ab(
+        "Healing Word",
+        "An instant word of healing.",
+        S::Holy,
+        T::Friendly,
+        40.0,
+        0.0,
+        0.0,
+        14.0,
+        &[E::Heal {
+            min: 20.0,
+            max: 25.0,
+        }],
+    ),
+    ab(
+        "Thunderwave",
+        "A wave of thunderous sound damages and slows every enemy within 8 yards.",
+        S::Nature,
+        T::AroundCaster(8.0),
+        0.0,
+        0.0,
+        10.0,
+        16.0,
+        &[
+            E::Damage {
+                min: 11.0,
+                max: 14.0,
+            },
+            E::Aura {
+                kind: A::Slow(0.6),
+                duration: 6.0,
+            },
+        ],
+    ),
+    ab(
+        "Song of Rest",
+        "A soothing song that heals a friendly target over 15 sec.",
+        S::Nature,
+        T::Friendly,
+        40.0,
+        0.0,
+        0.0,
+        12.0,
+        &[E::Aura {
+            kind: A::Hot {
+                per_tick: 8.0,
+                interval: 3.0,
+            },
+            duration: 15.0,
+        }],
+    ),
+    ab(
+        "Inspire",
+        "Inspires a friendly target: they deal 25% more damage for 15 sec.",
+        S::Arcane,
+        T::Friendly,
+        40.0,
+        0.0,
+        30.0,
+        12.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.25),
+            duration: 15.0,
+        }],
+    ),
+    ab(
+        "Hypnotic Pattern",
+        "Mesmerizes the target, stunning it for 6 sec.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        1.5,
+        30.0,
+        14.0,
+        &[
+            E::Interrupt,
+            E::Aura {
+                kind: A::Stun,
+                duration: 6.0,
+            },
+        ],
+    ),
+    ab(
+        "Dissonant Whispers",
+        "Whispers a maddening melody, interrupting spellcasting.",
+        S::Arcane,
+        T::Enemy,
+        30.0,
+        0.0,
+        12.0,
+        10.0,
+        &[
+            E::Damage {
+                min: 8.0,
+                max: 10.0,
+            },
+            E::Interrupt,
+        ],
+    ),
+    // 93-95: More mob abilities
+    ab(
+        "Venom Sting",
+        "A poisonous sting that burns over 9 sec.",
+        S::Nature,
+        T::Enemy,
+        M,
+        0.0,
+        0.0,
+        0.0,
+        &[
+            E::Damage { min: 3.0, max: 4.0 },
+            E::Aura {
+                kind: A::Dot {
+                    per_tick: 3.0,
+                    interval: 3.0,
+                },
+                duration: 9.0,
+            },
+        ],
+    ),
+    ab(
+        "Web",
+        "Spits a sticky web that roots the target for 4 sec.",
+        S::Nature,
+        T::Enemy,
+        20.0,
+        0.0,
+        0.0,
+        0.0,
+        &[E::Aura {
+            kind: A::Root,
+            duration: 4.0,
+        }],
+    ),
+    projectile(ab(
+        "Lightning Bolt",
+        "Hurls a bolt of lightning at the target.",
+        S::Nature,
+        T::Enemy,
+        30.0,
+        2.0,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 12.0,
+            max: 15.0,
+        }],
+    )),
 ];
 
 // ---- Items ----
@@ -955,6 +2390,8 @@ pub enum ItemKind {
         /// Each point adds 1% to damage and healing done.
         power: f32,
     },
+    /// Used up to restore this fraction of health and power.
+    Potion { health: f32, power: f32 },
 }
 
 #[derive(Debug)]
@@ -966,6 +2403,15 @@ pub struct Item {
     pub max_stack: u16,
     /// How it looks when worn (and its icon color).
     pub color: (f32, f32, f32),
+    /// What merchants charge for it, in copper. They pay a quarter of this.
+    pub price: u32,
+}
+
+impl Item {
+    /// What a merchant pays for one.
+    pub fn sell_price(&self) -> u32 {
+        (self.price / 4).max(1)
+    }
 }
 
 pub fn item(id: ItemId) -> &'static Item {
@@ -977,7 +2423,7 @@ pub mod items {
 
     pub const LIGHT_LEATHER: ItemId = ItemId(0);
     pub const LINEN_CLOTH: ItemId = ItemId(1);
-    pub const GOLEM_CORE: ItemId = ItemId(2);
+    pub const ANCIENT_CORE: ItemId = ItemId(2);
     pub const LEATHER_CAP: ItemId = ItemId(3);
     pub const LEATHER_VEST: ItemId = ItemId(4);
     pub const LEATHER_GLOVES: ItemId = ItemId(5);
@@ -986,7 +2432,9 @@ pub mod items {
     pub const LINEN_HOOD: ItemId = ItemId(8);
     pub const LINEN_ROBE: ItemId = ItemId(9);
     pub const LINEN_PANTS: ItemId = ItemId(10);
-    pub const GOLEMHEART_CHESTGUARD: ItemId = ItemId(11);
+    pub const HEARTSTONE_CHESTGUARD: ItemId = ItemId(11);
+    pub const HEALING_POTION: ItemId = ItemId(12);
+    pub const MANA_POTION: ItemId = ItemId(13);
 }
 
 const fn material(
@@ -994,6 +2442,7 @@ const fn material(
     description: &'static str,
     quality: Quality,
     color: (f32, f32, f32),
+    price: u32,
 ) -> Item {
     Item {
         name,
@@ -1002,9 +2451,11 @@ const fn material(
         quality,
         max_stack: 20,
         color,
+        price,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 const fn armor(
     name: &'static str,
     slot: Slot,
@@ -1013,6 +2464,7 @@ const fn armor(
     power: f32,
     quality: Quality,
     color: (f32, f32, f32),
+    price: u32,
 ) -> Item {
     Item {
         name,
@@ -1026,30 +2478,52 @@ const fn armor(
         quality,
         max_stack: 1,
         color,
+        price,
+    }
+}
+
+const fn potion(
+    name: &'static str,
+    description: &'static str,
+    health: f32,
+    power: f32,
+    color: (f32, f32, f32),
+) -> Item {
+    Item {
+        name,
+        description,
+        kind: ItemKind::Potion { health, power },
+        quality: Quality::Common,
+        max_stack: 10,
+        color,
+        price: 50,
     }
 }
 
 const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 
-pub static ITEMS: [Item; 12] = [
+pub static ITEMS: [Item; 14] = [
     material(
         "Light Leather",
-        "Tanned hide from the beasts of the vale. Used to make leather armor.",
+        "Tanned hide from the beasts of the wilds. Used to make leather armor.",
         Quality::Common,
         (0.6, 0.42, 0.25),
+        30,
     ),
     material(
         "Linen Cloth",
         "A bolt of plain cloth. Used to make linen armor.",
         Quality::Common,
         (0.9, 0.86, 0.75),
+        30,
     ),
     material(
-        "Golem Core",
-        "The still-warm heart of an Ancient Golem.",
+        "Ancient Core",
+        "The still-warm heart of an ancient elite guardian.",
         Quality::Rare,
         (0.35, 0.85, 1.0),
+        2000,
     ),
     armor(
         "Leather Cap",
@@ -1059,6 +2533,7 @@ pub static ITEMS: [Item; 12] = [
         0.0,
         Quality::Common,
         LEATHER,
+        160,
     ),
     armor(
         "Leather Vest",
@@ -1068,6 +2543,7 @@ pub static ITEMS: [Item; 12] = [
         0.0,
         Quality::Common,
         LEATHER,
+        240,
     ),
     armor(
         "Leather Gloves",
@@ -1077,6 +2553,7 @@ pub static ITEMS: [Item; 12] = [
         0.0,
         Quality::Common,
         LEATHER,
+        120,
     ),
     armor(
         "Leather Pants",
@@ -1086,6 +2563,7 @@ pub static ITEMS: [Item; 12] = [
         0.0,
         Quality::Common,
         LEATHER,
+        200,
     ),
     armor(
         "Leather Boots",
@@ -1095,6 +2573,7 @@ pub static ITEMS: [Item; 12] = [
         0.0,
         Quality::Common,
         LEATHER,
+        160,
     ),
     armor(
         "Linen Hood",
@@ -1104,6 +2583,7 @@ pub static ITEMS: [Item; 12] = [
         2.0,
         Quality::Common,
         LINEN,
+        120,
     ),
     armor(
         "Linen Robe",
@@ -1113,6 +2593,7 @@ pub static ITEMS: [Item; 12] = [
         4.0,
         Quality::Common,
         LINEN,
+        240,
     ),
     armor(
         "Linen Pants",
@@ -1122,16 +2603,40 @@ pub static ITEMS: [Item; 12] = [
         3.0,
         Quality::Common,
         LINEN,
+        160,
     ),
     armor(
-        "Golemheart Chestguard",
+        "Heartstone Chestguard",
         Slot::Chest,
         30.0,
         10.0,
         5.0,
         Quality::Rare,
         (0.42, 0.45, 0.5),
+        4000,
     ),
+    potion(
+        "Healing Potion",
+        "Restores 35% of your health. 30 sec shared cooldown.",
+        0.35,
+        0.0,
+        (0.85, 0.15, 0.15),
+    ),
+    potion(
+        "Mana Potion",
+        "Restores 35% of your mana, rage or energy. 30 sec shared cooldown.",
+        0.0,
+        0.35,
+        (0.2, 0.35, 0.95),
+    ),
+];
+
+/// What every merchant sells.
+pub const MERCHANT_GOODS: [ItemId; 4] = [
+    items::HEALING_POTION,
+    items::MANA_POTION,
+    items::LIGHT_LEATHER,
+    items::LINEN_CLOTH,
 ];
 
 /// Something you can make from materials.
@@ -1177,21 +2682,93 @@ pub static RECIPES: [Recipe; 9] = {
             materials: &[(LINEN_CLOTH, 4)],
         },
         Recipe {
-            result: GOLEMHEART_CHESTGUARD,
-            materials: &[(GOLEM_CORE, 1), (LIGHT_LEATHER, 8)],
+            result: HEARTSTONE_CHESTGUARD,
+            materials: &[(ANCIENT_CORE, 1), (LIGHT_LEATHER, 8)],
         },
     ]
 };
 
 // ---- Mobs ----
 
+/// Every kind of mob. Each zone has its own five: an aggressive beast, a
+/// neutral beast, a fighter, a caster and an elite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MobKind {
+    // Amberfall Vale (human)
     Wolf,
     Boar,
     Bandit,
     BanditMystic,
     Golem,
+    // Scorchsand Wastes (orc)
+    Scorpion,
+    Hyena,
+    SandRaider,
+    SandShaman,
+    SandstoneColossus,
+    // Silverbough Glade (elf)
+    ShadowfangWolf,
+    ThornbackBoar,
+    SatyrReaver,
+    SatyrTrickster,
+    Treant,
+    // Grubdeep Caverns (goblin)
+    CaveSpider,
+    StonehideBoar,
+    TroggBrute,
+    TroggShaman,
+    CrystalGolem,
+    // Frostcog Peaks (gnome)
+    SnowWolf,
+    FrostBoar,
+    FrostTroll,
+    FrostTrollShaman,
+    Yeti,
+    // Witherwood (undead)
+    GhoulHound,
+    PlagueBoar,
+    Skeleton,
+    Necromancer,
+    BoneColossus,
+}
+
+/// What a mob is built from when drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MobModel {
+    Wolf,
+    Boar,
+    Spider,
+    Scorpion,
+    /// A person, with a style for the details.
+    Humanoid(HumanoidStyle),
+    /// A huge elite.
+    Giant(GiantStyle),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HumanoidStyle {
+    Bandit,
+    Mystic,
+    Raider,
+    Shaman,
+    Satyr,
+    Trickster,
+    Trogg,
+    TroggShaman,
+    Troll,
+    TrollShaman,
+    Skeleton,
+    Necromancer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GiantStyle {
+    Stone,
+    Sandstone,
+    Treant,
+    Crystal,
+    Yeti,
+    Bone,
 }
 
 /// What a mob can drop: money and items.
@@ -1222,102 +2799,382 @@ pub struct MobTemplate {
     pub spell: Option<(AbilityId, f32)>,
     pub respawn: f32,
     pub loot: LootTable,
+    pub model: MobModel,
+    /// Main, secondary and accent colors.
+    pub colors: [(f32, f32, f32); 3],
 }
+
+const BEAST_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 4),
+    items: &[(items::LIGHT_LEATHER, 0.4, 1, 1)],
+};
+const HIDE_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 3),
+    items: &[(items::LIGHT_LEATHER, 0.85, 1, 2)],
+};
+const FIGHTER_LOOT: LootTable = LootTable {
+    copper_per_level: (6, 15),
+    items: &[(items::LINEN_CLOTH, 0.6, 1, 2)],
+};
+const CASTER_LOOT: LootTable = LootTable {
+    copper_per_level: (6, 15),
+    items: &[(items::LINEN_CLOTH, 0.75, 1, 3)],
+};
+const ELITE_LOOT: LootTable = LootTable {
+    copper_per_level: (20, 40),
+    items: &[
+        (items::ANCIENT_CORE, 1.0, 1, 1),
+        (items::LINEN_CLOTH, 1.0, 2, 4),
+    ],
+};
+
+/// An aggressive beast that hunts alone.
+const fn hunter(
+    name: &'static str,
+    model: MobModel,
+    spell: AbilityId,
+    colors: [(f32, f32, f32); 3],
+) -> MobTemplate {
+    MobTemplate {
+        name,
+        hp: 55.0,
+        damage: (4.0, 6.0),
+        attack_interval: 2.0,
+        speed: 7.5,
+        aggressive: true,
+        elite: false,
+        social: false,
+        size: 0.9,
+        spell: Some((spell, 10.0)),
+        respawn: 25.0,
+        loot: BEAST_LOOT,
+        model,
+        colors,
+    }
+}
+
+/// A neutral beast that only fights back, and drops plenty of leather.
+const fn grazer(name: &'static str, model: MobModel, colors: [(f32, f32, f32); 3]) -> MobTemplate {
+    MobTemplate {
+        name,
+        hp: 65.0,
+        damage: (4.0, 7.0),
+        attack_interval: 2.2,
+        speed: 6.5,
+        aggressive: false,
+        elite: false,
+        social: false,
+        size: 0.9,
+        spell: None,
+        respawn: 25.0,
+        loot: HIDE_LOOT,
+        model,
+        colors,
+    }
+}
+
+const fn fighter(
+    name: &'static str,
+    style: HumanoidStyle,
+    colors: [(f32, f32, f32); 3],
+) -> MobTemplate {
+    MobTemplate {
+        name,
+        hp: 70.0,
+        damage: (6.0, 9.0),
+        attack_interval: 2.2,
+        speed: 6.5,
+        aggressive: true,
+        elite: false,
+        social: true,
+        size: 0.8,
+        spell: None,
+        respawn: 30.0,
+        loot: FIGHTER_LOOT,
+        model: MobModel::Humanoid(style),
+        colors,
+    }
+}
+
+const fn caster(
+    name: &'static str,
+    style: HumanoidStyle,
+    spell: AbilityId,
+    colors: [(f32, f32, f32); 3],
+) -> MobTemplate {
+    MobTemplate {
+        name,
+        hp: 55.0,
+        damage: (3.0, 5.0),
+        attack_interval: 2.0,
+        speed: 6.5,
+        aggressive: true,
+        elite: false,
+        social: true,
+        size: 0.8,
+        spell: Some((spell, 5.0)),
+        respawn: 30.0,
+        loot: CASTER_LOOT,
+        model: MobModel::Humanoid(style),
+        colors,
+    }
+}
+
+const fn elite(name: &'static str, style: GiantStyle, colors: [(f32, f32, f32); 3]) -> MobTemplate {
+    MobTemplate {
+        name,
+        hp: 330.0,
+        damage: (12.0, 17.0),
+        attack_interval: 3.0,
+        speed: 5.5,
+        aggressive: true,
+        elite: true,
+        social: false,
+        size: 2.2,
+        spell: Some((ids::GROUND_SLAM, 12.0)),
+        respawn: 120.0,
+        loot: ELITE_LOOT,
+        model: MobModel::Giant(style),
+        colors,
+    }
+}
+
+use HumanoidStyle as H;
+use MobModel as Mm;
+
+const WOLF: MobTemplate = hunter(
+    "Gray Wolf",
+    Mm::Wolf,
+    ids::SAVAGE_BITE,
+    [(0.5, 0.48, 0.47), (0.33, 0.31, 0.31), (1.0, 0.82, 0.25)],
+);
+const BOAR: MobTemplate = grazer(
+    "Wild Boar",
+    Mm::Boar,
+    [(0.43, 0.29, 0.19), (0.27, 0.18, 0.12), (0.96, 0.93, 0.83)],
+);
+const BANDIT: MobTemplate = fighter(
+    "Bandit Thug",
+    H::Bandit,
+    [(0.46, 0.32, 0.2), (0.26, 0.23, 0.2), (0.65, 0.12, 0.1)],
+);
+const BANDIT_MYSTIC: MobTemplate = caster(
+    "Bandit Mystic",
+    H::Mystic,
+    ids::SHADOW_BOLT,
+    [(0.32, 0.12, 0.36), (0.26, 0.1, 0.3), (0.75, 0.35, 1.0)],
+);
+const GOLEM: MobTemplate = elite(
+    "Ancient Golem",
+    GiantStyle::Stone,
+    [(0.5, 0.49, 0.46), (0.42, 0.41, 0.39), (0.4, 0.95, 1.0)],
+);
+
+const SCORPION: MobTemplate = hunter(
+    "Dune Scorpion",
+    Mm::Scorpion,
+    ids::VENOM_STING,
+    [(0.72, 0.5, 0.25), (0.48, 0.3, 0.14), (0.4, 0.85, 0.2)],
+);
+const HYENA: MobTemplate = grazer(
+    "Dust Hyena",
+    Mm::Wolf,
+    [(0.74, 0.62, 0.4), (0.45, 0.35, 0.22), (0.95, 0.6, 0.2)],
+);
+const SAND_RAIDER: MobTemplate = fighter(
+    "Sand Raider",
+    H::Raider,
+    [(0.78, 0.68, 0.48), (0.4, 0.28, 0.18), (0.75, 0.25, 0.12)],
+);
+const SAND_SHAMAN: MobTemplate = caster(
+    "Sand Shaman",
+    H::Shaman,
+    ids::LIGHTNING_BOLT,
+    [(0.62, 0.38, 0.2), (0.35, 0.24, 0.15), (0.4, 0.75, 1.0)],
+);
+const SANDSTONE_COLOSSUS: MobTemplate = elite(
+    "Sandstone Colossus",
+    GiantStyle::Sandstone,
+    [(0.8, 0.66, 0.44), (0.66, 0.52, 0.34), (1.0, 0.7, 0.25)],
+);
+
+const SHADOWFANG: MobTemplate = hunter(
+    "Shadowfang Wolf",
+    Mm::Wolf,
+    ids::SAVAGE_BITE,
+    [(0.28, 0.26, 0.36), (0.16, 0.15, 0.22), (0.7, 0.4, 1.0)],
+);
+const THORNBACK: MobTemplate = grazer(
+    "Thornback Boar",
+    Mm::Boar,
+    [(0.35, 0.4, 0.25), (0.22, 0.3, 0.14), (0.9, 0.9, 0.75)],
+);
+const SATYR_REAVER: MobTemplate = fighter(
+    "Satyr Reaver",
+    H::Satyr,
+    [(0.55, 0.38, 0.28), (0.36, 0.26, 0.2), (0.85, 0.8, 0.7)],
+);
+const SATYR_TRICKSTER: MobTemplate = caster(
+    "Satyr Trickster",
+    H::Trickster,
+    ids::SHADOW_BOLT,
+    [(0.45, 0.3, 0.42), (0.36, 0.26, 0.2), (0.5, 1.0, 0.6)],
+);
+const TREANT: MobTemplate = elite(
+    "Ancient Treant",
+    GiantStyle::Treant,
+    [(0.4, 0.28, 0.18), (0.3, 0.2, 0.12), (0.4, 0.8, 0.35)],
+);
+
+const CAVE_SPIDER: MobTemplate = hunter(
+    "Cave Spider",
+    Mm::Spider,
+    ids::WEB,
+    [(0.25, 0.22, 0.28), (0.14, 0.12, 0.16), (0.9, 0.2, 0.2)],
+);
+const STONEHIDE: MobTemplate = grazer(
+    "Stonehide Boar",
+    Mm::Boar,
+    [(0.4, 0.42, 0.46), (0.26, 0.27, 0.3), (0.85, 0.85, 0.9)],
+);
+const TROGG: MobTemplate = fighter(
+    "Trogg Brute",
+    H::Trogg,
+    [(0.48, 0.5, 0.5), (0.34, 0.3, 0.26), (0.9, 0.75, 0.3)],
+);
+const TROGG_SHAMAN: MobTemplate = caster(
+    "Trogg Shaman",
+    H::TroggShaman,
+    ids::LIGHTNING_BOLT,
+    [(0.46, 0.48, 0.5), (0.3, 0.24, 0.3), (0.5, 0.8, 1.0)],
+);
+const CRYSTAL_GOLEM: MobTemplate = elite(
+    "Crystal Golem",
+    GiantStyle::Crystal,
+    [(0.35, 0.4, 0.5), (0.25, 0.28, 0.36), (0.6, 0.4, 1.0)],
+);
+
+const SNOW_WOLF: MobTemplate = hunter(
+    "Snow Wolf",
+    Mm::Wolf,
+    ids::SAVAGE_BITE,
+    [(0.9, 0.92, 0.95), (0.7, 0.74, 0.8), (0.4, 0.75, 1.0)],
+);
+const FROST_BOAR: MobTemplate = grazer(
+    "Frost Boar",
+    Mm::Boar,
+    [(0.55, 0.6, 0.68), (0.4, 0.44, 0.52), (0.95, 0.97, 1.0)],
+);
+const FROST_TROLL: MobTemplate = fighter(
+    "Frost Troll",
+    H::Troll,
+    [(0.5, 0.65, 0.78), (0.35, 0.3, 0.32), (0.95, 0.95, 0.9)],
+);
+const FROST_TROLL_SHAMAN: MobTemplate = caster(
+    "Frost Troll Shaman",
+    H::TrollShaman,
+    ids::FROSTBOLT,
+    [(0.48, 0.62, 0.76), (0.25, 0.3, 0.45), (0.5, 0.85, 1.0)],
+);
+const YETI: MobTemplate = elite(
+    "Yeti",
+    GiantStyle::Yeti,
+    [(0.92, 0.93, 0.95), (0.6, 0.62, 0.68), (0.4, 0.75, 1.0)],
+);
+
+const GHOUL_HOUND: MobTemplate = hunter(
+    "Ghoul Hound",
+    Mm::Wolf,
+    ids::SAVAGE_BITE,
+    [(0.42, 0.46, 0.36), (0.3, 0.26, 0.24), (0.6, 1.0, 0.3)],
+);
+const PLAGUE_BOAR: MobTemplate = grazer(
+    "Plague Boar",
+    Mm::Boar,
+    [(0.45, 0.42, 0.32), (0.3, 0.33, 0.2), (0.75, 0.85, 0.5)],
+);
+const SKELETON: MobTemplate = fighter(
+    "Skeleton Warrior",
+    H::Skeleton,
+    [(0.88, 0.85, 0.76), (0.35, 0.3, 0.28), (0.5, 1.0, 0.5)],
+);
+const NECROMANCER: MobTemplate = caster(
+    "Necromancer",
+    H::Necromancer,
+    ids::SHADOW_BOLT,
+    [(0.18, 0.15, 0.2), (0.12, 0.1, 0.14), (0.5, 1.0, 0.4)],
+);
+const BONE_COLOSSUS: MobTemplate = elite(
+    "Bone Colossus",
+    GiantStyle::Bone,
+    [(0.86, 0.83, 0.74), (0.6, 0.56, 0.5), (0.5, 1.0, 0.4)],
+);
 
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
-        use items::*;
+        use MobKind::*;
         match self {
-            MobKind::Wolf => &MobTemplate {
-                name: "Gray Wolf",
-                hp: 55.0,
-                damage: (4.0, 6.0),
-                attack_interval: 2.0,
-                speed: 7.5,
-                aggressive: true,
-                elite: false,
-                social: false,
-                size: 0.9,
-                spell: Some((ids::SAVAGE_BITE, 10.0)),
-                respawn: 25.0,
-                loot: LootTable {
-                    copper_per_level: (1, 4),
-                    items: &[(LIGHT_LEATHER, 0.4, 1, 1)],
-                },
-            },
-            MobKind::Boar => &MobTemplate {
-                name: "Wild Boar",
-                hp: 65.0,
-                damage: (4.0, 7.0),
-                attack_interval: 2.2,
-                speed: 6.5,
-                aggressive: false,
-                elite: false,
-                social: false,
-                size: 0.9,
-                spell: None,
-                respawn: 25.0,
-                loot: LootTable {
-                    copper_per_level: (1, 3),
-                    items: &[(LIGHT_LEATHER, 0.85, 1, 2)],
-                },
-            },
-            MobKind::Bandit => &MobTemplate {
-                name: "Bandit Thug",
-                hp: 70.0,
-                damage: (6.0, 9.0),
-                attack_interval: 2.2,
-                speed: 6.5,
-                aggressive: true,
-                elite: false,
-                social: true,
-                size: 0.8,
-                spell: None,
-                respawn: 30.0,
-                loot: LootTable {
-                    copper_per_level: (6, 15),
-                    items: &[(LINEN_CLOTH, 0.6, 1, 2)],
-                },
-            },
-            MobKind::BanditMystic => &MobTemplate {
-                name: "Bandit Mystic",
-                hp: 55.0,
-                damage: (3.0, 5.0),
-                attack_interval: 2.0,
-                speed: 6.5,
-                aggressive: true,
-                elite: false,
-                social: true,
-                size: 0.8,
-                spell: Some((ids::SHADOW_BOLT, 5.0)),
-                respawn: 30.0,
-                loot: LootTable {
-                    copper_per_level: (6, 15),
-                    items: &[(LINEN_CLOTH, 0.75, 1, 3)],
-                },
-            },
-            MobKind::Golem => &MobTemplate {
-                name: "Ancient Golem",
-                hp: 330.0,
-                damage: (12.0, 17.0),
-                attack_interval: 3.0,
-                speed: 5.5,
-                aggressive: true,
-                elite: true,
-                social: false,
-                size: 2.2,
-                spell: Some((ids::GROUND_SLAM, 12.0)),
-                respawn: 120.0,
-                loot: LootTable {
-                    copper_per_level: (20, 40),
-                    items: &[(GOLEM_CORE, 1.0, 1, 1), (LINEN_CLOTH, 1.0, 2, 4)],
-                },
-            },
+            Wolf => &WOLF,
+            Boar => &BOAR,
+            Bandit => &BANDIT,
+            BanditMystic => &BANDIT_MYSTIC,
+            Golem => &GOLEM,
+            Scorpion => &SCORPION,
+            Hyena => &HYENA,
+            SandRaider => &SAND_RAIDER,
+            SandShaman => &SAND_SHAMAN,
+            SandstoneColossus => &SANDSTONE_COLOSSUS,
+            ShadowfangWolf => &SHADOWFANG,
+            ThornbackBoar => &THORNBACK,
+            SatyrReaver => &SATYR_REAVER,
+            SatyrTrickster => &SATYR_TRICKSTER,
+            Treant => &TREANT,
+            CaveSpider => &CAVE_SPIDER,
+            StonehideBoar => &STONEHIDE,
+            TroggBrute => &TROGG,
+            TroggShaman => &TROGG_SHAMAN,
+            CrystalGolem => &CRYSTAL_GOLEM,
+            SnowWolf => &SNOW_WOLF,
+            FrostBoar => &FROST_BOAR,
+            FrostTroll => &FROST_TROLL,
+            FrostTrollShaman => &FROST_TROLL_SHAMAN,
+            Yeti => &YETI,
+            GhoulHound => &GHOUL_HOUND,
+            PlagueBoar => &PLAGUE_BOAR,
+            Skeleton => &SKELETON,
+            Necromancer => &NECROMANCER,
+            BoneColossus => &BONE_COLOSSUS,
         }
     }
 
     pub fn max_hp(self, level: u8) -> f32 {
         self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
+    }
+
+    /// A zone's five mobs: aggressive beast, neutral beast, fighter, caster
+    /// and elite.
+    pub fn for_zone(zone: Zone) -> [MobKind; 5] {
+        use MobKind::*;
+        match zone {
+            Zone::Amberfall => [Wolf, Boar, Bandit, BanditMystic, Golem],
+            Zone::Scorchsand => [Scorpion, Hyena, SandRaider, SandShaman, SandstoneColossus],
+            Zone::Silverbough => [
+                ShadowfangWolf,
+                ThornbackBoar,
+                SatyrReaver,
+                SatyrTrickster,
+                Treant,
+            ],
+            Zone::Grubdeep => [
+                CaveSpider,
+                StonehideBoar,
+                TroggBrute,
+                TroggShaman,
+                CrystalGolem,
+            ],
+            Zone::Frostcog => [SnowWolf, FrostBoar, FrostTroll, FrostTrollShaman, Yeti],
+            Zone::Witherwood => [GhoulHound, PlagueBoar, Skeleton, Necromancer, BoneColossus],
+        }
     }
 }
 
@@ -1326,6 +3183,9 @@ impl MobKind {
 /// How a character looks, chosen at character creation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Appearance {
+    /// Characters made before races existed are human.
+    #[serde(default)]
+    pub race: Race,
     /// 0: broad build, 1: slender build.
     pub body: u8,
     pub skin: u8,
@@ -1346,6 +3206,7 @@ impl Appearance {
     /// Keeps every field in range (for data from the network or a save file).
     pub fn clamped(self) -> Self {
         Self {
+            race: self.race,
             body: self.body % Self::BODIES,
             skin: self.skin % Self::SKINS,
             hair_style: self.hair_style % Self::HAIR_STYLES,
@@ -1360,6 +3221,7 @@ mod tests {
 
     #[test]
     fn ability_ids_match_table() {
+        assert_eq!(ABILITIES.len(), 96);
         for class in Class::ALL {
             for id in class.abilities() {
                 assert!((id.0 as usize) < ABILITIES.len());
@@ -1369,27 +3231,70 @@ mod tests {
         assert_eq!(ability(ids::SMITE).name, "Smite");
         assert_eq!(ability(ids::FIREBALL).name, "Fireball");
         assert_eq!(ability(ids::KICK).name, "Kick");
-        assert_eq!(
-            item(items::GOLEMHEART_CHESTGUARD).name,
-            "Golemheart Chestguard"
-        );
+        assert_eq!(ability(ids::CHARGE).name, "Charge");
+        assert_eq!(ability(ids::DISSONANT_WHISPERS).name, "Dissonant Whispers");
+        assert_eq!(ability(ids::LIGHTNING_BOLT).name, "Lightning Bolt");
+        assert_eq!(item(items::MANA_POTION).name, "Mana Potion");
     }
 
     #[test]
-    fn classes_start_with_one_ability() {
+    fn every_class_has_seven_distinct_abilities_and_starts_with_one() {
+        assert_eq!(Class::ALL.len(), 13);
         for class in Class::ALL {
+            let a = class.abilities();
+            for (i, x) in a.iter().enumerate() {
+                assert!(
+                    !a[i + 1..].contains(x),
+                    "{class:?} repeats {}",
+                    ability(*x).name
+                );
+            }
             assert_eq!(class.known(1).count(), 1, "{class:?}");
             assert_eq!(class.known(MAX_LEVEL).count(), ACTION_BAR_SLOTS);
             assert_eq!(class.unlock_level(class.abilities()[0]), Some(1));
+            // The first ability always does damage, so everyone can fight.
+            let first = ability(a[0]);
+            assert!(first.targeting.needs_enemy(), "{class:?}");
+            assert!(
+                first
+                    .effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Damage { .. })),
+                "{class:?}"
+            );
         }
+        assert_eq!(Class::Barbarian.abilities()[E_SLOT], ids::CHARGE);
         assert_eq!(Class::Mage.unlock_level(ids::SMITE), None);
+    }
+
+    #[test]
+    fn old_saves_still_load() {
+        let class: Class = serde_json::from_str("\"Warrior\"").unwrap();
+        assert_eq!(class, Class::Barbarian);
+        let a: Appearance =
+            serde_json::from_str(r#"{"body":1,"skin":2,"hair_style":3,"hair_color":4}"#).unwrap();
+        assert_eq!(a.race, Race::Human);
+        assert_eq!(a.hair_color, 4);
+    }
+
+    #[test]
+    fn every_zone_has_its_own_mobs() {
+        let mut seen = std::collections::HashSet::new();
+        for zone in Zone::ALL {
+            let [hunter, grazer, fighter, caster, elite] = MobKind::for_zone(zone);
+            assert!(hunter.template().aggressive && !grazer.template().aggressive);
+            assert!(fighter.template().social && caster.template().spell.is_some());
+            assert!(elite.template().elite);
+            for k in MobKind::for_zone(zone) {
+                assert!(seen.insert(k), "{k:?} is in two zones");
+            }
+        }
     }
 
     #[test]
     fn xp_curve() {
         assert_eq!(xp_to_next(1), 100);
         assert_eq!(xp_to_next(MAX_LEVEL), 0);
-        // Same-level kills take a handful of mobs per level.
         let kills = xp_to_next(1) as f32 / kill_xp(1, 1, false) as f32;
         assert!((2.0..5.0).contains(&kills));
         assert_eq!(kill_xp(9, 3, false), 0);
@@ -1411,6 +3316,13 @@ mod tests {
                 assert_eq!(item(*m).kind, ItemKind::Material);
                 assert!(*n <= item(*m).max_stack);
             }
+        }
+    }
+
+    #[test]
+    fn merchants_buy_for_less_than_they_sell() {
+        for it in &ITEMS {
+            assert!(it.sell_price() < it.price || it.price <= 1);
         }
     }
 }

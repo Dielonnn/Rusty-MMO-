@@ -1,13 +1,14 @@
 //! The screens before the game: login (account and server), character
-//! select, and character creation, all over a slowly circling view of town.
+//! select, and character creation, all over a view of a starting town.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use macroquad::prelude::*;
-use shared::data::{Appearance, Class};
+use shared::data::{Appearance, Class, Race};
 use shared::net::Connection;
 use shared::protocol::*;
+use shared::world::Zone;
 
 use crate::game::Game;
 use crate::hud::{self, BORDER, GOLD, button, button_ex, panel, text, text_centered};
@@ -53,16 +54,25 @@ fn save_settings(account: &str, address: &str) {
     let _ = std::fs::write(dir.join("client.txt"), format!("{account}\n{address}\n"));
 }
 
-/// The menu camera slowly circles the town.
-fn draw_backdrop(scene: &Scene, time: f32, batch: &mut Batch, preview: Option<(&Look, f32)>) {
+/// The menu camera slowly circles a town, or shows a character close up
+/// in the town square of their race's starting area.
+fn draw_backdrop(
+    scene: &Scene,
+    zone: Zone,
+    time: f32,
+    batch: &mut Batch,
+    preview: Option<(&Look, f32)>,
+) {
     let a = time * 0.04;
+    // Points in the town's own layout, placed in the world.
+    let at = |x: f32, y: f32, z: f32| {
+        let w = zone.to_world(vec2(x, z));
+        vec3(w.x, y, w.y)
+    };
+    let ground = zone.ground_local(vec2(-3.4, 4.0));
     let (position, target) = match preview {
-        // Close up on the character standing in the town square.
-        Some(_) => (vec3(-2.2, 1.9, 9.6), vec3(-2.6, 1.2, 4.0)),
-        None => (
-            vec3(a.cos() * 55.0, 22.0, a.sin() * 55.0),
-            vec3(0.0, 2.0, 0.0),
-        ),
+        Some(_) => (at(-2.2, ground.y + 1.9, 9.6), at(-2.6, ground.y + 1.2, 4.0)),
+        None => (at(a.cos() * 55.0, 22.0, a.sin() * 55.0), at(0.0, 2.0, 0.0)),
     };
     let cam = Camera3D {
         position,
@@ -73,22 +83,49 @@ fn draw_backdrop(scene: &Scene, time: f32, batch: &mut Batch, preview: Option<(&
         z_far: 1500.0,
         ..Default::default()
     };
-    render::draw_sky(&cam, |p| hud::project(&cam, p));
+    render::draw_sky(&cam, zone, |p| hud::project(&cam, p));
     set_camera(&cam);
-    scene.begin_3d();
-    scene.draw();
+    scene.begin_3d(zone);
+    scene.draw(zone);
+    batch.light = render::theme(zone).light;
     if let Some((look, yaw)) = preview {
         let pose = Pose {
             time,
             ..Default::default()
         };
-        render::draw_model(batch, look, vec3(-3.4, 0.0, 4.0), yaw, pose);
+        render::draw_model(batch, look, ground, zone.yaw_to_world(yaw), pose);
     }
-    scene.draw_effects(batch, time);
+    scene.draw_effects(zone, batch, time);
     batch.flush();
-    scene.draw_water();
+    scene.draw_water(zone);
     scene.end_3d();
     set_default_camera();
+}
+
+/// A selectable button in a grid of choices.
+fn choice(r: Rect, label: &str, selected: bool, color: Color, size: f32) {
+    let hover = r.contains(mouse());
+    let bg = if selected {
+        Color::new(color.r * 0.45, color.g * 0.45, color.b * 0.45, 1.0)
+    } else {
+        Color::new(0.15, 0.15, 0.18, 1.0)
+    };
+    draw_rectangle(r.x, r.y, r.w, r.h, bg);
+    draw_rectangle_lines(
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        2.0,
+        if selected || hover { color } else { BORDER },
+    );
+    text_centered(
+        label,
+        r.x + r.w / 2.0,
+        r.y + r.h / 2.0 + size * 0.3,
+        size,
+        if selected { WHITE } else { color },
+    );
 }
 
 fn input_box(r: Rect, value: &str, placeholder: &str, focused: bool, time: f32) {
@@ -174,7 +211,7 @@ impl Login {
 
     pub fn frame(&mut self, scene: &Scene) -> Option<Characters> {
         self.time += get_frame_time();
-        draw_backdrop(scene, self.time, &mut self.batch, None);
+        draw_backdrop(scene, Zone::Amberfall, self.time, &mut self.batch, None);
 
         let (w, h) = (screen_width(), screen_height());
         let p = Rect::new(
@@ -227,7 +264,7 @@ impl Login {
         let cx = p.x + p.w / 2.0;
         text_centered("Rusty MMO", cx, p.y + 54.0, 48.0, GOLD);
         text_centered(
-            &format!("{}  -  {}", render::ZONE_NAME, shared::VERSION),
+            &format!("Six starting areas  -  {}", shared::VERSION),
             cx,
             p.y + 82.0,
             18.0,
@@ -354,6 +391,14 @@ pub enum CharacterOutcome {
     Play(Box<Game>),
 }
 
+fn new_character() -> Create {
+    Create {
+        name: String::new(),
+        class: Class::Barbarian,
+        appearance: Appearance::default(),
+    }
+}
+
 impl Characters {
     pub fn new(conn: Connection, account: String, solo: bool) -> Self {
         Self {
@@ -405,11 +450,7 @@ impl Characters {
                         self.selected = 0;
                     }
                     if list.is_empty() {
-                        self.create.get_or_insert_with(|| Create {
-                            name: String::new(),
-                            class: Class::Warrior,
-                            appearance: Appearance::default(),
-                        });
+                        self.create.get_or_insert_with(new_character);
                     } else if self.list.as_ref().is_some_and(|old| list.len() > old.len()) {
                         self.create = None;
                     }
@@ -422,7 +463,7 @@ impl Characters {
                         .list
                         .as_ref()
                         .and_then(|l| l.get(self.selected))
-                        .map_or(Class::Warrior, |c| c.class);
+                        .map_or(Class::Barbarian, |c| c.class);
                     let conn = self.conn.take().unwrap();
                     let mut game = Game::new(conn, class);
                     game.my_id = Some(id);
@@ -457,8 +498,12 @@ impl Characters {
                 }),
         };
         let yaw = 0.4 + (self.spin * 0.8).sin() * 0.6;
+        let zone = preview
+            .as_ref()
+            .map_or(Zone::Amberfall, |l| l.appearance.race.zone());
         draw_backdrop(
             scene,
+            zone,
             self.time,
             &mut self.batch,
             preview.as_ref().map(|l| (l, yaw)),
@@ -530,11 +575,7 @@ impl Characters {
             } else if enter.contains(m) && !list.is_empty() {
                 self.enter(&list);
             } else if create.contains(m) {
-                self.create = Some(Create {
-                    name: String::new(),
-                    class: Class::Warrior,
-                    appearance: Appearance::default(),
-                });
+                self.create = Some(new_character());
                 self.message = None;
             } else if delete.contains(m) && !list.is_empty() {
                 if self.confirm_delete {
@@ -593,7 +634,12 @@ impl Characters {
                 hud::class_color(c.class),
             );
             text(
-                &format!("Level {} Human {}", c.level, c.class.name()),
+                &format!(
+                    "Level {} {} {}",
+                    c.level,
+                    c.appearance.race.name(),
+                    c.class.name()
+                ),
                 r.x + 12.0,
                 r.y + 44.0,
                 17.0,
@@ -647,24 +693,29 @@ impl Characters {
         let inner = p.x + 20.0;
         let iw = p.w - 40.0;
         let name_box = Rect::new(inner, p.y + 92.0, iw, 36.0);
-        let class_w = (iw - 10.0) / 2.0;
-        let classes: Vec<Rect> = (0..4)
-            .map(|i| {
-                Rect::new(
-                    inner + (i % 2) as f32 * (class_w + 10.0),
-                    p.y + 162.0 + (i / 2) as f32 * 46.0,
-                    class_w,
-                    40.0,
-                )
-            })
-            .collect();
-        let options_y = p.y + 360.0;
+        // A grid of buttons, three to a row.
+        let grid = |count: usize, top: f32, height: f32| -> Vec<Rect> {
+            let cw = (iw - 12.0) / 3.0;
+            (0..count)
+                .map(|i| {
+                    Rect::new(
+                        inner + (i % 3) as f32 * (cw + 6.0),
+                        top + (i / 3) as f32 * (height + 4.0),
+                        cw,
+                        height,
+                    )
+                })
+                .collect()
+        };
+        let races = grid(Race::ALL.len(), p.y + 160.0, 30.0);
+        let classes = grid(Class::ALL.len(), p.y + 252.0, 28.0);
+        let options_y = p.y + 428.0;
         let option_rows: Vec<(Rect, Rect)> = (0..4)
             .map(|i| {
-                let y = options_y + i as f32 * 44.0;
+                let y = options_y + i as f32 * 38.0;
                 (
-                    Rect::new(inner + iw - 170.0, y, 36.0, 34.0),
-                    Rect::new(inner + iw - 36.0, y, 36.0, 34.0),
+                    Rect::new(inner + iw - 170.0, y, 34.0, 32.0),
+                    Rect::new(inner + iw - 34.0, y, 34.0, 32.0),
                 )
             })
             .collect();
@@ -685,6 +736,11 @@ impl Characters {
             for (r, class) in classes.iter().zip(Class::ALL) {
                 if r.contains(m) {
                     c.class = class;
+                }
+            }
+            for (r, race) in races.iter().zip(Race::ALL) {
+                if r.contains(m) {
+                    c.appearance.race = race;
                 }
             }
             let a = &mut c.appearance;
@@ -736,8 +792,9 @@ impl Characters {
             28.0,
             GOLD,
         );
+        let race = appearance.race;
         text_centered(
-            "Human - Amberfall Vale",
+            &format!("{} - starts in {}", race.name(), race.zone().name()),
             p.x + p.w / 2.0,
             p.y + 58.0,
             16.0,
@@ -745,42 +802,45 @@ impl Characters {
         );
         text("Name", name_box.x, name_box.y - 8.0, 18.0, WHITE);
         input_box(name_box, &name, "Letters only", true, self.time);
-        text("Class", inner, p.y + 154.0, 18.0, WHITE);
-        let m = mouse();
+        text("Race", inner, p.y + 152.0, 18.0, WHITE);
+        let race_color = Color::new(0.85, 0.75, 0.55, 1.0);
+        for (r, rc) in races.iter().zip(Race::ALL) {
+            choice(*r, rc.name(), rc == race, race_color, 18.0);
+        }
+        text("Class", inner, p.y + 244.0, 18.0, WHITE);
         for (r, cl) in classes.iter().zip(Class::ALL) {
-            let selected = cl == class;
-            let color = hud::class_color(cl);
-            let bg = if selected {
-                Color::new(color.r * 0.45, color.g * 0.45, color.b * 0.45, 1.0)
-            } else {
-                Color::new(0.15, 0.15, 0.18, 1.0)
-            };
-            draw_rectangle(r.x, r.y, r.w, r.h, bg);
-            draw_rectangle_lines(
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                2.0,
-                if selected || r.contains(m) {
-                    color
-                } else {
-                    BORDER
-                },
-            );
-            text_centered(
-                cl.name(),
-                r.x + r.w / 2.0,
-                r.y + 27.0,
-                22.0,
-                if selected { WHITE } else { color },
+            choice(*r, cl.name(), cl == class, hud::class_color(cl), 17.0);
+        }
+
+        // Descriptions of the chosen race and class, bottom left.
+        let info = Rect::new(30.0, h - 250.0, 440.0, 220.0);
+        panel(info);
+        let mut y = info.y + 28.0;
+        text(race.name(), info.x + 14.0, y, 22.0, race_color);
+        for line in hud::wrap(race.description(), 50) {
+            y += 19.0;
+            text(
+                &line,
+                info.x + 14.0,
+                y,
+                16.0,
+                Color::new(0.85, 0.85, 0.85, 1.0),
             );
         }
-        for (i, line) in hud::wrap(class.description(), 44).iter().enumerate() {
+        y += 32.0;
+        text(
+            class.name(),
+            info.x + 14.0,
+            y,
+            22.0,
+            hud::class_color(class),
+        );
+        for line in hud::wrap(class.description(), 50) {
+            y += 19.0;
             text(
-                line,
-                inner,
-                p.y + 270.0 + i as f32 * 19.0,
+                &line,
+                info.x + 14.0,
+                y,
                 16.0,
                 Color::new(0.85, 0.85, 0.85, 1.0),
             );
@@ -816,7 +876,7 @@ impl Characters {
             option_rows[1].0.y + 6.0,
             22.0,
             22.0,
-            render::skin_color(appearance.skin),
+            render::skin_color(appearance.race, appearance.skin),
         );
         draw_rectangle(
             inner + 110.0,

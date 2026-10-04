@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 use shared::data::*;
 use shared::protocol::{CharacterSummary, Stack, Stats};
-use shared::world::GRAVEYARD;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Character {
@@ -22,7 +21,9 @@ pub struct Character {
 }
 
 impl Character {
+    /// A new level 1 character, in their race's starting area.
     pub fn new(account: &str, name: &str, class: Class, appearance: Appearance) -> Self {
+        let start = appearance.race.zone().graveyard();
         Self {
             account: account.to_string(),
             name: name.to_string(),
@@ -31,7 +32,7 @@ impl Character {
             level: 1,
             xp: 0,
             money: 0,
-            pos: [GRAVEYARD.x, 0.0, GRAVEYARD.y],
+            pos: start.to_array(),
             yaw: 0.0,
             bags: vec![None; BAG_SLOTS],
             gear: [None; 5],
@@ -72,7 +73,7 @@ impl Character {
             }
         }
         if !self.pos.iter().all(|v| v.is_finite()) {
-            self.pos = [GRAVEYARD.x, 0.0, GRAVEYARD.y];
+            self.pos = self.appearance.race.zone().graveyard().to_array();
         }
     }
 }
