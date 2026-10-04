@@ -4,7 +4,7 @@
 //! The world, models and effects only draw through what this exports. If
 //! they need something new from the engine, it's added here.
 
-// Parts of the engine's API (textures, model files) are here for the world,
+// Parts of the engine's API (textures, model files) are here for the
 // character and effect work that follows, and aren't all used yet.
 #[allow(dead_code)]
 mod batch;
@@ -21,4 +21,4 @@ pub use color::{c, dark, mix, rgb};
 pub use frame::Frame;
 #[allow(unused_imports)]
 pub use model_file::{ModelFile, ModelPart};
-pub use shader::{Fog, Light, Shading};
+pub use shader::{Fog, GroundPaint, Light, Shading};

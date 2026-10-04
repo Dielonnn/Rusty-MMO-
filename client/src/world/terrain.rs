@@ -4,6 +4,9 @@ use macroquad::prelude::*;
 use shared::props::Scatter;
 use shared::world::*;
 
+use super::foliage::{ferns, flowers, tuft};
+use super::paint::Card;
+use super::rocks::{Stone, boulder};
 use super::*;
 
 /// Ground color variation in about `-0.5..0.5`: patches of all sizes, with
@@ -137,28 +140,47 @@ pub fn foliage(zone: Zone) -> Color {
 }
 
 pub(super) fn terrain_color(zone: Zone, g: &Ground, local: Vec2, h: f32, slope: f32) -> Color {
+    terrain_paint(zone, g, local, h, slope).0
+}
+
+/// The ground's color at a spot, and how much of it is rock (x) and how
+/// much bare dirt, sand at the shore, road or field (y), for the painted
+/// ground textures.
+pub(super) fn terrain_paint(
+    zone: Zone,
+    g: &Ground,
+    local: Vec2,
+    h: f32,
+    slope: f32,
+) -> (Color, Vec2) {
     let (x, z) = (local.x, local.y);
     let n = noise(x, z);
     let mut col = mix(g.main, g.var_a, (n * 3.0 + 0.2).max(0.0));
     col = mix(col, g.var_b, (-n * 3.0 - 0.3).max(0.0));
-    col = mix(g.shore, col, (h - zone.water_level() - 0.3) / 1.2);
-    col = mix(col, g.rock, (slope - 0.45) * 3.0);
-    col = mix(col, g.rock, (h - 12.0) / 3.0);
-    col = mix(col, g.peak, (h - 18.0) / 2.0);
+    let shore = 1.0 - ((h - zone.water_level() - 0.3) / 1.2).clamp(0.0, 1.0);
+    col = mix(g.shore, col, 1.0 - shore);
+    let cliff = ((slope - 0.45) * 3.0).clamp(0.0, 1.0);
+    let high = ((h - 12.0) / 3.0).clamp(0.0, 1.0);
+    col = mix(col, g.rock, cliff);
+    col = mix(col, g.rock, high);
+    let peak = ((h - 18.0) / 2.0).clamp(0.0, 1.0);
+    col = mix(col, g.peak, peak);
     let d = local.length();
     let road = (1.0 - x.abs().min(z.abs()) / 3.0).clamp(0.0, 1.0)
         * (1.0 - (d - 70.0) / 20.0).clamp(0.0, 1.0);
     col = mix(col, g.road, road * 0.85);
+    let mut field = 0.0f32;
     for &f in &zone.layout().fields {
         let inside = (1.0 - (local.distance(f) - 11.0) / 2.0).clamp(0.0, 1.0);
         let rows = ((x - f.x) * 1.6).sin() * 0.5 + 0.5;
         col = mix(col, mix(g.field, dark(g.field, 1.25), rows), inside);
+        field = field.max(inside);
     }
-    mix(
-        col,
-        mix(g.town, dark(g.town, 1.1), n + 0.5),
-        (TOWN_RADIUS - d) / 3.0,
-    )
+    let town = ((TOWN_RADIUS - d) / 3.0).clamp(0.0, 1.0);
+    let col = mix(col, mix(g.town, dark(g.town, 1.1), n + 0.5), town);
+    let rock = cliff.max(high) * (1.0 - peak * 0.6) * (1.0 - town);
+    let dirt = shore.max(road).max(field).max(town * 0.8).max(cliff * 0.5);
+    (col, vec2(rock, dirt))
 }
 
 pub(super) fn terrain(b: &mut Batch, zone: Zone) {
@@ -179,15 +201,17 @@ pub(super) fn terrain(b: &mut Batch, zone: Zone) {
                 );
                 let w = zone.to_world(local);
                 let h = terrain_height(w.x, w.y);
-                let e = 0.5;
+                // Sampled a little wide, so hills shade as smooth, rounded
+                // slopes rather than showing every small bump.
+                let e = 1.5;
                 let normal = vec3(
                     terrain_height(w.x - e, w.y) - terrain_height(w.x + e, w.y),
                     2.0 * e,
                     terrain_height(w.x, w.y - e) - terrain_height(w.x, w.y + e),
                 )
                 .normalize();
-                let color = terrain_color(zone, &g, local, h, 1.0 - normal.y);
-                b.vertex_uv(vec3(w.x, h, w.y), Vec2::ZERO, normal, color);
+                let (color, weights) = terrain_paint(zone, &g, local, h, 1.0 - normal.y);
+                b.vertex_uv(vec3(w.x, h, w.y), weights, normal, color);
             }
         }
         let stride = n as u16 + 1;
@@ -203,11 +227,19 @@ pub(super) fn terrain(b: &mut Batch, zone: Zone) {
     }
 }
 
-/// Grass, leaves, pebbles, snow lumps and other little things on the ground.
-pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
+/// Grass, ferns, flowers, leaves, pebbles, snow lumps and other little
+/// things on the ground.
+pub(super) fn ground_cover(b: &mut Batch, cards: &mut Batch, zone: Zone) {
     let mut rng = Scatter(0xBEEF + zone.index() as u32);
     let water = zone.water_level();
-    for _ in 0..6000 {
+    let g = ground_colors(zone);
+    let pebble = |color| Stone {
+        color,
+        top: None,
+        slices: 6,
+        stacks: 4,
+    };
+    for n in 0..9000u32 {
         let x = rng.range(-WORLD_HALF_SIZE + 5.0, WORLD_HALF_SIZE - 5.0);
         let z = rng.range(-WORLD_HALF_SIZE + 5.0, WORLD_HALF_SIZE - 5.0);
         let kind = rng.unit();
@@ -219,6 +251,8 @@ pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
         }
         let base = vec3(w.x, h, w.y);
         let shade_n = rng.range(-0.06, 0.06);
+        // Grass takes after the ground it grows from, so it blends in.
+        let soil = terrain_color(zone, &g, local, h, 0.0);
         match zone {
             Zone::Grubdeep => {
                 if kind < 0.2 {
@@ -231,11 +265,14 @@ pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
                     b.lit(|b| b.ellipsoid(base + Vec3::Y * 0.22, vec3(0.1, 0.05, 0.1), col));
                 } else if kind < 0.6 {
                     let col = c(0.34 + shade_n, 0.32 + shade_n, 0.34);
-                    b.block(
-                        base + Vec3::Y * 0.06,
-                        vec3(0.15, 0.08, 0.12),
+                    let r = vec3(0.17, 0.11, 0.14) * rng.range(0.7, 1.5);
+                    boulder(
+                        b,
+                        base + Vec3::Y * r.y * 0.3,
+                        r,
                         kind * 9.0,
-                        col,
+                        n,
+                        &pebble(col),
                     );
                 }
             }
@@ -255,23 +292,25 @@ pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
                         4,
                         c(0.75, 0.88, 1.0),
                     );
+                } else if kind < 0.7 {
+                    // Frosted grass poking through the snow.
+                    tuft(cards, &mut rng, base, 0.6, Card::Grass, c(0.7, 0.74, 0.62));
                 }
             }
             Zone::Scorchsand => {
-                if kind < 0.35 {
-                    let col = c(0.7 + shade_n, 0.62 + shade_n, 0.35);
-                    for k in 0..3 {
-                        let a = rng.range(0.0, std::f32::consts::TAU) + k as f32;
-                        let side = vec3(a.cos(), 0.0, a.sin()) * 0.08;
-                        let tip = base + vec3(a.cos() * 0.15, rng.range(0.2, 0.4), a.sin() * 0.15);
-                        b.triangle(base - side, base + side, tip, col);
-                    }
-                } else if kind < 0.6 {
-                    b.block(
-                        base + Vec3::Y * 0.05,
-                        vec3(0.12, 0.06, 0.1),
+                if kind < 0.3 {
+                    let col = mix(c(0.72 + shade_n, 0.64 + shade_n, 0.36), soil, 0.3);
+                    tuft(cards, &mut rng, base, 0.75, Card::Grass, col);
+                } else if kind < 0.55 {
+                    let col = c(0.6 + shade_n, 0.42, 0.3);
+                    let r = vec3(0.15, 0.08, 0.12) * rng.range(0.7, 1.6);
+                    boulder(
+                        b,
+                        base + Vec3::Y * r.y * 0.3,
+                        r,
                         kind * 7.0,
-                        c(0.6 + shade_n, 0.42, 0.3),
+                        n,
+                        &pebble(col),
                     );
                 }
             }
@@ -295,21 +334,24 @@ pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
                         ],
                     ),
                 };
+                let grass = dark(mix(grass, soil, 0.45), 1.2);
                 let pick = |rng: &mut Scatter| {
                     leaves[(rng.unit() * leaves.len() as f32) as usize % leaves.len()]
                 };
-                if kind < 0.65 {
-                    for k in 0..3 {
-                        let a = rng.range(0.0, std::f32::consts::TAU) + k as f32;
-                        let side = vec3(a.cos(), 0.0, a.sin()) * 0.12;
-                        let tip = base + vec3(a.cos() * 0.15, rng.range(0.35, 0.6), a.sin() * 0.15);
-                        b.triangle(base - side, base + side, tip, grass);
-                    }
-                } else if zone == Zone::Silverbough && kind < 0.75 {
+                if kind < 0.68 {
+                    let size = rng.range(0.6, 1.0);
+                    tuft(cards, &mut rng, base, size, Card::Grass, grass);
+                } else if kind < 0.74 {
+                    let size = rng.range(0.6, 0.9);
+                    ferns(cards, &mut rng, base, size, dark(grass, 0.85));
+                } else if zone == Zone::Silverbough && kind < 0.8 {
                     // Glowing flowers.
                     let col = pick(&mut rng);
                     b.cylinder(base, Vec3::Y * 0.3, 0.02, 3, c(0.3, 0.55, 0.3));
                     b.glow_sphere(base + Vec3::Y * 0.32, 0.07, col);
+                } else if zone == Zone::Amberfall && kind < 0.8 {
+                    let col = pick(&mut rng);
+                    flowers(cards, &mut rng, base, grass, dark(col, 1.2));
                 } else {
                     for k in 0..5 {
                         let col = pick(&mut rng);
@@ -326,6 +368,39 @@ pub(super) fn ground_cover(b: &mut Batch, zone: Zone) {
                 }
             }
         }
+    }
+}
+
+/// Meadow grass: tufts in drifts across the open ground, thinning out on
+/// roads, fields, shores and high slopes.
+pub(super) fn meadows(cards: &mut Batch, zone: Zone) {
+    let (grass, count) = match zone {
+        Zone::Amberfall => (c(0.66, 0.56, 0.28), 30_000),
+        Zone::Silverbough => (c(0.32, 0.62, 0.34), 30_000),
+        Zone::Witherwood => (c(0.4, 0.38, 0.3), 18_000),
+        _ => return,
+    };
+    let mut rng = Scatter(0x6A55 + zone.index() as u32);
+    let water = zone.water_level();
+    let g = ground_colors(zone);
+    for _ in 0..count {
+        let x = rng.range(-WORLD_HALF_SIZE + 5.0, WORLD_HALF_SIZE - 5.0);
+        let z = rng.range(-WORLD_HALF_SIZE + 5.0, WORLD_HALF_SIZE - 5.0);
+        let keep = rng.unit();
+        let local = vec2(x, z);
+        let w = zone.to_world(local);
+        let h = terrain_height(w.x, w.y);
+        if local.length() < TOWN_RADIUS + 2.0 || !(water + 0.6..12.0).contains(&h) {
+            continue;
+        }
+        let (soil, weights) = terrain_paint(zone, &g, local, h, 0.0);
+        let drift = fbm(x * 0.05, z * 0.05, 2, 77 + zone.index() as u32);
+        if keep > (drift - 0.2) * 2.5 * (1.0 - weights.y * 1.5) {
+            continue;
+        }
+        let tint = dark(mix(grass, soil, 0.4), rng.range(1.1, 1.35));
+        let size = rng.range(0.55, 0.95);
+        tuft(cards, &mut rng, vec3(w.x, h, w.y), size, Card::Grass, tint);
     }
 }
 

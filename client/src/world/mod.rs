@@ -2,7 +2,10 @@
 //! trees, buildings and props, and each zone's colors and light.
 
 mod buildings;
+mod foliage;
+mod paint;
 mod props;
+mod rocks;
 mod sky;
 mod terrain;
 mod theme;
@@ -13,12 +16,12 @@ use macroquad::models::{Mesh, draw_mesh};
 use macroquad::prelude::*;
 use shared::world::*;
 
-use crate::gfx::{Batch, Fog, Frame, Shading, c, dark, mix};
+use crate::gfx::{Batch, Fog, Frame, GroundPaint, Shading, c, dark, mix};
 
 use props::{draw_prop, flag};
 pub use sky::draw_sky;
 use sky::weather;
-use terrain::{cave_ceiling, ground_cover, terrain};
+use terrain::{cave_ceiling, ground_cover, meadows, terrain};
 pub use terrain::{foliage, map_color};
 pub use theme::theme;
 
@@ -31,6 +34,8 @@ struct Glow {
 
 /// One zone's static scenery.
 struct ZoneScene {
+    terrain: Vec<Mesh>,
+    ground: GroundPaint,
     meshes: Vec<Mesh>,
     water: Vec<Mesh>,
     chimneys: Vec<Vec3>,
@@ -54,6 +59,8 @@ struct Flag {
 pub struct Scene {
     zones: [OnceCell<ZoneScene>; 6],
     shading: Shading,
+    /// The cut-out cards trees, bushes and grass are made of.
+    foliage: OnceCell<Texture2D>,
 }
 
 impl Scene {
@@ -61,11 +68,13 @@ impl Scene {
         Self {
             zones: Default::default(),
             shading: Shading::new(),
+            foliage: OnceCell::new(),
         }
     }
 
     fn get(&self, zone: Zone) -> &ZoneScene {
-        self.zones[zone.index()].get_or_init(|| build_zone(zone))
+        self.zones[zone.index()]
+            .get_or_init(|| build_zone(zone, self.foliage.get_or_init(paint::foliage)))
     }
 
     /// Call after `set_camera` for a 3D pass: turns on the zone's light
@@ -79,6 +88,7 @@ impl Scene {
                 near: t.fog_near,
                 far: t.fog_far,
             },
+            mix(t.sky_horizon, t.sky_mid, 0.4),
         );
     }
 
@@ -87,7 +97,9 @@ impl Scene {
     }
 
     pub fn draw(&self, zone: Zone) {
-        for m in &self.get(zone).meshes {
+        let z = self.get(zone);
+        self.shading.draw_terrain(&z.terrain, &z.ground);
+        for m in &z.meshes {
             draw_mesh(m);
         }
     }
@@ -140,24 +152,28 @@ impl Scene {
 
     /// Draw last: it's see-through.
     pub fn draw_water(&self, zone: Zone) {
-        for m in &self.get(zone).water {
-            draw_mesh(m);
-        }
+        self.shading
+            .draw_water(&self.get(zone).water, get_time() as f32);
     }
 }
 
-fn build_zone(zone: Zone) -> ZoneScene {
+fn build_zone(zone: Zone, foliage: &Texture2D) -> ZoneScene {
     let t = theme(zone);
+    let mut ground = Batch::recording();
+    terrain(&mut ground, zone);
     let mut b = Batch::recording();
+    let mut cards = Batch::recording();
+    cards.set_texture(Some(foliage.clone()));
     let mut chimneys = Vec::new();
     let mut lamps = Vec::new();
     let mut fires = Vec::new();
     let mut flags = Vec::new();
-    terrain(&mut b, zone);
-    ground_cover(&mut b, zone);
+    ground_cover(&mut b, &mut cards, zone);
+    meadows(&mut cards, zone);
     for p in shared::props::props(zone) {
         draw_prop(
             &mut b,
+            &mut cards,
             zone,
             &p,
             &mut chimneys,
@@ -169,20 +185,51 @@ fn build_zone(zone: Zone) -> ZoneScene {
     if t.cave {
         cave_ceiling(&mut b, zone);
     }
-    let meshes = b.finish();
-
-    let mut w = Batch::recording();
-    let s = WORLD_HALF_SIZE;
-    let center = zone.center();
-    let corners = [(-s, -s), (s, -s), (s, s), (-s, s)]
-        .map(|(x, z)| vec3(center.x + x, zone.water_level(), center.y + z));
-    w.lit(|w| w.quad(corners, Vec3::Y, t.water));
+    let mut meshes = b.finish();
+    meshes.extend(cards.finish());
     ZoneScene {
+        terrain: ground.finish(),
+        ground: paint::ground(zone),
         meshes,
-        water: w.finish(),
+        water: water(zone, t.water),
         chimneys,
         lamps,
         fires,
         flags,
     }
+}
+
+/// The water's surface wherever it might show above the ground, in tiles
+/// that each carry how deep the water is at their corners (for the
+/// shader's shallows and foam) and whether it's frozen.
+fn water(zone: Zone, color: Color) -> Vec<Mesh> {
+    const STEP: f32 = 3.0;
+    let level = zone.water_level();
+    let frozen = if zone == Zone::Frostcog { 1.0 } else { 0.0 };
+    let center = zone.center();
+    let n = (WORLD_HALF_SIZE * 2.0 / STEP) as i32;
+    let at = |i: i32, j: i32| {
+        let x = center.x - WORLD_HALF_SIZE + i as f32 * STEP;
+        let z = center.y - WORLD_HALF_SIZE + j as f32 * STEP;
+        (vec3(x, level, z), level - terrain_height(x, z))
+    };
+    let mut w = Batch::recording();
+    for j in 0..n {
+        for i in 0..n {
+            let corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+            // Skip tiles where the ground is well above the water.
+            if corners.iter().all(|&(_, deep)| deep < -0.6) {
+                continue;
+            }
+            w.lit(|w| {
+                w.quad_uv(
+                    corners.map(|(p, _)| p),
+                    corners.map(|(_, deep)| vec2(deep, frozen)),
+                    Vec3::Y,
+                    color,
+                )
+            });
+        }
+    }
+    w.finish()
 }
