@@ -291,11 +291,26 @@ client/   The macroquad client: login, character select and creation,
   Scenery is placed by a seeded generator in `shared/src/props.rs`, so what the
   client draws is exactly what players bump into and where the server spawns
   mobs. (Mobs don't collide with scenery yet.)
-- **Rendering.** Everything is built from shaded boxes, ellipsoids and cones in
-  a custom batcher (`client/src/render.rs`). Each area has its own light, sky,
-  clouds, weather (falling leaves, blowing sand, fireflies, spores, snow and
-  wisps) and distance fog (a small GLSL shader). Each area's scenery is baked
-  into meshes the first time you see it.
+- **Rendering.** Everything is built from boxes, ellipsoids and cones in a
+  custom batcher, lit per pixel on the GPU: a warm sun, a cool sky fill and a
+  warm bounce from the ground, a soft rim light, a faint painted grain and
+  distance fog (`client/src/gfx/shader.rs`). Boxes shade like slightly rounded
+  blocks and cones like round ones, and everything standing on the ground casts
+  a soft contact shadow. Each area has its own light, sky, clouds, weather
+  (falling leaves, blowing sand, fireflies, spores, snow and wisps) and fog.
+  Each area's scenery is baked into meshes the first time you see it.
+- **Client layout.** Graphics code is split so different people can work on it
+  without editing the same files:
+  - `client/src/gfx/`: the engine (batcher, model-building frames, shader and
+    lighting, textures, `.glb` model loading, colors). The rest only calls
+    what `gfx` exports.
+  - `client/src/world/`: the scenery (terrain, sky and weather, water, trees
+    and props, buildings, each zone's colors and light).
+  - `client/src/models/`: characters and creatures, their gear and animation.
+  - `client/src/vfx.rs`: spell effects.
+  - `client/src/render.rs` only gathers the names the game and menus use.
+  - Art files go in `client/assets/world/`, `client/assets/characters/` and
+    `client/assets/fx/`, and get built into the exe.
 - **Spell effects** (`client/src/vfx.rs`). Missiles look like their school
   (fireballs trailing flame, spinning frost shards, shadow bolts, arcane
   orbs, arrows and bullets) and burst where they land; melee abilities sweep
@@ -303,7 +318,7 @@ client/   The macroquad client: login, character select and creation,
   of light, drains pour a beam back to the caster, casters stand in a
   glowing rune circle, and auras show on whoever has them: shield bubbles,
   stun stars, roots, frost, flames, poison, bleeding and more.
-- **Models and animation.** Characters and creatures (`client/src/models.rs`)
+- **Models and animation.** Characters and creatures (`client/src/models/`)
   are posed each frame from what they're doing. Every class fights and casts
   in its own way: barbarians chop overhead with both hands, fighters slash
   behind a raised shield, monks jab and kick from a guard, rogues stab with

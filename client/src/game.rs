@@ -1331,7 +1331,6 @@ impl Game {
     fn draw_world(&mut self, scene: &Scene) {
         scene.draw(self.zone);
         let b = &mut self.batch;
-        b.light = render::theme(self.zone).light;
 
         if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
             let color = hud::reaction_color(&t.view, self.class);

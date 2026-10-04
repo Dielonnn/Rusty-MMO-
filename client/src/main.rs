@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod game;
+mod gfx;
 mod hud;
 mod menu;
 mod models;
@@ -9,6 +10,7 @@ mod panels;
 mod quests_ui;
 mod render;
 mod vfx;
+mod world;
 
 use macroquad::prelude::*;
 
