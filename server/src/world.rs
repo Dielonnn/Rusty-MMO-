@@ -82,6 +82,7 @@ pub struct PlayerData {
     pub money: u32,
     pub bags: Vec<Option<Stack>>,
     pub gear: [Option<ItemId>; 5],
+    pub weapon: Option<ItemId>,
     pub stats: Stats,
     pub combo_points: u8,
     pub auto_attack: bool,
@@ -312,9 +313,9 @@ impl Entity {
     }
 
     fn view(&self, viewer: EntityId) -> EntityView {
-        let (appearance, gear) = match &self.brain {
-            Brain::Player(p) => (p.appearance, p.gear),
-            Brain::Mob(_) => (Appearance::default(), [None; 5]),
+        let (appearance, gear, weapon) = match &self.brain {
+            Brain::Player(p) => (p.appearance, p.gear, p.weapon),
+            Brain::Mob(_) => (Appearance::default(), [None; 5], None),
             Brain::Npc(n) => (
                 Appearance {
                     race: n.race,
@@ -324,6 +325,7 @@ impl Entity {
                     hair_color: (self.id % 6) as u8,
                 },
                 [None; 5],
+                None,
             ),
         };
         let lootable = self
@@ -364,6 +366,7 @@ impl Entity {
             moving: self.moving,
             appearance,
             gear,
+            weapon,
             lootable,
         }
     }
@@ -580,7 +583,7 @@ impl World {
     pub fn add_player(&mut self, c: &Character) -> EntityId {
         let id = self.alloc_id();
         let pos = clamp_to_world(Vec3::from(c.pos));
-        let stats = gear_stats(&c.gear);
+        let stats = gear_stats(&c.gear, c.weapon);
         let ranks = talents::sanitize(&c.talents, c.level);
         let bonuses = Bonuses::new(c.class, &ranks);
         let max_hp =
@@ -614,6 +617,7 @@ impl World {
                     money: c.money,
                     bags: c.bags.clone(),
                     gear: c.gear,
+                    weapon: c.weapon,
                     stats,
                     combo_points: 0,
                     auto_attack: false,
@@ -652,6 +656,7 @@ impl World {
             yaw: e.yaw,
             bags: p.bags.clone(),
             gear: p.gear,
+            weapon: p.weapon,
             talents: p.talents,
             quests: p.quests.clone(),
         })
@@ -793,6 +798,11 @@ impl World {
             }
             ClientMsg::Unequip(slot) => {
                 if let Err(e) = self.unequip(id, slot) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::UnequipWeapon => {
+                if let Err(e) = self.unequip_weapon(id) {
                     self.error(id, e);
                 }
             }
@@ -1054,7 +1064,7 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         let level = e.level;
         let p = e.player_mut().unwrap();
-        p.stats = gear_stats(&p.gear);
+        p.stats = gear_stats(&p.gear, p.weapon);
         let max_hp =
             (p.class.max_hp(level) + p.stats.stamina * HP_PER_STAMINA) * (1.0 + p.bonuses.health);
         let frac = e.hp / e.max_hp.max(1.0);
@@ -1076,11 +1086,12 @@ impl World {
             .copied()
             .flatten()
             .ok_or("That slot is empty.")?;
-        let ItemKind::Armor { slot, .. } = item(item_id).kind else {
-            return Err("You can't wear that.");
-        };
         // Swap: what you were wearing goes where the new piece was.
-        let old = p.gear[slot.index()].replace(item_id);
+        let old = match item(item_id).kind {
+            ItemKind::Armor { slot, .. } => p.gear[slot.index()].replace(item_id),
+            ItemKind::Weapon { .. } => p.weapon.replace(item_id),
+            _ => return Err("You can't wear that."),
+        };
         p.bags[bag_slot] = old.map(|o| (o, 1));
         self.refresh_stats(id);
         Ok(())
@@ -1100,6 +1111,24 @@ impl World {
             .ok_or("Your bags are full.")?;
         p.bags[free] = Some((worn, 1));
         p.gear[slot.index()] = None;
+        self.refresh_stats(id);
+        Ok(())
+    }
+
+    fn unequip_weapon(&mut self, id: EntityId) -> Result<(), &'static str> {
+        let e = self.entities.get_mut(&id).unwrap();
+        if e.in_combat {
+            return Err("You can't change weapons in combat.");
+        }
+        let p = e.player_mut().unwrap();
+        let held = p.weapon.ok_or("You aren't holding a weapon.")?;
+        let free = p
+            .bags
+            .iter()
+            .position(Option::is_none)
+            .ok_or("Your bags are full.")?;
+        p.bags[free] = Some((held, 1));
+        p.weapon = None;
         self.refresh_stats(id);
         Ok(())
     }
@@ -2072,6 +2101,15 @@ impl World {
             let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
             items.push((pick, 1));
         }
+        let weapon = if kind.template().elite {
+            ELITE_WEAPON_DROP_CHANCE
+        } else {
+            WEAPON_DROP_CHANCE
+        };
+        if self.rng.chance(weapon) {
+            let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
+            items.push((pick, 1));
+        }
         let turn = self.loot_turn(&looters).map(|t| (t, LOOT_TURN_TIME));
         (!looters.is_empty()).then_some(Loot {
             money,
@@ -2338,7 +2376,9 @@ impl World {
         if ready && in_range && is_facing(e.pos, e.yaw, t.pos) {
             let bonus = e.bonuses().cloned().unwrap_or_default();
             let scale = level_scale(e.level) * e.power_mult() * (1.0 + bonus.damage);
-            let (amount, crit) = self.roll_with(aa.min, aa.max, scale, bonus.crit);
+            let weapon = e.player().map_or(0.0, |p| p.stats.damage);
+            let (amount, crit) =
+                self.roll_with(aa.min + weapon, aa.max + weapon, scale, bonus.crit);
             self.entities.get_mut(&id).unwrap().swing_timer = aa.interval;
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
         }
@@ -3691,6 +3731,96 @@ mod tests {
             (4..=40).contains(&greens),
             "{greens} greens from 400 wolves"
         );
+    }
+
+    #[test]
+    fn weapons_are_held_saved_and_put_away() {
+        let mut w = World::new(12);
+        let p = join(&mut w, "Swordy", Class::Fighter, 3);
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        add_item(&mut pd.bags, items::IRON_SWORD, 1);
+        add_item(&mut pd.bags, items::HEARTSTONE_GREATSWORD, 1);
+        let hp = w.entities[&p].max_hp;
+        w.equip(p, 0).unwrap();
+        w.equip(p, 1).unwrap();
+        // The greatsword swapped places with the sword.
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(pd.weapon, Some(items::HEARTSTONE_GREATSWORD));
+        assert_eq!(pd.bags[1], Some((items::IRON_SWORD, 1)));
+        assert_eq!(pd.stats.damage, 7.0);
+        assert!(w.entities[&p].max_hp > hp);
+        let snap = w.snapshot_for(p).unwrap();
+        let me = snap.entities.iter().find(|e| e.id == p).unwrap();
+        assert_eq!(me.weapon, Some(items::HEARTSTONE_GREATSWORD));
+        let saved = w.character(p).unwrap();
+        assert_eq!(saved.weapon, Some(items::HEARTSTONE_GREATSWORD));
+        w.handle(p, ClientMsg::UnequipWeapon);
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(pd.weapon, None);
+        assert_eq!(pd.stats.damage, 0.0);
+        assert_eq!(w.entities[&p].max_hp, hp);
+        assert_eq!(count_item(&pd.bags, items::HEARTSTONE_GREATSWORD), 1);
+    }
+
+    #[test]
+    fn weapons_add_auto_attack_damage() {
+        let dealt = |weapon: Option<ItemId>| {
+            let mut w = World::new(31);
+            let p = join(&mut w, "Hitter", Class::Barbarian, 1);
+            w.entities.get_mut(&p).unwrap().player_mut().unwrap().weapon = weapon;
+            w.refresh_stats(p);
+            let mob = engage(&mut w, p, MobKind::Boar);
+            sturdy(&mut w, mob);
+            w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+            w.handle(p, ClientMsg::StartAttack);
+            for _ in 0..(30.0 / DT) as usize {
+                let mpos = w.entities[&mob].pos;
+                w.entities.get_mut(&p).unwrap().pos = ground(mpos.x - 2.5, mpos.z);
+                face(&mut w, p, mob);
+                w.tick(DT);
+            }
+            w.entities[&mob].max_hp - w.entities[&mob].hp
+        };
+        let bare = dealt(None);
+        let armed = dealt(Some(items::HEARTSTONE_GREATSWORD));
+        assert!(bare > 0.0);
+        assert!(
+            armed > bare * 1.3,
+            "{armed} with a greatsword, {bare} without"
+        );
+    }
+
+    #[test]
+    fn fighters_drop_scrap_for_weapons_and_mobs_drop_weapons() {
+        let mut w = World::new(9);
+        let mut scrap = 0;
+        let mut weapons = 0;
+        for _ in 0..300 {
+            let loot = w.roll_loot(MobKind::Bandit, 3, vec![1]).unwrap();
+            for (id, n) in loot.items {
+                if id == items::IRON_SCRAP {
+                    scrap += n;
+                }
+                if WEAPON_DROPS.contains(&id) {
+                    weapons += 1;
+                }
+            }
+        }
+        assert!(scrap >= 100, "{scrap} scrap from 300 bandits");
+        assert!((1..=25).contains(&weapons), "{weapons} weapons");
+
+        let p = join(&mut w, "Smith", Class::Fighter, 1);
+        let sword = RECIPES
+            .iter()
+            .position(|r| r.result == items::IRON_SWORD)
+            .unwrap();
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        add_item(&mut pd.bags, items::IRON_SCRAP, 5);
+        add_item(&mut pd.bags, items::LIGHT_LEATHER, 2);
+        w.craft(p, sword).unwrap();
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(count_item(&pd.bags, items::IRON_SWORD), 1);
+        assert_eq!(count_item(&pd.bags, items::IRON_SCRAP), 0);
     }
 
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {

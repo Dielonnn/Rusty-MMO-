@@ -15,6 +15,16 @@ pub const BORDER: Color = Color::new(0.6, 0.48, 0.3, 1.0);
 pub const GOLD: Color = Color::new(1.0, 0.82, 0.25, 1.0);
 
 const SLOT: f32 = 44.0;
+/// Rows on the character sheet: the armor slots, then the weapon.
+pub const GEAR_ROWS: usize = Slot::ALL.len() + 1;
+
+/// What's in a row of the character sheet, and the row's name.
+pub fn gear_row(me: &EntityView, i: usize) -> (Option<ItemId>, &'static str) {
+    match Slot::ALL.get(i) {
+        Some(slot) => (me.gear[i], slot.name()),
+        None => (me.weapon, "Weapon"),
+    }
+}
 
 /// Where everything goes on screen this frame.
 pub struct Layout {
@@ -154,9 +164,9 @@ impl Layout {
         } else {
             Vec::new()
         };
-        let char_rect = Rect::new(16.0, 150.0, 280.0, 330.0);
+        let char_rect = Rect::new(16.0, 150.0, 280.0, 380.0);
         let gear_slots = if windows.character {
-            (0..5)
+            (0..GEAR_ROWS)
                 .map(|i| {
                     Rect::new(
                         char_rect.x + 12.0,
@@ -1160,6 +1170,20 @@ pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
             }
             lines.push((format!("Use: restores {}", what.join(" and ")), green));
         }
+        ItemKind::Weapon {
+            damage,
+            stamina,
+            power,
+        } => {
+            lines.push(("Weapon".into(), grey));
+            lines.push((format!("+{damage} Weapon Damage"), WHITE));
+            if stamina > 0.0 {
+                lines.push((format!("+{stamina} Stamina"), green));
+            }
+            if power > 0.0 {
+                lines.push((format!("+{power} Power"), green));
+            }
+        }
         ItemKind::Armor {
             slot,
             armor,
@@ -1201,6 +1225,8 @@ fn item_tooltips(game: &Game, layout: &Layout) {
                 ));
             } else if matches!(item(*id).kind, ItemKind::Armor { .. }) {
                 lines.push(("Click to wear".into(), hint));
+            } else if matches!(item(*id).kind, ItemKind::Weapon { .. }) {
+                lines.push(("Click to hold".into(), hint));
             } else if matches!(item(*id).kind, ItemKind::Potion { .. }) {
                 lines.push(("Right-click to drink".into(), hint));
             }
@@ -1216,7 +1242,7 @@ fn item_tooltips(game: &Game, layout: &Layout) {
     let Some(me) = game.my_view() else { return };
     for (i, r) in layout.gear_slots.iter().enumerate() {
         if r.contains(mouse)
-            && let Some(id) = me.gear[i]
+            && let (Some(id), _) = gear_row(me, i)
         {
             let mut lines = item_lines(id);
             lines.push(("Click to take off".into(), Color::new(0.6, 0.8, 1.0, 1.0)));
@@ -1316,8 +1342,8 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
             1.0,
             Color::new(0.4, 0.33, 0.22, 1.0),
         );
-        let name = Slot::ALL[i].name();
-        match me.gear[i] {
+        let (worn, name) = gear_row(me, i);
+        match worn {
             Some(id) => {
                 item_icon(icon, id, 1);
                 text(
@@ -1347,7 +1373,7 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
         }
     }
     let s = game.me.stats;
-    let y = r.y + 40.0 + 5.0 * (SLOT + 6.0) + 8.0;
+    let y = r.y + 40.0 + GEAR_ROWS as f32 * (SLOT + 6.0) + 8.0;
     text(
         &format!("Health {}    Armor {}", me.max_hp, s.armor),
         r.x + 14.0,
@@ -1356,7 +1382,10 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
         WHITE,
     );
     text(
-        &format!("Stamina +{}    Power +{}%", s.stamina, s.power),
+        &format!(
+            "Stamina +{}    Power +{}%    Weapon +{}",
+            s.stamina, s.power, s.damage
+        ),
         r.x + 14.0,
         y + 20.0,
         17.0,
