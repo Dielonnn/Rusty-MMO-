@@ -13,7 +13,9 @@ Two people (each with their own Claude) work on this repository. So:
   branch.
 - **Never merge.** Don't merge pull requests, enable auto-merge, or merge,
   rebase or fast-forward anything into `main`. A person reviews and merges.
-- Only open a pull request when the user asks for one.
+- **Always open a pull request** into `main` when the work is done and pushed,
+  and post its link. That's how the work reaches `main`: a person reviews it
+  and clicks Merge.
 - Only push to branches you created in this session. Never force-push, rebase
   or rewrite someone else's branch.
 - Before starting, check what's new on `main` and on open branches, so you
@@ -23,6 +25,10 @@ Two people (each with their own Claude) work on this repository. So:
 
 Before committing, run `cargo fmt --all`, `cargo clippy --workspace --all-targets`
 (keep it warning-free) and `cargo test --workspace`.
+
+GitHub CI (`.github/workflows/ci.yml`) runs the same checks on every pull request
+and on `main`. Run them locally anyway so a broken branch never gets pushed,
+and if CI goes red on your pull request, fix it before handing it over.
 
 ## Releases
 
