@@ -1,7 +1,7 @@
 //! Messages between the client and the server.
 //!
-//! A session goes: `Hello` (account name) -> character list -> create, delete
-//! or `EnterWorld` -> playing -> `Logout` (back to the character list).
+//! A session goes: `Hello` (account name and password) -> character list ->
+//! create, delete or `EnterWorld` -> playing -> `Logout` (back to the character list).
 //!
 //! The server is authoritative for everything except the player's own
 //! movement: clients move their character locally and report the result,
@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -30,6 +30,10 @@ pub enum ClientMsg {
     Hello {
         version: u32,
         account: String,
+        /// Checked against the account's password. An account with no
+        /// password yet (a new one) takes this one. Solo and sandbox
+        /// servers ignore it.
+        password: String,
     },
     CreateCharacter {
         name: String,

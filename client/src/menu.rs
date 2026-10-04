@@ -186,11 +186,14 @@ pub enum Mode {
 #[derive(Clone, Copy, PartialEq)]
 enum Field {
     Account,
+    Password,
     Address,
 }
 
 pub struct Login {
     account: String,
+    /// Only for Join; never saved.
+    password: String,
     address: String,
     focus: Field,
     message: Option<String>,
@@ -205,6 +208,7 @@ impl Login {
         let (account, address) = load_settings();
         Self {
             account,
+            password: String::new(),
             address,
             focus: Field::Account,
             message: None,
@@ -226,30 +230,32 @@ impl Login {
         let (w, h) = (screen_width(), screen_height());
         let p = Rect::new(
             (w - 440.0) / 2.0,
-            ((h - 440.0) / 2.0).max(10.0),
+            ((h - 516.0) / 2.0).max(10.0),
             440.0,
-            440.0,
+            516.0,
         );
         let inner = p.x + 24.0;
         let iw = p.w - 48.0;
         let account_box = Rect::new(inner, p.y + 132.0, iw, 36.0);
-        let address_box = Rect::new(inner, p.y + 212.0, iw, 36.0);
-        let solo = Rect::new(inner, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
-        let join = Rect::new(inner + iw * 0.5 + 6.0, p.y + 270.0, iw * 0.5 - 6.0, 44.0);
-        let sandbox = Rect::new(inner, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
-        let quit = Rect::new(inner + iw * 0.5 + 6.0, p.y + 324.0, iw * 0.5 - 6.0, 40.0);
+        let password_box = Rect::new(inner, p.y + 208.0, iw, 36.0);
+        let address_box = Rect::new(inner, p.y + 284.0, iw, 36.0);
+        let solo = Rect::new(inner, p.y + 342.0, iw * 0.5 - 6.0, 44.0);
+        let join = Rect::new(inner + iw * 0.5 + 6.0, p.y + 342.0, iw * 0.5 - 6.0, 44.0);
+        let sandbox = Rect::new(inner, p.y + 396.0, iw * 0.5 - 6.0, 40.0);
+        let quit = Rect::new(inner + iw * 0.5 + 6.0, p.y + 396.0, iw * 0.5 - 6.0, 40.0);
 
         match self.focus {
             Field::Account => type_into(&mut self.account, 24, |c| !c.is_control()),
+            Field::Password => type_into(&mut self.password, 64, |c| !c.is_control()),
             Field::Address => type_into(&mut self.address, 64, |c| {
                 !c.is_control() && !c.is_whitespace()
             }),
         }
         if is_key_pressed(KeyCode::Tab) {
-            self.focus = if self.focus == Field::Account {
-                Field::Address
-            } else {
-                Field::Account
+            self.focus = match self.focus {
+                Field::Account => Field::Password,
+                Field::Password => Field::Address,
+                Field::Address => Field::Account,
             };
         }
         let mut start = None;
@@ -257,6 +263,8 @@ impl Login {
             let m = mouse();
             if account_box.contains(m) {
                 self.focus = Field::Account;
+            } else if password_box.contains(m) {
+                self.focus = Field::Password;
             } else if address_box.contains(m) {
                 self.focus = Field::Address;
             } else if solo.contains(m) {
@@ -307,6 +315,20 @@ impl Login {
             address_box.y - 8.0,
             18.0,
             WHITE,
+        );
+        text(
+            "Password (for Join)",
+            password_box.x,
+            password_box.y - 8.0,
+            18.0,
+            WHITE,
+        );
+        input_box(
+            password_box,
+            &"*".repeat(self.password.chars().count()),
+            "New accounts pick one here",
+            self.focus == Field::Password,
+            self.time,
         );
         input_box(
             address_box,
@@ -378,6 +400,11 @@ impl Login {
         conn.send(&ClientMsg::Hello {
             version: PROTOCOL_VERSION,
             account: account.clone(),
+            password: if mode == Mode::Online {
+                self.password.clone()
+            } else {
+                String::new()
+            },
         })
         .map_err(|e| format!("Couldn't talk to {addr}: {e}"))?;
         Ok(Characters::new(conn, account, mode))

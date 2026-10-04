@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io::{self, ErrorKind};
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,19 +13,34 @@ use shared::net::Connection;
 use shared::protocol::*;
 use shared::world::VIEW_DISTANCE;
 
-use crate::TICK_RATE;
 use crate::store::{Store, normalize_account};
 use crate::world::{Audience, World};
+use crate::{TICK_RATE, password};
 
 /// Connections that haven't said hello by now are dropped.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How often characters in the world are written to the save file.
 const AUTOSAVE_INTERVAL: f32 = 5.0;
+/// Password checks are slow on purpose, so they run off the tick thread,
+/// and only this many at once.
+const MAX_PENDING_LOGINS: usize = 4;
+
+/// The result of checking a password, sent back from its thread.
+enum LoginCheck {
+    Ok {
+        account: String,
+        /// Set when the account had no password: this one becomes it.
+        new_hash: Option<String>,
+    },
+    WrongPassword,
+}
 
 struct Client {
     conn: Connection,
     addr: SocketAddr,
     account: Option<String>,
+    /// A password being checked.
+    login: Option<Receiver<LoginCheck>>,
     player: Option<EntityId>,
     connected_at: Instant,
 }
@@ -38,6 +54,9 @@ pub struct Server {
     since_save: f32,
     /// Print connections and disconnections.
     pub verbose: bool,
+    /// Accounts need passwords. Off for the solo and sandbox servers,
+    /// which only this computer can reach.
+    pub passwords: bool,
 }
 
 impl Server {
@@ -55,6 +74,7 @@ impl Server {
             store,
             since_save: 0.0,
             verbose: true,
+            passwords: true,
         })
     }
 
@@ -117,6 +137,7 @@ impl Server {
                                 conn,
                                 addr,
                                 account: None,
+                                login: None,
                                 player: None,
                                 connected_at: Instant::now(),
                             },
@@ -137,6 +158,12 @@ impl Server {
         let mut dropped = Vec::new();
         let ids: Vec<u64> = self.clients.keys().copied().collect();
         for cid in ids {
+            if self.clients[&cid].login.is_some() {
+                if !self.finish_login(cid) {
+                    dropped.push(cid);
+                }
+                continue;
+            }
             // Cap messages per tick so one client can't stall the server.
             for _ in 0..64 {
                 let client = self.clients.get_mut(&cid).unwrap();
@@ -154,13 +181,100 @@ impl Server {
                 }
             }
             let client = &self.clients[&cid];
-            if client.account.is_none() && client.connected_at.elapsed() > HELLO_TIMEOUT {
+            if client.account.is_none()
+                && client.login.is_none()
+                && client.connected_at.elapsed() > HELLO_TIMEOUT
+            {
                 dropped.push(cid);
             }
         }
         for cid in dropped {
             self.disconnect(cid, "disconnected");
         }
+    }
+
+    /// Checks a password on its own thread; `finish_login` picks up the
+    /// answer. An account with no password yet takes this one: that's how
+    /// new accounts are made, and how accounts saved before passwords
+    /// existed get one.
+    fn start_login(&mut self, cid: u64, account: String, password: String) -> bool {
+        let pending = self.clients.values().filter(|c| c.login.is_some()).count();
+        let existing = self.store.password_hash(&account).map(str::to_owned);
+        let client = self.clients.get_mut(&cid).unwrap();
+        let refuse = if pending >= MAX_PENDING_LOGINS {
+            Some("The server is busy logging people in. Try again in a moment.".to_string())
+        } else if existing.is_none() {
+            password::check_new(&password).err()
+        } else {
+            None
+        };
+        if let Some(reason) = refuse {
+            let _ = client.conn.send(&ServerMsg::Rejected(reason));
+            return false;
+        }
+        let (tx, rx) = mpsc::channel();
+        let spawned = thread::Builder::new().name("login".into()).spawn(move || {
+            let check = match existing {
+                Some(hash) if password::verify(&password, &hash) => LoginCheck::Ok {
+                    account,
+                    new_hash: None,
+                },
+                Some(_) => LoginCheck::WrongPassword,
+                None => LoginCheck::Ok {
+                    new_hash: Some(password::hash(&password)),
+                    account,
+                },
+            };
+            let _ = tx.send(check);
+        });
+        if spawned.is_err() {
+            return false;
+        }
+        client.login = Some(rx);
+        true
+    }
+
+    /// Lets a client in once its password checks out. Returns false to drop
+    /// the connection.
+    fn finish_login(&mut self, cid: u64) -> bool {
+        let client = self.clients.get_mut(&cid).unwrap();
+        let check = match client.login.as_ref().unwrap().try_recv() {
+            Ok(check) => check,
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => return false,
+        };
+        client.login = None;
+        let (account, new_hash) = match check {
+            LoginCheck::Ok { account, new_hash } => (account, new_hash),
+            LoginCheck::WrongPassword => {
+                let _ = client.conn.send(&ServerMsg::Rejected(
+                    "Wrong password for that account.".into(),
+                ));
+                return false;
+            }
+        };
+        if let Some(hash) = new_hash {
+            // Someone else may have claimed the name while this was hashing.
+            if self.store.password_hash(&account).is_some() {
+                let _ = client.conn.send(&ServerMsg::Rejected(
+                    "That account was just taken. Try again.".into(),
+                ));
+                return false;
+            }
+            let addr = client.addr;
+            let what = if self.store.has_characters(&account) {
+                "set a password for account"
+            } else {
+                "created account"
+            };
+            self.store.set_password_hash(&account, hash);
+            self.save_now();
+            self.log(format!("{addr} {what} {account}"));
+        }
+        let client = self.clients.get_mut(&cid).unwrap();
+        client.account = Some(account);
+        self.send_characters(cid);
+        true
     }
 
     fn send_characters(&mut self, cid: u64) {
@@ -181,7 +295,15 @@ impl Server {
     fn handle(&mut self, cid: u64, msg: ClientMsg) -> bool {
         let client = self.clients.get_mut(&cid).unwrap();
         match (&client.account, client.player, msg) {
-            (None, _, ClientMsg::Hello { version, account }) => {
+            (
+                None,
+                _,
+                ClientMsg::Hello {
+                    version,
+                    account,
+                    password,
+                },
+            ) => {
                 if version != PROTOCOL_VERSION {
                     let reason = format!(
                         "Version mismatch: the server speaks protocol {PROTOCOL_VERSION}, you have {version}. Update your game."
@@ -189,16 +311,19 @@ impl Server {
                     let _ = client.conn.send(&ServerMsg::Rejected(reason));
                     return false;
                 }
-                match normalize_account(&account) {
-                    Ok(account) => {
-                        client.account = Some(account);
-                        self.send_characters(cid);
-                    }
+                let account = match normalize_account(&account) {
+                    Ok(account) => account,
                     Err(e) => {
                         let _ = client.conn.send(&ServerMsg::Rejected(e.to_string()));
                         return false;
                     }
+                };
+                if !self.passwords {
+                    client.account = Some(account);
+                    self.send_characters(cid);
+                    return true;
                 }
+                return self.start_login(cid, account, password);
             }
             (None, _, _) => {}
             (
@@ -332,6 +457,7 @@ pub fn spawn_local(save_path: PathBuf, sandbox: bool) -> io::Result<SocketAddr> 
     let store = Store::open(save_path)?;
     let mut server = Server::bind("127.0.0.1:0", store)?;
     server.verbose = false;
+    server.passwords = false;
     server.world.sandbox = sandbox;
     let addr = server.local_addr()?;
     thread::Builder::new()
@@ -366,14 +492,88 @@ mod tests {
     }
 
     fn connect(server: &Server, account: &str) -> Connection {
+        connect_with(server, account, "password")
+    }
+
+    fn connect_with(server: &Server, account: &str, password: &str) -> Connection {
         let addr = server.local_addr().unwrap().to_string();
         let mut conn = Connection::connect(&addr, DEFAULT_PORT).unwrap();
         conn.send(&ClientMsg::Hello {
             version: PROTOCOL_VERSION,
             account: account.into(),
+            password: password.into(),
         })
         .unwrap();
         conn
+    }
+
+    /// Connects and returns the first answer: the character list or a
+    /// rejection.
+    fn login(server: &mut Server, account: &str, password: &str) -> ServerMsg {
+        let mut conn = connect_with(server, account, password);
+        let got = pump(server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_) | ServerMsg::Rejected(_))
+        });
+        got.into_iter().last().unwrap()
+    }
+
+    #[test]
+    fn passwords() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        // A new account needs a long enough password, and takes it.
+        assert!(matches!(
+            login(&mut server, "Ann", "abc"),
+            ServerMsg::Rejected(_)
+        ));
+        assert!(server.store.password_hash("ann").is_none());
+        assert!(matches!(
+            login(&mut server, "Ann", "secret1"),
+            ServerMsg::Characters(_)
+        ));
+        let hash = server.store.password_hash("ann").unwrap();
+        assert!(!hash.contains("secret1"));
+        // After that only the right password gets in.
+        assert!(matches!(
+            login(&mut server, "ann", "secret2"),
+            ServerMsg::Rejected(e) if e.contains("Wrong password")
+        ));
+        assert!(matches!(
+            login(&mut server, "ANN", "secret1"),
+            ServerMsg::Characters(_)
+        ));
+    }
+
+    #[test]
+    fn old_accounts_take_their_first_password() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        // Saved before passwords existed.
+        server
+            .store
+            .create("ann", "Aria", Class::Mage, Appearance::default())
+            .unwrap();
+        assert!(matches!(
+            login(&mut server, "ann", "secret1"),
+            ServerMsg::Characters(list) if list.len() == 1
+        ));
+        assert!(server.store.password_hash("ann").is_some());
+        assert!(matches!(
+            login(&mut server, "ann", "other12"),
+            ServerMsg::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn local_servers_skip_passwords() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        server.passwords = false;
+        assert!(matches!(
+            login(&mut server, "ann", ""),
+            ServerMsg::Characters(_)
+        ));
+        assert!(server.store.password_hash("ann").is_none());
     }
 
     #[test]
@@ -458,6 +658,7 @@ mod tests {
         conn.send(&ClientMsg::Hello {
             version: PROTOCOL_VERSION + 1,
             account: "old".into(),
+            password: "password".into(),
         })
         .unwrap();
         let mut rejected = false;
