@@ -5,6 +5,33 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v5.0
+
+Commit: the one titled "v5.0: quests, green drops, spell effects, map and model detail".
+
+- **Quests**: a quest giver in every town with three quests each: a hunt
+  (kill eight of the area's hunters), a crafting job (craft a piece of armor
+  and hand it in) and an elite kill. They pay money, experience and green
+  gear. "!" and "?" markers over the quest giver, on the minimap and on the
+  world map; a quest tracker on screen; a quest log (`L`); quests are saved
+- **Green gear**: ten new uncommon pieces (a sturdy and an arcane one for
+  each slot), better than crafted leather and linen but weaker than the
+  blue Heartstone Chestguard. Any mob may drop one; elites usually do
+- **Goblin and gnome areas aren't grid-like any more**: their hills had
+  ridges laid out in a regular grid, and the ground's colors in every area
+  made a checkerboard; both now come from smooth, irregular noise. Their
+  towns were rebuilt as an untidy goblin sprawl and huddled gnome hamlets,
+  and the trees clump into irregular woods everywhere
+- **Spell effects**: missiles shaped by their school, impact bursts, melee
+  slashes, shockwaves, pillars of light, healing spirals, drain beams,
+  casting circles, and visible auras (shields, stuns, roots, frost, flames,
+  poison, bleeding, buffs and curses)
+- **More detail, in the classic MMO style**: big pauldrons for most classes
+  and many enemies, chunkier hands and boots, armored giants; the world map
+  is now inked on parchment with icons for camps, beasts and elites, and the
+  minimap shows the land itself in a gold frame
+- Protocol version 5: v4 clients and servers can't connect to v5 ones
+
 ## v4.0
 
 Commit: the one titled "v4.0: talents, sandbox mode, world map, new layouts and animations".

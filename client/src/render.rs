@@ -1197,11 +1197,10 @@ pub fn draw_sky(cam: &Camera3D, zone: Zone, time: f32, project: impl Fn(Vec3) ->
     }
 }
 
+/// Ground color variation in about `-0.5..0.5`: patches of all sizes, with
+/// no grid to them.
 fn noise(x: f32, z: f32) -> f32 {
-    ((x * 0.37).sin() * (z * 0.41).cos()
-        + (x * 0.11 + z * 0.13).sin()
-        + (x * 0.023 - z * 0.031).sin())
-        / 3.0
+    (fbm(x * 0.06, z * 0.06, 3, 3) - 0.5) * 1.4
 }
 
 /// A zone's ground colors.

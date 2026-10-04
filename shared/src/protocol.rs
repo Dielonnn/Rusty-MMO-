@@ -11,11 +11,12 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Race, Slot};
+use crate::quests::{QuestId, QuestLog};
 use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -80,6 +81,18 @@ pub enum ClientMsg {
     ResetTalents,
     /// A sandbox server's cheats. Refused on normal servers.
     Sandbox(SandboxCmd),
+    /// Take a quest from a quest giver.
+    AcceptQuest {
+        giver: EntityId,
+        quest: QuestId,
+    },
+    /// Hand in a finished quest to its quest giver.
+    TurnInQuest {
+        giver: EntityId,
+        quest: QuestId,
+    },
+    /// Give up a quest (its progress is lost).
+    AbandonQuest(QuestId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,9 +193,16 @@ pub enum EntityKind {
     },
     /// A friendly townsperson who trades.
     Merchant(Race),
+    /// A friendly townsperson who hands out quests.
+    QuestGiver(Race),
 }
 
 impl EntityKind {
+    /// Townspeople: merchants and quest givers.
+    pub fn is_npc(self) -> bool {
+        matches!(self, EntityKind::Merchant(_) | EntityKind::QuestGiver(_))
+    }
+
     pub fn is_player(self) -> bool {
         matches!(self, EntityKind::Player(_))
     }
@@ -236,6 +256,7 @@ pub struct SelfView {
     pub sandbox: bool,
     /// Sandbox god mode is on.
     pub god: bool,
+    pub quests: QuestLog,
 }
 
 /// Totals from worn armor.
@@ -310,6 +331,20 @@ pub enum GameEvent {
         item: ItemId,
         count: u16,
         money: u32,
+    },
+    /// You took a quest.
+    QuestAccepted(QuestId),
+    /// You killed something a quest wants.
+    QuestProgress {
+        quest: QuestId,
+        progress: u16,
+    },
+    /// You handed in a quest and got its rewards.
+    QuestComplete {
+        quest: QuestId,
+        xp: u32,
+        money: u32,
+        reward: Option<ItemId>,
     },
     /// Something you tried didn't work ("Out of range.").
     Error(String),

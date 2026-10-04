@@ -111,25 +111,84 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
         screen_height(),
         Color::new(0.0, 0.0, 0.0, 0.55),
     );
-    panel(Rect::new(r.x - 12.0, r.y - 44.0, r.w + 24.0, r.h + 56.0));
+    // A parchment frame with a carved title plate.
+    let frame = Rect::new(r.x - 18.0, r.y - 52.0, r.w + 36.0, r.h + 70.0);
+    draw_rectangle(
+        frame.x,
+        frame.y,
+        frame.w,
+        frame.h,
+        Color::new(0.33, 0.22, 0.12, 1.0),
+    );
+    draw_rectangle(
+        frame.x + 5.0,
+        frame.y + 5.0,
+        frame.w - 10.0,
+        frame.h - 10.0,
+        Color::new(0.82, 0.7, 0.5, 1.0),
+    );
+    draw_rectangle_lines(
+        frame.x + 5.0,
+        frame.y + 5.0,
+        frame.w - 10.0,
+        frame.h - 10.0,
+        2.0,
+        Color::new(0.55, 0.4, 0.22, 1.0),
+    );
+    for (x, y) in [
+        (frame.x, frame.y),
+        (frame.right(), frame.y),
+        (frame.x, frame.bottom()),
+        (frame.right(), frame.bottom()),
+    ] {
+        draw_circle(x, y, 10.0, Color::new(0.85, 0.68, 0.3, 1.0));
+        draw_circle(x, y, 6.0, Color::new(0.4, 0.28, 0.14, 1.0));
+    }
+    let plate = Rect::new(r.x + r.w / 2.0 - 230.0, frame.y + 10.0, 460.0, 32.0);
+    draw_rectangle(
+        plate.x,
+        plate.y,
+        plate.w,
+        plate.h,
+        Color::new(0.3, 0.2, 0.1, 0.95),
+    );
+    draw_rectangle_lines(
+        plate.x,
+        plate.y,
+        plate.w,
+        plate.h,
+        2.0,
+        Color::new(0.85, 0.68, 0.3, 1.0),
+    );
     text_centered(
         &format!("{}  -  {}", zone.name(), zone.subtitle()),
         r.x + r.w / 2.0,
-        r.y - 16.0,
-        24.0,
+        plate.y + 23.0,
+        22.0,
         GOLD,
     );
+    // The land, inked onto the parchment.
     draw_texture_ex(
         tex,
         r.x,
         r.y,
-        WHITE,
+        Color::new(1.0, 0.94, 0.82, 1.0),
         DrawTextureParams {
             dest_size: Some(vec2(r.w, r.h)),
             ..Default::default()
         },
     );
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BORDER);
+    // Faded, ragged edges.
+    for k in 0..6 {
+        let a = 0.22 - k as f32 * 0.035;
+        let w = k as f32 * 4.0;
+        let c = Color::new(0.82, 0.7, 0.5, a.max(0.0) * 3.0);
+        draw_rectangle(r.x, r.y + w, r.w, 4.0, c);
+        draw_rectangle(r.x, r.bottom() - w - 4.0, r.w, 4.0, c);
+        draw_rectangle(r.x + w, r.y, 4.0, r.h, c);
+        draw_rectangle(r.right() - w - 4.0, r.y, 4.0, r.h, c);
+    }
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(0.45, 0.32, 0.18, 1.0));
     let center = zone.center();
     let to_screen = |p: Vec2| {
         let rel = p - center;
@@ -142,7 +201,39 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
     let layout = zone.layout();
     let mobs = MobKind::for_zone(zone);
     let town = to_screen(center);
-    text_centered(zone.town_name(), town.x, town.y - 22.0, 20.0, WHITE);
+    // Quest objectives: yellow areas where what you hunt lives.
+    let hunting: Vec<MobKind> = game
+        .me
+        .quests
+        .active
+        .iter()
+        .filter_map(|(id, p)| match shared::quests::quest(*id).goal {
+            shared::quests::Goal::Kill { kind, count } if *p < count => Some(kind),
+            _ => None,
+        })
+        .collect();
+    for site in &layout.sites {
+        for sp in &site.spawns {
+            if hunting.contains(&mobs[sp.role]) {
+                let p = to_screen(zone.to_world(site.center + sp.offset));
+                let rad = (sp.radius + 6.0) / (2.0 * WORLD_HALF_SIZE) * r.w;
+                draw_circle(p.x, p.y, rad, Color::new(1.0, 0.85, 0.2, 0.25));
+                draw_circle_lines(p.x, p.y, rad, 2.0, Color::new(1.0, 0.85, 0.2, 0.8));
+            }
+        }
+    }
+    // The town: a shield with its name on a banner.
+    draw_circle(town.x, town.y, 10.0, Color::new(0.3, 0.2, 0.1, 1.0));
+    draw_circle(town.x, town.y, 7.0, Color::new(0.85, 0.68, 0.3, 1.0));
+    let tw = text_width(zone.town_name(), 20.0) + 16.0;
+    draw_rectangle(
+        town.x - tw / 2.0,
+        town.y - 40.0,
+        tw,
+        24.0,
+        Color::new(0.25, 0.17, 0.08, 0.85),
+    );
+    text_centered(zone.town_name(), town.x, town.y - 22.0, 20.0, GOLD);
     for site in &layout.sites {
         let p = to_screen(zone.to_world(site.center));
         let spawn = site.spawns[0];
@@ -158,13 +249,65 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
             shared::layout::SiteKind::Camp => format!("{name} camp ({levels})"),
             shared::layout::SiteKind::Beasts => format!("{} ({levels})", plural(name)),
         };
-        draw_circle(p.x, p.y, 4.0, Color::new(0.9, 0.3, 0.2, 0.9));
+        match site.kind {
+            shared::layout::SiteKind::Ruins => {
+                // A skull for the elite.
+                draw_circle(p.x, p.y, 9.0, Color::new(0.15, 0.1, 0.08, 1.0));
+                draw_circle(p.x, p.y - 1.0, 6.0, Color::new(0.95, 0.9, 0.8, 1.0));
+                draw_circle(p.x - 2.5, p.y - 1.5, 1.6, BLACK);
+                draw_circle(p.x + 2.5, p.y - 1.5, 1.6, BLACK);
+                draw_rectangle(
+                    p.x - 3.0,
+                    p.y + 3.0,
+                    6.0,
+                    3.0,
+                    Color::new(0.95, 0.9, 0.8, 1.0),
+                );
+            }
+            shared::layout::SiteKind::Camp => {
+                // A tent.
+                draw_triangle(
+                    vec2(p.x, p.y - 8.0),
+                    vec2(p.x - 8.0, p.y + 5.0),
+                    vec2(p.x + 8.0, p.y + 5.0),
+                    Color::new(0.55, 0.25, 0.15, 1.0),
+                );
+                draw_triangle_lines(
+                    vec2(p.x, p.y - 8.0),
+                    vec2(p.x - 8.0, p.y + 5.0),
+                    vec2(p.x + 8.0, p.y + 5.0),
+                    1.5,
+                    BLACK,
+                );
+            }
+            shared::layout::SiteKind::Beasts => {
+                // A paw print.
+                draw_circle(p.x, p.y + 1.5, 3.5, Color::new(0.35, 0.22, 0.12, 0.9));
+                for k in 0..4 {
+                    let a = -2.4 + k as f32 * 0.55;
+                    draw_circle(
+                        p.x + a.cos() * 5.5,
+                        p.y + a.sin() * 5.5,
+                        1.6,
+                        Color::new(0.35, 0.22, 0.12, 0.9),
+                    );
+                }
+            }
+        }
+        let lw = text_width(&label, 15.0);
+        draw_rectangle(
+            p.x - lw / 2.0 - 4.0,
+            p.y - 25.0,
+            lw + 8.0,
+            18.0,
+            Color::new(0.2, 0.13, 0.06, 0.6),
+        );
         text_centered(
             &label,
             p.x,
-            p.y - 8.0,
+            p.y - 11.0,
             15.0,
-            Color::new(1.0, 0.9, 0.75, 1.0),
+            Color::new(1.0, 0.92, 0.75, 1.0),
         );
     }
     // Everyone you can see.
@@ -179,6 +322,21 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
         let c = match e.view.kind {
             EntityKind::Player(class) => class_color(class),
             EntityKind::Merchant(_) => GOLD,
+            EntityKind::QuestGiver(_) => {
+                if let Some(m) =
+                    crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
+                {
+                    let s = if m == crate::quests_ui::Marker::Ready {
+                        "?"
+                    } else {
+                        "!"
+                    };
+                    text_centered(s, p.x + 1.0, p.y + 9.0, 28.0, BLACK);
+                    text_centered(s, p.x, p.y + 8.0, 28.0, Color::new(1.0, 0.85, 0.1, 1.0));
+                    continue;
+                }
+                GOLD
+            }
             _ => reaction_color(&e.view, game.class),
         };
         draw_circle(p.x, p.y, 3.0, c);
@@ -622,4 +780,53 @@ pub fn minimap_compass(center: Vec2, radius: f32, cam_yaw: f32) {
         };
         text_centered(label, p.x, p.y + 5.0, 16.0, color);
     }
+}
+
+/// The land under the minimap: the zone's map picture, cut to a circle and
+/// turned with the camera.
+pub fn minimap_terrain(
+    tex: &Texture2D,
+    zone: Zone,
+    center: Vec2,
+    radius: f32,
+    me: Vec3,
+    cam_yaw: f32,
+    range: f32,
+) {
+    use macroquad::models::{Mesh, Vertex, draw_mesh};
+    let f = vec2(cam_yaw.sin(), cam_yaw.cos());
+    let r = vec2(-f.y, f.x);
+    let zc = zone.center();
+    let scale = range / radius;
+    let uv = |m: Vec2| {
+        // Inverse of the minimap's projection: screen offset to world.
+        let rel = (r * m.x - f * m.y) * scale;
+        let w = vec2(me.x, me.z) + rel;
+        vec2(
+            (WORLD_HALF_SIZE - (w.x - zc.x)) / (2.0 * WORLD_HALF_SIZE),
+            (WORLD_HALF_SIZE - (w.y - zc.y)) / (2.0 * WORLD_HALF_SIZE),
+        )
+    };
+    let sides = 48;
+    let mut vertices = Vec::with_capacity(sides + 1);
+    let vertex = |m: Vec2| Vertex {
+        position: vec3(center.x + m.x, center.y + m.y, 0.0),
+        uv: uv(m),
+        color: [255, 255, 255, 240],
+        normal: Vec4::ZERO,
+    };
+    vertices.push(vertex(Vec2::ZERO));
+    for i in 0..sides {
+        let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+        vertices.push(vertex(vec2(a.cos(), a.sin()) * radius));
+    }
+    let mut indices = Vec::with_capacity(sides * 3);
+    for i in 0..sides as u16 {
+        indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % sides as u16]);
+    }
+    draw_mesh(&Mesh {
+        vertices,
+        indices,
+        texture: Some(tex.clone()),
+    });
 }

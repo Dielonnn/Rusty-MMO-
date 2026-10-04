@@ -118,6 +118,8 @@ impl Prop {
 
 /// Where the merchant stands in every town (local coordinates).
 pub const MERCHANT_SPOT: Vec2 = Vec2::new(6.4, 4.8);
+/// Where the quest giver stands.
+pub const QUEST_SPOT: Vec2 = Vec2::new(-5.0, -4.5);
 
 /// A tiny deterministic random number generator for placing scenery.
 pub struct Scatter(pub u32);
@@ -386,7 +388,7 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         };
         // Clump trees into woods: skip most of them in open meadows.
         let tree = matches!(kind, Tree | Conifer | DeadTree);
-        let forest = ((x * 0.02).sin() + (z * 0.025).cos()) * 0.5;
+        let forest = (fbm(x * 0.018, z * 0.018, 2, 11 + zone.index() as u32) - 0.5) * 2.0;
         if tree && forest < -0.1 && rng.unit() < 0.8 {
             continue;
         }
@@ -568,6 +570,35 @@ mod tests {
                 !colliders.blocked(zone.ground_local(MERCHANT_SPOT), 0.4),
                 "{zone:?} merchant"
             );
+            assert!(
+                !colliders.blocked(zone.ground_local(QUEST_SPOT), 0.4),
+                "{zone:?} quest giver"
+            );
+        }
+    }
+
+    #[test]
+    fn houses_stand_clear_of_the_rest_of_town() {
+        for zone in Zone::ALL {
+            let all = props(zone);
+            let reach = |p: &Prop| match p.footprint() {
+                Some(Shape::Circle(r)) => r,
+                Some(Shape::Box(x, z)) => x.min(z),
+                None => 0.0,
+            };
+            for h in all.iter().filter(|p| p.kind == PropKind::House) {
+                for o in &all {
+                    if std::ptr::eq(o, h) || o.footprint().is_none() {
+                        continue;
+                    }
+                    let d = vec2(o.pos.x - h.pos.x, o.pos.z - h.pos.z).length();
+                    assert!(
+                        d > 2.6 + reach(o),
+                        "{zone:?}: a {:?} is inside a house",
+                        o.kind
+                    );
+                }
+            }
         }
     }
 }

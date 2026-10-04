@@ -6,7 +6,9 @@ mod hud;
 mod menu;
 mod models;
 mod panels;
+mod quests_ui;
 mod render;
+mod vfx;
 
 use macroquad::prelude::*;
 

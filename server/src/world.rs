@@ -13,7 +13,8 @@ use shared::talents::{self, Bonuses, Ranks};
 use shared::world::*;
 
 use crate::character::{Character, add_item, count_item, gear_stats, remove_item};
-use shared::props::MERCHANT_SPOT;
+use shared::props::{MERCHANT_SPOT, QUEST_SPOT};
+use shared::quests::{self, Goal, QuestId, QuestLog};
 
 /// Who a message is for.
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +92,7 @@ pub struct PlayerData {
     pub bonuses: Bonuses,
     /// Sandbox god mode: no damage taken, abilities are free.
     pub god: bool,
+    pub quests: QuestLog,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,8 +126,17 @@ pub struct MobData {
     pub summoner: Option<EntityId>,
 }
 
-/// A townsperson who trades.
+/// What a townsperson does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NpcRole {
+    Merchant,
+    QuestGiver,
+}
+
+/// A townsperson who trades or hands out quests.
 pub struct NpcData {
+    pub role: NpcRole,
+    pub zone: Zone,
     pub race: Race,
     pub home: Vec3,
     pub home_yaw: f32,
@@ -173,7 +184,10 @@ impl Entity {
                     evading: m.state == MobState::Evading,
                 }
             }
-            Brain::Npc(n) => EntityKind::Merchant(n.race),
+            Brain::Npc(n) => match n.role {
+                NpcRole::Merchant => EntityKind::Merchant(n.race),
+                NpcRole::QuestGiver => EntityKind::QuestGiver(n.race),
+            },
         }
     }
 
@@ -411,21 +425,31 @@ impl World {
         }
         for zone in Zone::ALL {
             world.spawn_merchant(zone);
+            world.spawn_npc(zone, NpcRole::QuestGiver);
         }
         world
     }
 
     /// A merchant in a zone's town, facing the square.
     fn spawn_merchant(&mut self, zone: Zone) -> EntityId {
+        self.spawn_npc(zone, NpcRole::Merchant)
+    }
+
+    /// A townsperson standing at their spot in a zone's town.
+    fn spawn_npc(&mut self, zone: Zone, role: NpcRole) -> EntityId {
         let id = self.alloc_id();
-        let pos = zone.ground_local(MERCHANT_SPOT);
+        let (spot, name) = match role {
+            NpcRole::Merchant => (MERCHANT_SPOT, zone.merchant_name()),
+            NpcRole::QuestGiver => (QUEST_SPOT, quests::quest_giver_name(zone)),
+        };
+        let pos = zone.ground_local(spot);
         let center = zone.ground_local(Vec2::ZERO);
         let yaw = yaw_towards(pos, center);
         self.entities.insert(
             id,
             Entity {
                 id,
-                name: zone.merchant_name().to_string(),
+                name: name.to_string(),
                 level: MAX_LEVEL,
                 pos,
                 yaw,
@@ -443,6 +467,8 @@ impl World {
                 in_combat: false,
                 moving: false,
                 brain: Brain::Npc(NpcData {
+                    role,
+                    zone,
                     race: zone.race(),
                     home: pos,
                     home_yaw: yaw,
@@ -578,6 +604,7 @@ impl World {
                     talents: ranks,
                     bonuses,
                     god: false,
+                    quests: c.quests.clone(),
                 }),
             },
         );
@@ -605,6 +632,7 @@ impl World {
             bags: p.bags.clone(),
             gear: p.gear,
             talents: p.talents,
+            quests: p.quests.clone(),
         })
     }
 
@@ -686,6 +714,7 @@ impl World {
                 talents: p.talents,
                 sandbox: self.sandbox,
                 god: p.god,
+                quests: p.quests.clone(),
             },
         })
     }
@@ -765,6 +794,21 @@ impl World {
             ClientMsg::Sandbox(cmd) => {
                 if let Err(e) = self.sandbox(id, cmd) {
                     self.error(id, e);
+                }
+            }
+            ClientMsg::AcceptQuest { giver, quest } => {
+                if let Err(e) = self.accept_quest(id, giver, quest) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::TurnInQuest { giver, quest } => {
+                if let Err(e) = self.turn_in_quest(id, giver, quest) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::AbandonQuest(quest) => {
+                if let Some(p) = self.entities.get_mut(&id).unwrap().player_mut() {
+                    p.quests.active.retain(|(q, _)| *q != quest);
                 }
             }
             // Session messages are handled by the network layer.
@@ -1141,13 +1185,141 @@ impl World {
         }
     }
 
+    /// Checks a player is next to a quest giver who offers this quest.
+    fn giver_near(
+        &self,
+        id: EntityId,
+        giver: EntityId,
+        quest: QuestId,
+    ) -> Result<(), &'static str> {
+        if quest.0 as usize >= quests::QUESTS.len() {
+            return Err("No such quest.");
+        }
+        let me = &self.entities[&id];
+        let g = self.entities.get(&giver).ok_or("There's no one here.")?;
+        let Brain::Npc(n) = &g.brain else {
+            return Err("They have no quests for you.");
+        };
+        if n.role != NpcRole::QuestGiver || quests::quest(quest).zone != n.zone {
+            return Err("They have no quests for you.");
+        }
+        if g.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
+            return Err("You are too far away.");
+        }
+        if me.dead {
+            return Err("You are dead.");
+        }
+        Ok(())
+    }
+
+    fn accept_quest(
+        &mut self,
+        id: EntityId,
+        giver: EntityId,
+        quest: QuestId,
+    ) -> Result<(), &'static str> {
+        self.giver_near(id, giver, quest)?;
+        let e = self.entities.get_mut(&id).unwrap();
+        let level = e.level;
+        let p = e.player_mut().ok_or("Only players take quests.")?;
+        let q = quests::quest(quest);
+        p.quests.can_accept(q, level)?;
+        p.quests.active.push((quest, 0));
+        self.send(Audience::Only(id), GameEvent::QuestAccepted(quest));
+        Ok(())
+    }
+
+    fn turn_in_quest(
+        &mut self,
+        id: EntityId,
+        giver: EntityId,
+        quest: QuestId,
+    ) -> Result<(), &'static str> {
+        self.giver_near(id, giver, quest)?;
+        let q = quests::quest(quest);
+        let p = self
+            .entities
+            .get_mut(&id)
+            .unwrap()
+            .player_mut()
+            .ok_or("Only players take quests.")?;
+        let progress = p
+            .quests
+            .progress(quest)
+            .ok_or("You're not on that quest.")?;
+        match q.goal {
+            Goal::Kill { count, .. } => {
+                if progress < count {
+                    return Err("You haven't finished that quest yet.");
+                }
+            }
+            Goal::TurnIn { item } => {
+                if count_item(&p.bags, item) == 0 {
+                    return Err("You don't have what they asked for.");
+                }
+            }
+        }
+        // Make room for the reward before taking anything.
+        if let Some(reward) = q.reward {
+            let mut bags = p.bags.clone();
+            if let Goal::TurnIn { item } = q.goal {
+                remove_item(&mut bags, item, 1);
+            }
+            if add_item(&mut bags, reward, 1) > 0 {
+                return Err("Your bags are full.");
+            }
+            p.bags = bags;
+        } else if let Goal::TurnIn { item } = q.goal {
+            remove_item(&mut p.bags, item, 1);
+        }
+        p.quests.active.retain(|(qid, _)| *qid != quest);
+        p.quests.done.push(quest);
+        p.money = p.money.saturating_add(q.money);
+        self.send(
+            Audience::Only(id),
+            GameEvent::QuestComplete {
+                quest,
+                xp: q.xp,
+                money: q.money,
+                reward: q.reward,
+            },
+        );
+        if self.entities[&id].level < MAX_LEVEL {
+            self.give_xp(id, q.xp, q.name);
+        }
+        Ok(())
+    }
+
+    /// Counts a kill for everyone hunting this kind of mob.
+    fn quest_kill(&mut self, player: EntityId, kind: MobKind) {
+        let Some(p) = self.entities.get_mut(&player).and_then(|e| e.player_mut()) else {
+            return;
+        };
+        let mut updates = Vec::new();
+        for (qid, progress) in &mut p.quests.active {
+            if let Goal::Kill { kind: k, count } = quests::quest(*qid).goal
+                && k == kind
+                && *progress < count
+            {
+                *progress += 1;
+                updates.push((*qid, *progress));
+            }
+        }
+        for (quest, progress) in updates {
+            self.send(
+                Audience::Only(player),
+                GameEvent::QuestProgress { quest, progress },
+            );
+        }
+    }
+
     fn merchant_near(&self, id: EntityId, merchant: EntityId) -> Result<(), &'static str> {
         let me = &self.entities[&id];
         let m = self
             .entities
             .get(&merchant)
             .ok_or("There's no one to trade with.")?;
-        if !matches!(m.brain, Brain::Npc(_)) {
+        if !matches!(&m.brain, Brain::Npc(n) if n.role == NpcRole::Merchant) {
             return Err("They won't trade with you.");
         }
         if m.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
@@ -1809,6 +1981,16 @@ impl World {
                 items.push((item, self.rng.int(min as u32, max as u32) as u16));
             }
         }
+        // Now and then, a piece of green gear.
+        let rare = if kind.template().elite {
+            ELITE_RARE_DROP_CHANCE
+        } else {
+            RARE_DROP_CHANCE
+        };
+        if self.rng.chance(rare) {
+            let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
+            items.push((pick, 1));
+        }
         (!looters.is_empty()).then_some(Loot {
             money,
             items,
@@ -1853,6 +2035,9 @@ impl World {
             .collect();
         let loot = self.roll_loot(kind, level, players.clone());
         mob_of(&mut self.entities.get_mut(&victim).unwrap().brain).loot = loot;
+        for &player in &players {
+            self.quest_kill(player, kind);
+        }
         for player in players {
             let xp = kill_xp(self.entities[&player].level, level, t.elite);
             if xp > 0 {
@@ -3298,5 +3483,127 @@ mod tests {
         assert_eq!(w.entities[&p].hp, hp);
         w.handle(p, ClientMsg::Sandbox(SandboxCmd::ClearSpawns));
         assert_eq!(w.mob_count(), before);
+    }
+
+    /// The quest giver in a zone, with the player moved next to them.
+    fn visit_giver(w: &mut World, p: EntityId, zone: Zone) -> EntityId {
+        let giver = w
+            .entities
+            .values()
+            .find(|e| e.kind() == EntityKind::QuestGiver(zone.race()) && Zone::at(e.pos) == zone)
+            .unwrap()
+            .id;
+        let at = w.entities[&giver].pos;
+        w.entities.get_mut(&p).unwrap().pos = at + Vec3::new(1.5, 0.0, 0.0);
+        giver
+    }
+
+    /// A kill that counts for `p`.
+    fn credit_kill(w: &mut World, p: EntityId, kind: MobKind) {
+        let mob = w
+            .entities
+            .values()
+            .find(|e| e.mob().is_some_and(|m| m.kind == kind) && !e.dead)
+            .unwrap()
+            .id;
+        mob_of(&mut w.entities.get_mut(&mob).unwrap().brain)
+            .threat
+            .push((p, 1.0));
+        w.kill(mob, Some(p));
+    }
+
+    #[test]
+    fn hunting_quests_count_kills_and_pay_out() {
+        let mut w = World::new(41);
+        let p = join(&mut w, "Hunter", Class::Ranger, 2);
+        let giver = visit_giver(&mut w, p, Zone::Amberfall);
+        let q = quests::zone_quests(Zone::Amberfall)[0].id;
+        // Not done yet: can't hand in.
+        w.handle(p, ClientMsg::AcceptQuest { giver, quest: q });
+        assert_eq!(w.entities[&p].player().unwrap().quests.progress(q), Some(0));
+        assert!(w.turn_in_quest(p, giver, q).is_err());
+        for _ in 0..8 {
+            credit_kill(&mut w, p, MobKind::Wolf);
+        }
+        // Boars don't count.
+        credit_kill(&mut w, p, MobKind::Boar);
+        assert_eq!(w.entities[&p].player().unwrap().quests.progress(q), Some(8));
+        let money = w.entities[&p].player().unwrap().money;
+        assert_eq!(w.turn_in_quest(p, giver, q), Ok(()));
+        let pd = w.entities[&p].player().unwrap();
+        assert!(pd.quests.is_done(q));
+        assert!(pd.money >= money + 150);
+        assert_eq!(count_item(&pd.bags, items::TRAILBLAZER_BOOTS), 1);
+        // Once only.
+        assert!(w.accept_quest(p, giver, q).is_err());
+        // And saved with the character.
+        assert!(w.character(p).unwrap().quests.is_done(q));
+    }
+
+    #[test]
+    fn crafting_quests_take_the_crafted_armor() {
+        let mut w = World::new(42);
+        let p = join(&mut w, "Smith", Class::Fighter, 3);
+        let giver = visit_giver(&mut w, p, Zone::Grubdeep);
+        let q = &quests::zone_quests(Zone::Grubdeep)[1];
+        let Goal::TurnIn { item: wanted } = q.goal else {
+            panic!()
+        };
+        assert_eq!(w.accept_quest(p, giver, q.id), Ok(()));
+        assert!(w.turn_in_quest(p, giver, q.id).is_err());
+        add_item(
+            &mut w.entities.get_mut(&p).unwrap().player_mut().unwrap().bags,
+            wanted,
+            1,
+        );
+        assert_eq!(w.turn_in_quest(p, giver, q.id), Ok(()));
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(count_item(&pd.bags, wanted), 0);
+        assert_eq!(count_item(&pd.bags, q.reward.unwrap()), 1);
+    }
+
+    #[test]
+    fn quest_givers_only_offer_their_own_quests_up_close() {
+        let mut w = World::new(43);
+        let p = join(&mut w, "Wanderer", Class::Mage, 10);
+        let giver = visit_giver(&mut w, p, Zone::Frostcog);
+        let human_quest = quests::zone_quests(Zone::Amberfall)[0].id;
+        assert!(w.accept_quest(p, giver, human_quest).is_err());
+        let elite = quests::zone_quests(Zone::Frostcog)[2].id;
+        assert_eq!(w.accept_quest(p, giver, elite), Ok(()));
+        w.entities.get_mut(&p).unwrap().pos =
+            Zone::Frostcog.graveyard() + Vec3::new(30.0, 0.0, 0.0);
+        let hunt = quests::zone_quests(Zone::Frostcog)[0].id;
+        assert!(w.accept_quest(p, giver, hunt).is_err(), "too far away");
+        // Merchants aren't quest givers, and quest givers don't trade.
+        let merchant = w
+            .entities
+            .values()
+            .find(|e| e.kind() == EntityKind::Merchant(Race::Gnome))
+            .unwrap()
+            .id;
+        assert!(w.accept_quest(p, merchant, hunt).is_err());
+        assert!(w.buy(p, giver, items::HEALING_POTION).is_err());
+        w.handle(p, ClientMsg::AbandonQuest(elite));
+        assert_eq!(w.entities[&p].player().unwrap().quests.active.len(), 0);
+    }
+
+    #[test]
+    fn mobs_sometimes_drop_green_gear() {
+        let mut w = World::new(44);
+        let mut greens = 0;
+        for _ in 0..400 {
+            if let Some(loot) = w.roll_loot(MobKind::Wolf, 5, vec![1]) {
+                greens += loot
+                    .items
+                    .iter()
+                    .filter(|(id, _)| item(*id).quality == Quality::Uncommon)
+                    .count();
+            }
+        }
+        assert!(
+            (4..=40).contains(&greens),
+            "{greens} greens from 400 wolves"
+        );
     }
 }

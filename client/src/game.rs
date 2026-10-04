@@ -61,23 +61,6 @@ pub struct ChatLine {
     pub color: Color,
 }
 
-struct Projectile {
-    to: EntityId,
-    start: Vec3,
-    color: Color,
-    age: f32,
-}
-
-/// A ring that grows (spells around the caster) or rises (heals, level ups).
-struct RingEffect {
-    entity: EntityId,
-    radius: f32,
-    color: Color,
-    rising: bool,
-    age: f32,
-    duration: f32,
-}
-
 /// A mouse button held down, and whether it has been dragged (camera control)
 /// or is still a click.
 #[derive(Clone, Copy)]
@@ -98,6 +81,9 @@ pub struct Windows {
     pub sandbox: bool,
     /// The world map covers the screen.
     pub map: bool,
+    /// The quest giver whose quests are shown.
+    pub quest_giver: Option<EntityId>,
+    pub quest_log: bool,
 }
 
 impl Windows {
@@ -109,6 +95,8 @@ impl Windows {
             || self.talents
             || self.sandbox
             || self.map
+            || self.quest_giver.is_some()
+            || self.quest_log
     }
 }
 
@@ -145,8 +133,9 @@ pub struct Game {
     pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
     pub cast_flash: Option<(String, f32)>,
-    projectiles: Vec<Projectile>,
-    rings: Vec<RingEffect>,
+    /// Quest progress, shown in the middle of the screen for a moment.
+    pub quest_flash: Option<(String, f32)>,
+    vfx: crate::vfx::Vfx,
     pub windows: Windows,
     pub show_help: bool,
     pub menu_open: bool,
@@ -203,8 +192,8 @@ impl Game {
             floats: Vec::new(),
             banner: None,
             cast_flash: None,
-            projectiles: Vec::new(),
-            rings: Vec::new(),
+            quest_flash: None,
+            vfx: Default::default(),
             windows: Windows::default(),
             show_help: true,
             menu_open: false,
@@ -275,7 +264,21 @@ impl Game {
             self.lock_cursor(false);
             return Outcome::Disconnected(reason);
         }
-        let layout = Layout::new(&self.windows);
+        let mut layout = Layout::new(&self.windows);
+        if self.windows.quest_giver.is_some() {
+            let level = self.level();
+            layout.quest_window = Some(
+                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags)
+                    .window,
+            );
+        }
+        if self.windows.quest_log {
+            let l = crate::quests_ui::log_layout(&self.me.quests);
+            layout.quest_window = Some(match layout.quest_window {
+                Some(r) => r.combine_with(l.window),
+                None => l.window,
+            });
+        }
         if let Some(outcome) = self.input(&layout) {
             self.lock_cursor(false);
             return outcome;
@@ -284,7 +287,8 @@ impl Game {
         self.send_movement(dt);
 
         self.update_zone();
-        if self.windows.map
+        // The map picture also backs the minimap, so make it once we're in.
+        if self.my_id.is_some()
             && self
                 .map_texture
                 .as_ref()
@@ -398,6 +402,19 @@ impl Game {
         Ok(())
     }
 
+    /// Where an entity is, for spell effects.
+    fn anchor(&self, id: EntityId) -> Option<crate::vfx::Anchor> {
+        self.entities.get(&id).map(|e| crate::vfx::Anchor {
+            pos: e.pos,
+            height: if e.view.dead {
+                0.6
+            } else {
+                render::model_height(e.view.kind, e.view.appearance)
+            },
+            yaw: e.yaw,
+        })
+    }
+
     fn name_of(&self, id: EntityId) -> String {
         if Some(id) == self.my_id {
             return "You".into();
@@ -441,6 +458,7 @@ impl Game {
                 {
                     e.hurt = 0.0;
                 }
+                self.vfx.hit(target, ability, crit);
                 if Some(source) == me || Some(target) == me {
                     let color = if Some(target) == me {
                         Color::new(1.0, 0.3, 0.25, 1.0)
@@ -485,33 +503,18 @@ impl Game {
                 ability: id,
             } => {
                 let a = ability(id);
-                let color = hud::school_color(a.school);
-                if a.projectile {
-                    if let (Some(to), Some(from)) = (target, self.entities.get(&caster)) {
-                        self.projectiles.push(Projectile {
-                            to,
-                            start: from.pos + Vec3::Y * 1.5,
-                            color,
-                            age: 0.0,
-                        });
-                    }
-                } else if let Targeting::AroundCaster(radius) | Targeting::AroundTarget(radius) =
-                    a.targeting
-                {
-                    let around_target = matches!(a.targeting, Targeting::AroundTarget(_));
-                    self.rings.push(RingEffect {
-                        entity: if around_target {
-                            target.unwrap_or(caster)
-                        } else {
-                            caster
-                        },
-                        radius,
-                        color,
-                        rising: false,
-                        age: 0.0,
-                        duration: 0.45,
-                    });
-                }
+                let class = match self.entities.get(&caster).map(|e| e.view.kind) {
+                    Some(EntityKind::Player(c)) => Some(c),
+                    _ => None,
+                };
+                let anchors: Vec<(EntityId, crate::vfx::Anchor)> = [Some(caster), target]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| self.anchor(id).map(|a| (id, a)))
+                    .collect();
+                self.vfx.ability_used(id, caster, target, class, |id| {
+                    anchors.iter().find(|(e, _)| *e == id).map(|(_, a)| *a)
+                });
                 if a.range <= MELEE_RANGE
                     && !a.projectile
                     && a.targeting.needs_enemy()
@@ -519,28 +522,6 @@ impl Game {
                 {
                     e.swing = 0.0;
                     e.combo = e.combo.wrapping_add(1);
-                }
-                let soothing = a.effects.iter().any(|e| {
-                    matches!(
-                        e,
-                        Effect::Heal { .. }
-                            | Effect::Aura {
-                                kind: AuraKind::Hot { .. }
-                                    | AuraKind::Absorb(_)
-                                    | AuraKind::DamageTaken(_),
-                                ..
-                            }
-                    )
-                });
-                if soothing {
-                    self.rings.push(RingEffect {
-                        entity: target.unwrap_or(caster),
-                        radius: 0.9,
-                        color,
-                        rising: true,
-                        age: 0.0,
-                        duration: 0.8,
-                    });
                 }
             }
             GameEvent::Interrupted { target, .. } => {
@@ -575,14 +556,7 @@ impl Game {
                 }
             }
             GameEvent::LevelUp { id, level } => {
-                self.rings.push(RingEffect {
-                    entity: id,
-                    radius: 1.3,
-                    color: Color::new(1.0, 0.85, 0.3, 1.0),
-                    rising: true,
-                    age: 0.0,
-                    duration: 1.5,
-                });
+                self.vfx.level_up(id);
                 if Some(id) == me {
                     self.banner = Some((format!("Level {level}!"), String::new(), 0.0));
                     self.system(&format!("Congratulations, you have reached level {level}!"));
@@ -650,6 +624,55 @@ impl Game {
                     text: format!("You sell {what} for {}.", format_money(money)),
                     color: Color::new(1.0, 0.85, 0.35, 1.0),
                 });
+            }
+            GameEvent::QuestAccepted(id) => {
+                let q = shared::quests::quest(id);
+                self.system(&format!("Quest accepted: {}", q.name));
+            }
+            GameEvent::QuestProgress {
+                quest: id,
+                progress,
+            } => {
+                let q = shared::quests::quest(id);
+                let s = crate::quests_ui::Status::InProgress(progress, q.needed());
+                let line = crate::quests_ui::objective(q, s);
+                let done = progress >= q.needed();
+                self.chat.push(ChatLine {
+                    text: line.clone(),
+                    color: Color::new(1.0, 0.85, 0.3, 1.0),
+                });
+                self.quest_flash = Some((
+                    if done {
+                        format!("{} (Complete)", line)
+                    } else {
+                        line
+                    },
+                    0.0,
+                ));
+            }
+            GameEvent::QuestComplete {
+                quest: id,
+                money,
+                reward,
+                ..
+            } => {
+                let q = shared::quests::quest(id);
+                self.banner = Some((q.name.to_string(), "Quest complete!".into(), 0.0));
+                self.system(&format!("{} completed.", q.name));
+                self.chat.push(ChatLine {
+                    text: format!("You receive {}.", format_money(money)),
+                    color: Color::new(1.0, 0.85, 0.35, 1.0),
+                });
+                if let Some(r) = reward {
+                    let it = item(r);
+                    self.chat.push(ChatLine {
+                        text: format!("You receive item: {}.", it.name),
+                        color: hud::quality_color(it.quality),
+                    });
+                }
+                if let Some(me) = self.my_id {
+                    self.vfx.level_up(me);
+                }
             }
             GameEvent::Error(text) => self.error(&text),
             GameEvent::Chat { from, text } => self.chat.push(ChatLine {
@@ -936,6 +959,9 @@ impl Game {
         if is_key_pressed(KeyCode::M) {
             self.windows.map = !self.windows.map;
         }
+        if is_key_pressed(KeyCode::L) {
+            self.windows.quest_log = !self.windows.quest_log;
+        }
         if is_key_pressed(KeyCode::N) {
             self.windows.talents = !self.windows.talents;
         }
@@ -970,9 +996,24 @@ impl Game {
                 self.windows.vendor = Some(id);
                 self.windows.bags = true;
             }
+        } else if matches!(e.view.kind, EntityKind::QuestGiver(_)) {
+            if e.pos.distance(self.pos) > MERCHANT_RANGE {
+                self.error("You are too far away.");
+            } else {
+                self.windows.quest_giver = Some(id);
+            }
         } else if self.is_hostile(&e.view) && !e.view.dead {
             self.face_target();
             self.send(ClientMsg::StartAttack);
+        }
+    }
+
+    fn quest_action(&mut self, action: crate::quests_ui::Action, giver: EntityId) {
+        use crate::quests_ui::Action;
+        match action {
+            Action::Accept(quest) => self.send(ClientMsg::AcceptQuest { giver, quest }),
+            Action::TurnIn(quest) => self.send(ClientMsg::TurnInQuest { giver, quest }),
+            Action::Abandon(quest) => self.send(ClientMsg::AbandonQuest(quest)),
         }
     }
 
@@ -981,6 +1022,33 @@ impl Game {
             return;
         }
         let level = self.level();
+        if let Some(giver) = self.windows.quest_giver
+            && left
+        {
+            let l =
+                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags);
+            if l.close.contains(mouse) {
+                self.windows.quest_giver = None;
+                return;
+            }
+            if let Some((_, action)) = l.buttons.iter().find(|(r, _)| r.contains(mouse)) {
+                self.quest_action(*action, giver);
+                return;
+            }
+            if l.window.contains(mouse) {
+                return;
+            }
+        }
+        if self.windows.quest_log && left {
+            let l = crate::quests_ui::log_layout(&self.me.quests);
+            if let Some((_, action)) = l.buttons.iter().find(|(r, _)| r.contains(mouse)) {
+                self.quest_action(*action, 0);
+                return;
+            }
+            if l.window.contains(mouse) {
+                return;
+            }
+        }
         if self.windows.sandbox
             && left
             && let Some(cmd) = crate::panels::sandbox_click(self.zone, level, mouse)
@@ -1197,20 +1265,26 @@ impl Game {
                 self.cast_flash = None;
             }
         }
-        for p in &mut self.projectiles {
-            p.age += dt;
+        let anchors: std::collections::HashMap<EntityId, crate::vfx::Anchor> = self
+            .entities
+            .keys()
+            .filter_map(|id| self.anchor(*id).map(|a| (*id, a)))
+            .collect();
+        self.vfx.update(dt, |id| anchors.get(&id).copied());
+        if let Some((_, t)) = &mut self.quest_flash {
+            *t += dt;
+            if *t > 3.0 {
+                self.quest_flash = None;
+            }
         }
-        let entities = &self.entities;
-        self.projectiles.retain(|p| {
-            p.age < 1.0
-                && entities
-                    .get(&p.to)
-                    .is_some_and(|t| p.start.distance(t.pos) > p.age * 35.0)
-        });
-        for r in &mut self.rings {
-            r.age += dt;
+        if let Some(id) = self.windows.quest_giver
+            && self
+                .entities
+                .get(&id)
+                .is_none_or(|g| g.pos.distance(self.pos) > MERCHANT_RANGE + 2.0)
+        {
+            self.windows.quest_giver = None;
         }
-        self.rings.retain(|r| r.age < r.duration);
     }
 
     fn send_movement(&mut self, dt: f32) {
@@ -1296,44 +1370,39 @@ impl Game {
                 }
             }
         }
-        for p in &self.projectiles {
-            let Some(to) = self.entities.get(&p.to) else {
+        let anchors: std::collections::HashMap<EntityId, crate::vfx::Anchor> = self
+            .entities
+            .values()
+            .map(|e| {
+                (
+                    e.view.id,
+                    crate::vfx::Anchor {
+                        pos: e.pos,
+                        height: render::model_height(e.view.kind, e.view.appearance),
+                        yaw: e.yaw,
+                    },
+                )
+            })
+            .collect();
+        for e in self.entities.values() {
+            let Some(a) = anchors.get(&e.view.id).copied() else {
                 continue;
             };
-            let end =
-                to.pos + Vec3::Y * render::model_height(to.view.kind, to.view.appearance) * 0.6;
-            let dist = p.start.distance(end).max(0.1);
-            let t = (p.age * 35.0 / dist).min(1.0);
-            let at = p.start.lerp(end, t);
-            let back = (end - p.start).normalize_or_zero();
-            b.glow_sphere(at, 0.25, p.color);
-            b.glow_sphere(
-                at - back * 0.35,
-                0.17,
-                Color::new(p.color.r, p.color.g, p.color.b, 0.6),
-            );
-            b.glow_sphere(
-                at - back * 0.65,
-                0.1,
-                Color::new(p.color.r, p.color.g, p.color.b, 0.3),
-            );
-        }
-        for r in &self.rings {
-            let Some(e) = self.entities.get(&r.entity) else {
+            if e.view.dead {
                 continue;
-            };
-            let t = r.age / r.duration;
-            let mut color = r.color;
-            color.a = 1.0 - t;
-            if r.rising {
-                for i in 0..3 {
-                    let y = (t * 2.2 + i as f32 * 0.5) % 2.2;
-                    b.air_ring(e.pos + Vec3::Y * y, r.radius, 0.08, color);
-                }
-            } else {
-                b.air_ring(e.pos + Vec3::Y * 0.3, r.radius * t.sqrt(), 0.5, color);
+            }
+            crate::vfx::draw_auras(b, a, &e.view.auras, self.time);
+            if let Some(cast) = &e.view.cast {
+                crate::vfx::draw_casting(
+                    b,
+                    a,
+                    cast.ability,
+                    cast.elapsed / cast.total.max(0.01),
+                    self.time,
+                );
             }
         }
+        self.vfx.draw(b, self.time, |id| anchors.get(&id).copied());
         scene.draw_effects(self.zone, b, self.time, self.pos);
         b.flush();
         scene.draw_water(self.zone);
