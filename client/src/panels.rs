@@ -638,7 +638,14 @@ pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
         ));
     }
     y += 98.0;
-    for (i, kind) in MobKind::for_zone(zone).into_iter().enumerate() {
+    // The zone's mobs (and its water mob), then a button to clear them.
+    let spawns = MobKind::for_zone(zone)
+        .into_iter()
+        .chain(MobKind::water(zone))
+        .map(|kind| SandboxCmd::SpawnMob { kind, level: 0 })
+        .chain([SandboxCmd::ClearSpawns]);
+    let mut cells = 0usize;
+    for (i, cmd) in spawns.enumerate() {
         buttons.push((
             Rect::new(
                 x + (i % 2) as f32 * (half + 8.0),
@@ -646,14 +653,11 @@ pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
                 half,
                 30.0,
             ),
-            SandboxAction::Command(SandboxCmd::SpawnMob { kind, level: 0 }),
+            SandboxAction::Command(cmd),
         ));
+        cells += 1;
     }
-    buttons.push((
-        Rect::new(x + half + 8.0, y + 72.0, half, 30.0),
-        SandboxAction::Command(SandboxCmd::ClearSpawns),
-    ));
-    y += 134.0;
+    y += cells.div_ceil(2) as f32 * 36.0 + 26.0;
     let per_row = 5;
     let size = (iw - (per_row - 1) as f32 * 6.0) / per_row as f32;
     for i in 0..ITEMS.len() {

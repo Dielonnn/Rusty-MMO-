@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v7.7
+## v7.9
 
-Commit: the one titled "v7.7: casters drop potions, elites drop iron scrap".
+Commit: the one titled "v7.9: casters drop potions, elites and the Sunken King drop materials".
 
 - **Casters drop potions**: mystics, shamans, tricksters, necromancers and
   the Drowned Adept drop a Healing Potion 35% of the time
@@ -15,6 +15,25 @@ Commit: the one titled "v7.7: casters drop potions, elites drop iron scrap".
   drop 5 Iron Scrap, on top of their Ancient Core and Linen Cloth
 - **The Sunken King drops materials**: Morvane always drops 3 to 5 Iron
   Scrap and 3 to 5 Light Leather, on top of the rest of his loot
+
+## v7.8
+
+Commit: the one titled "v7.8: water mobs in the lakes".
+
+- **Water mobs**: areas with lakes now have a pack of four aggressive water
+  mobs (levels 3-5) in the shallows of up to three lakes: **Mudsnap Crabs** in Amberfall, **Glimmershell Crabs** in Silverbough
+  and **Bog Lurkers** in Witherwood. They fight like the area's wolves and
+  drop money and sometimes Light Leather. Scorchsand and Frostcog have no
+  lakes, and Grubdeep's one pool is too small for a pack
+- Sandbox mode can summon the area's water mob
+- **Meat and fish**: boars drop **Boar Meat** (50%) and water mobs drop
+  **Raw Fish** (60%)
+- **Cooking**: a new skill. `K` now opens a **Skills** window with a tab per
+  skill: Crafting (as before) and Cooking. Cook Boar Meat into **Roasted
+  Boar** and Raw Fish into **Cooked Fish**. Right-click cooked food to eat
+  it: it restores 26% of your health (three quarters of a Healing Potion)
+  and shares the potion cooldown
+- Old clients can't join a v7.8 server (protocol 11)
 
 ## v7.6
 

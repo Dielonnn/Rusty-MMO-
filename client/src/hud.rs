@@ -1,6 +1,6 @@
 //! The 2D interface drawn over the world: unit frames, action bar, cast bar,
 //! nameplates, chat, minimap, floating combat text and the bag, character
-//! crafting and merchant windows.
+//! skills and merchant windows.
 
 use macroquad::prelude::*;
 use shared::data::*;
@@ -42,7 +42,10 @@ pub struct Layout {
     pub bag_slots: Vec<Rect>,
     pub character: Option<Rect>,
     pub gear_slots: Vec<Rect>,
-    pub crafting: Option<Rect>,
+    /// The skills window (K): a tab per skill, and the showing skill's
+    /// recipes.
+    pub skills: Option<Rect>,
+    pub skill_tabs: Vec<Rect>,
     pub craft_buttons: Vec<Rect>,
     pub vendor: Option<Rect>,
     pub vendor_buttons: Vec<Rect>,
@@ -182,13 +185,35 @@ impl Layout {
             Vec::new()
         };
         let craft_x = if windows.character { 312.0 } else { 16.0 };
-        let craft_rect = Rect::new(craft_x, 150.0, 400.0, 46.0 + RECIPES.len() as f32 * 34.0);
-        let craft_buttons = if windows.crafting {
-            (0..RECIPES.len())
+        let recipes = windows.skill.recipes().count();
+        let craft_rect = Rect::new(
+            craft_x,
+            150.0,
+            400.0,
+            SKILL_LIST_TOP + 8.0 + recipes as f32 * 34.0,
+        );
+        let tab_w =
+            (craft_rect.w - 24.0 - 8.0 * (Skill::ALL.len() - 1) as f32) / Skill::ALL.len() as f32;
+        let skill_tabs = if windows.skills {
+            (0..Skill::ALL.len())
+                .map(|i| {
+                    Rect::new(
+                        craft_rect.x + 12.0 + i as f32 * (tab_w + 8.0),
+                        craft_rect.y + 34.0,
+                        tab_w,
+                        28.0,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let craft_buttons = if windows.skills {
+            (0..recipes)
                 .map(|i| {
                     Rect::new(
                         craft_rect.x + craft_rect.w - 82.0,
-                        craft_rect.y + 38.0 + i as f32 * 34.0,
+                        craft_rect.y + SKILL_LIST_TOP + i as f32 * 34.0,
                         70.0,
                         28.0,
                     )
@@ -199,7 +224,7 @@ impl Layout {
         };
         let vendor_x = 16.0
             + if windows.character { 296.0 } else { 0.0 }
-            + if windows.crafting {
+            + if windows.skills {
                 craft_rect.w + 16.0
             } else {
                 0.0
@@ -240,7 +265,8 @@ impl Layout {
             bag_slots,
             character: windows.character.then_some(char_rect),
             gear_slots,
-            crafting: windows.crafting.then_some(craft_rect),
+            skills: windows.skills.then_some(craft_rect),
+            skill_tabs,
             craft_buttons,
             vendor: windows.vendor.is_some().then_some(vendor_rect),
             vendor_buttons,
@@ -263,7 +289,7 @@ impl Layout {
             || [
                 self.bags,
                 self.character,
-                self.crafting,
+                self.skills,
                 self.vendor,
                 self.talents,
                 self.sandbox,
@@ -287,7 +313,7 @@ impl Layout {
             || [
                 self.bags,
                 self.character,
-                self.crafting,
+                self.skills,
                 self.vendor,
                 self.talents,
                 self.sandbox,
@@ -851,8 +877,8 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if let Some(r) = layout.character {
         character(game, layout, r, me);
     }
-    if let Some(r) = layout.crafting {
-        crafting(game, layout, r);
+    if let Some(r) = layout.skills {
+        skills(game, layout, r);
     }
     if let Some(r) = layout.vendor {
         vendor(game, layout, r);
@@ -1178,7 +1204,17 @@ pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
     let green = Color::new(0.3, 1.0, 0.25, 1.0);
     let mut lines = vec![(it.name.to_string(), quality_color(it.quality))];
     match it.kind {
-        ItemKind::Material => lines.push(("Crafting material".into(), grey)),
+        ItemKind::Material => {
+            let cooked = Skill::Cooking
+                .recipes()
+                .any(|(_, r)| r.materials.iter().any(|(m, _)| *m == id));
+            let what = if cooked {
+                "Cooking ingredient"
+            } else {
+                "Crafting material"
+            };
+            lines.push((what.into(), grey));
+        }
         ItemKind::Potion { health, power } => {
             let mut what = Vec::new();
             if health > 0.0 {
@@ -1189,6 +1225,13 @@ pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
             }
             lines.push((format!("Use: restores {}", what.join(" and ")), green));
         }
+        ItemKind::Food { health } => lines.push((
+            format!(
+                "Use: restores {:.0}% of your health (shares the potion cooldown)",
+                health * 100.0
+            ),
+            green,
+        )),
         ItemKind::Weapon {
             damage,
             stamina,
@@ -1248,6 +1291,8 @@ fn item_tooltips(game: &Game, layout: &Layout) {
                 lines.push(("Click to hold".into(), hint));
             } else if matches!(item(*id).kind, ItemKind::Potion { .. }) {
                 lines.push(("Right-click to drink".into(), hint));
+            } else if matches!(item(*id).kind, ItemKind::Food { .. }) {
+                lines.push(("Right-click to eat".into(), hint));
             }
             tooltip_box(&lines, *r, true);
         }
@@ -1412,10 +1457,20 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
     );
 }
 
-fn crafting(game: &Game, layout: &Layout, r: Rect) {
-    window(r, "Crafting (K)");
-    for (i, (recipe, b)) in RECIPES.iter().zip(&layout.craft_buttons).enumerate() {
-        let y = r.y + 38.0 + i as f32 * 34.0;
+/// Where the recipe list starts in the skills window, below the tabs.
+const SKILL_LIST_TOP: f32 = 72.0;
+
+fn skills(game: &Game, layout: &Layout, r: Rect) {
+    window(r, "Skills (K)");
+    for (skill, tab) in Skill::ALL.iter().zip(&layout.skill_tabs) {
+        button(*tab, skill.name());
+        if *skill == game.windows.skill {
+            draw_rectangle_lines(tab.x, tab.y, tab.w, tab.h, 2.0, GOLD);
+        }
+    }
+    let recipes = game.windows.skill.recipes().map(|(_, r)| r);
+    for (i, (recipe, b)) in recipes.zip(&layout.craft_buttons).enumerate() {
+        let y = r.y + SKILL_LIST_TOP + i as f32 * 34.0;
         let result = item(recipe.result);
         text(
             result.name,
@@ -1447,7 +1502,11 @@ fn crafting(game: &Game, layout: &Layout, r: Rect) {
             Color::new(0.9, 0.4, 0.35, 1.0)
         };
         text(&mats.join(", "), r.x + 12.0, y + 29.0, 14.0, color);
-        button_ex(*b, "Craft", have_all);
+        let verb = match game.windows.skill {
+            Skill::Crafting => "Craft",
+            Skill::Cooking => "Cook",
+        };
+        button_ex(*b, verb, have_all);
         let _ = i;
     }
 }
@@ -1804,7 +1863,7 @@ fn help() {
         ("Right click", "Attack, loot, or trade"),
         ("1 - 6, E", "Use abilities"),
         ("T  /  F1", "Toggle attack / target self"),
-        ("B  C  K", "Bags, character, crafting"),
+        ("B  C  K", "Bags, character, skills"),
         ("N  M", "Talents, world map"),
         ("F", "Use a waystone (travel)"),
         ("P", "Sandbox panel (sandbox mode)"),
