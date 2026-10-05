@@ -92,6 +92,16 @@ impl Wave {
         self
     }
 
+    /// Wobbles the loudness `rate` times a second, `depth` 0 to 1: growls
+    /// and rattles.
+    pub fn tremolo(mut self, rate: f32, depth: f32) -> Self {
+        for (i, s) in self.0.iter_mut().enumerate() {
+            let t = i as f32 / RATE as f32;
+            *s *= 1.0 - depth * (0.5 + 0.5 * (t * rate * TAU).sin());
+        }
+        self
+    }
+
     pub fn gain(mut self, g: f32) -> Self {
         self.0.iter_mut().for_each(|s| *s *= g);
         self

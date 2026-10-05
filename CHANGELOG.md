@@ -5,6 +5,29 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.7
+
+Commit: the one titled "v8.7: monster, boss and footstep sounds".
+
+- **Monsters have voices.** Six kinds: wolves, boars, bugs (spiders and
+  scorpions), people (bandits, troggs, trolls and the rest), skeletons and
+  giants. Each growls when it joins a fight, cries
+  out when you land a critical hit on it, and has a death sound.
+- **Bosses**: a horn when a boss starts casting, a warning hum when ground
+  is marked for an attack, a crash when the attack lands, and a fanfare
+  when a boss dies.
+- A shimmer when a boss-kill portal opens, and a whoosh when you travel by
+  waystone or portal.
+- **Footsteps** that change with the ground: grass, sand, snow, stone
+  (Grubdeep and every dungeon) and splashing in shallow water. They speed
+  up and slow down with how fast you're moving.
+- Every sound in the world gets quieter with distance and goes silent past
+  40 yards. Sounds don't move left and right between speakers: macroquad's
+  sound library has no panning.
+- No more than eight sounds start in one frame, so a big fight stays
+  clean.
+- Still no files to download or license: every sound is made by the game.
+
 ## v8.6
 
 Commit: the one titled "v8.6: controls, graphics, interface and gameplay settings".
