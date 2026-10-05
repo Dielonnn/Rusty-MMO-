@@ -16,11 +16,23 @@ LICENSE files here:
   (github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0):
   the four skeleton bodies and their gear, rebuilt on the Quaternius skeleton.
 
+A race can have its own body, male and female, sculpted from the
+Quaternius base bodies by `sculpt.py` and its file in `races/` (`orc.py`,
+`elf.py`; `human.py` keeps the base body; races without a file use the
+human body in game until they get one): the bones and the mesh are reshaped together (longer legs,
+broader shoulders, a bigger head), the flesh is moulded with brushes (a
+jutting brow, a hunched back, long pointed ears), and race parts such as
+tusks and beards are modeled as `Extra_` meshes on the same skeleton and
+texture. Everyone stays in the base models' underwear; clothes are made in
+the game from what a character wears (`client/src/models/rigged/clothes.rs`).
+
 `pack.py` made these files from the packs:
 
 - `rig.glb`: the shared skeleton and every animation clip the game uses.
-- `male.glb`, `female.glb`: a body each, with eyes, brows and all the
-  hairstyles, cut down to about 5k triangles, on one texture atlas.
+- `<race>_male.glb`, `<race>_female.glb` (`human_male.glb`,
+  `orc_female.glb`, ...): a race's body, with its eyes, brows, all the
+  hairstyles and its `Extra_` parts, thinned to a game-sized mesh, on one
+  texture atlas.
 - `props.glb`: the KayKit weapons and hats, each tied to a hand or head bone.
 - `skeletons.glb`: the skeleton bodies and their helmets and hoods.
 
@@ -29,5 +41,15 @@ To change which clips or props are kept, edit the lists in `pack.py` and run
     python pack.py <Universal Base Characters dir> <UAL1_Standard.glb> \
         <UAL2_Standard.glb> <KayKit Adventurers clone> <KayKit Skeletons clone>
 
-with numpy, Pillow and `bpy` (Blender as a Python module, used to thin the
-meshes) installed. The `.glb` files are Quaternius' Unreal-Godot exports.
+To change a race, edit its file in `races/`, look at it with
+
+    python sculpt.py <Universal Base Characters dir> <race> preview.png
+
+(front, side and back views and three close-ups of the head, male above
+female), and rebuild the bodies with
+
+    python pack.py <Universal Base Characters dir> --bodies
+
+Both need numpy, Pillow and `bpy` (Blender as a Python module, used to
+thin the meshes and render the previews) installed. The `.glb` files are
+Quaternius' Unreal-Godot exports.

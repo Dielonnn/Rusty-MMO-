@@ -1,7 +1,7 @@
 # Rusty MMO
 
 A small 3D tab-targeting MMO written in Rust, in the spirit of World of Warcraft
-and Final Fantasy XIV. Pick one of six races and thirteen classes, and start in
+and Final Fantasy XIV. Pick one of seven races and thirteen classes, and start in
 your race's own starting area: autumn hills, a desert, an elven forest, a
 goblin cave, snowy peaks or a dying forest, each with its own town, merchant,
 creatures and elite. Loot leather, cloth and iron, craft armor and weapons, buy potions, and level
@@ -31,9 +31,10 @@ This opens the client. On the login screen, enter an account name, then:
   on god mode (no damage, free abilities), or refresh your cooldowns, health
   and power. Sandbox characters are kept apart from your solo ones.
 
-Then pick a character or create one: choose a name, race, class, build, skin,
-hair style and hair color, and press **Enter World**. You start in your race's
-starting area.
+Then pick a character or create one: choose a name, race, class, body (male or
+female), skin, hair style and hair color, and how tall and heavy you are, and
+press **Enter World**. You start in your race's starting area, dressed in your
+class's plain starting clothes.
 
 To host a game for friends, run the dedicated server:
 
@@ -189,6 +190,7 @@ has its own look, buildings, creatures and lighting.
 | Elf | Silverbough Glade: a twilight forest of silver trees | Aelthas | Shadowfang Wolves, Thornback Boars, Satyrs, the Ancient Treant |
 | Goblin | Grubdeep Caverns: a cave lit by crystals and mushrooms | Rustpocket | Cave Spiders, Stonehide Boars, Troggs, the Crystal Golem |
 | Gnome | Frostcog Peaks: bright snowy mountains | Gearhaven | Snow Wolves, Frost Boars, Frost Trolls, the Yeti |
+| Dwarf | Frostcog Peaks, with the gnomes | Gearhaven | Snow Wolves, Frost Boars, Frost Trolls, the Yeti |
 | Undead | Witherwood: a dying forest under a purple sky | Gravenhold | Ghoul Hounds, Plague Boars, Skeletons and Necromancers, the Bone Colossus |
 
 ### Classes
@@ -311,8 +313,11 @@ Chestguard and Heartstone Greatsword. Click gear in your backpack to wear or
 hold it, and click it in the character window to take it off. Armor reduces
 physical damage, a weapon adds damage to every auto attack, stamina adds
 health, and power adds to the damage and healing you do. What you wear shows on
-your character (weapons don't yet; your class's own weapon is drawn instead).
-Any class can use any weapon.
+your character, modeled over their body: a robe, a jerkin or plate, trousers,
+gloves, boots or sandals, and a hood, hat or helmet (weapons don't show yet;
+your class's own weapon is drawn instead). Under it all everyone wears plain
+underwear. New characters start in their class's plain clothes, which are
+ordinary items that give no stats. Any class can use any weapon.
 
 ### Merchants
 
@@ -417,12 +422,17 @@ client/   The macroquad client: login, character select and creation,
   skinned models with skeletal animation (`client/assets/characters/`):
   Quaternius' Universal Base Characters and Universal Animation Library 1
   and 2, with KayKit weapons, hats, skeletons and a few moves carried over
-  (all CC0). Every body shares one skeleton and one set of animation clips;
-  the `.glb` loader (`client/src/gfx/model_file.rs`) reads skeletons, skins
-  and clips, and `client/src/models/rigged.rs` picks a body, hair and props
-  for each class or mob, paints its gear onto the skin texture for race,
-  class and armor colors, adds shoulder pads, robes, ears and tusks, and
-  blends clips from what someone is doing: running, idling, casting,
+  (all CC0). Orcs and elves have their own male and female bodies,
+  sculpted from the base bodies in Blender by
+  `client/assets/characters/sculpt.py` and the race files beside it (the
+  other races borrow the human body at their own size for now), and every
+  body shares one skeleton and one set of animation clips. The `.glb` loader (`client/src/gfx/model_file.rs`) reads
+  skeletons, skins and clips; `client/src/models/rigged.rs` picks a body,
+  hair and props for each character or mob, dresses it in what it wears
+  (`rigged/clothes.rs` lifts each piece off the skin it covers as a shell
+  that bends with the body, cut cleanly where it ends), sizes it by the
+  height and weight sliders, and blends clips from what someone is doing:
+  running, idling, casting,
   attacking (with the upper body only while running), flinching, jumping
   and dying. Every class fights in its own way: barbarians chop with a great
   axe, fighters slash behind a shield, monks punch and kick, rogues stab

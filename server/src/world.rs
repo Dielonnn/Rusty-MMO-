@@ -766,6 +766,7 @@ impl World {
             talents: p.talents,
             hotbar: p.hotbar,
             quests: p.quests.clone(),
+            dressed: true,
         })
     }
 

@@ -1,53 +1,103 @@
 //! People as rigged, animated models: players, townsfolk and humanoid
-//! mobs. The bodies, hair and most animations come from Quaternius'
-//! Universal Base Characters and Universal Animation Library; the weapons,
-//! hats, skeleton mobs and the animations Quaternius lacks from the KayKit
-//! character packs, moved onto the Quaternius skeleton. All are CC0; see
-//! `client/assets/characters/`.
+//! mobs. Each race has its own body, male and female, sculpted from
+//! Quaternius' Universal Base Characters (see `client/assets/characters/`
+//! and its `sculpt.py`); the animations come from Quaternius' Universal
+//! Animation Library, and the weapons, hats, skeleton mobs and the
+//! animations Quaternius lacks from the KayKit character packs, moved onto
+//! the Quaternius skeleton. All are CC0.
 //!
 //! Every body shares one skeleton and one set of animation clips (from
-//! `rig.glb`); a clip only turns bones, so it plays on the male and female
-//! bodies alike. A character is drawn by picking a body, a hairstyle and
-//! what it carries (`dress`), painting its clothes onto its skin texture
-//! (`Garb`), posing the skeleton from what it's doing (`layers`), and
-//! drawing the body's meshes bent around that pose.
+//! `rig.glb`); a clip only turns bones, so it plays on every race's body
+//! alike. A character is drawn by picking a body, a hairstyle and what it
+//! carries (`dress`), dressing the body in what it wears (`clothes`: each
+//! piece a shell over the skin it covers, painted by `repaint`), posing the
+//! skeleton from what it's doing (`layers`), and drawing the body's meshes
+//! bent around that pose. Under their clothes everyone wears plain
+//! underwear.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use super::*;
-use crate::gfx::{ModelFile, Picture, Transform, texture};
+use crate::gfx::{ModelFile, ModelPart, Picture, Transform, texture};
+use shared::data::ItemKind;
+
+mod clothes;
 
 /// The model files, in `client/assets/characters/`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum File {
-    Male,
-    Female,
+    /// A race's own body, male or female (`true`), with its eyes, brows,
+    /// hairstyles and modeled extras (tusks, beards, ...).
+    Person(Race, bool),
     /// Weapons, shields and hats, each hanging off the bone that holds it.
     Props,
     /// The skeleton mobs and their gear.
     Skeletons,
 }
 
-impl File {
-    const ALL: [File; 4] = [File::Male, File::Female, File::Props, File::Skeletons];
+/// The races with a body of their own so far. The rest borrow the human
+/// body, sized to their race (see `stand_in`), until they're sculpted.
+const SCULPTED: [Race; 3] = [Race::Human, Race::Orc, Race::Elf];
 
-    fn bytes(self) -> &'static [u8] {
+impl File {
+    const ALL: [File; 8] = [
+        File::Person(Race::Human, false),
+        File::Person(Race::Human, true),
+        File::Person(Race::Orc, false),
+        File::Person(Race::Orc, true),
+        File::Person(Race::Elf, false),
+        File::Person(Race::Elf, true),
+        File::Props,
+        File::Skeletons,
+    ];
+
+    fn index(self) -> usize {
         match self {
-            File::Male => include_bytes!("../../assets/characters/male.glb"),
-            File::Female => include_bytes!("../../assets/characters/female.glb"),
-            File::Props => include_bytes!("../../assets/characters/props.glb"),
-            File::Skeletons => include_bytes!("../../assets/characters/skeletons.glb"),
+            File::Person(race, female) => {
+                let k = SCULPTED.iter().position(|&r| r == race).unwrap_or(0);
+                k * 2 + female as usize
+            }
+            File::Props => 6,
+            File::Skeletons => 7,
         }
     }
+
+    fn bytes(self) -> &'static [u8] {
+        macro_rules! file {
+            ($name:literal) => {
+                include_bytes!(concat!("../../assets/characters/", $name, ".glb"))
+            };
+        }
+        match self {
+            File::Person(Race::Orc, false) => file!("orc_male"),
+            File::Person(Race::Orc, true) => file!("orc_female"),
+            File::Person(Race::Elf, false) => file!("elf_male"),
+            File::Person(Race::Elf, true) => file!("elf_female"),
+            File::Person(_, false) => file!("human_male"),
+            File::Person(_, true) => file!("human_female"),
+            File::Props => file!("props"),
+            File::Skeletons => file!("skeletons"),
+        }
+    }
+}
+
+/// How a race without its own body yet changes the human one: its size,
+/// head size, and ears (`None` for races with their own body).
+pub(super) fn stand_in(race: Race) -> Option<(f32, f32)> {
+    if SCULPTED.contains(&race) {
+        return None;
+    }
+    let shape = race_shape(race);
+    Some((shape.scale, shape.head.min(1.25)))
 }
 
 /// Whose body someone has.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum Body {
-    Male,
-    Female,
+    /// A race's body, male or female (`true`).
+    Person(Race, bool),
     SkeletonMinion,
     SkeletonWarrior,
     SkeletonRogue,
@@ -57,16 +107,22 @@ pub(super) enum Body {
 impl Body {
     fn file(self) -> File {
         match self {
-            Body::Male => File::Male,
-            Body::Female => File::Female,
+            Body::Person(race, female) if SCULPTED.contains(&race) => File::Person(race, female),
+            Body::Person(_, female) => File::Person(Race::Human, female),
             _ => File::Skeletons,
         }
+    }
+
+    fn person(self) -> bool {
+        matches!(self, Body::Person(..))
     }
 
     /// Whether a skinned part of the body's file belongs to this body.
     fn wears(self, part: &str) -> bool {
         match self {
-            Body::Male | Body::Female => matches!(part, "Body" | "Eyes" | "Brows"),
+            Body::Person(..) => {
+                matches!(part, "Body" | "Eyes" | "Brows") || part.starts_with("Extra_")
+            }
             Body::SkeletonMinion => part.starts_with("Skeleton_Minion_"),
             Body::SkeletonWarrior => part.starts_with("Skeleton_Warrior_"),
             Body::SkeletonRogue => part.starts_with("Skeleton_Rogue_"),
@@ -89,7 +145,7 @@ pub(super) enum Stuff {
 /// A piece of clothing's color and stuff, or bare skin (`None`).
 pub(super) type Fill = Option<([u8; 3], Stuff)>;
 
-/// Clothes, painted onto the body's skin, and the colors of skin and hair.
+/// What someone wears, and the colors of their skin and hair.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) struct Garb {
     pub(super) skin: [u8; 3],
@@ -102,9 +158,113 @@ pub(super) struct Garb {
     /// Hips and legs down to the boots.
     pub(super) legs: Fill,
     pub(super) boots: Fill,
+    /// Whether the boots are shoes, covering only the feet.
+    pub(super) shoes: bool,
     pub(super) belt: Fill,
     /// A panel of cloth down the front and back.
     pub(super) tabard: Fill,
+}
+
+impl Garb {
+    /// Nothing on but underwear.
+    fn bare(self) -> Garb {
+        Garb {
+            skin: self.skin,
+            hair: self.hair,
+            chest: None,
+            sleeves: None,
+            forearms: None,
+            hands: None,
+            legs: None,
+            boots: None,
+            shoes: false,
+            belt: None,
+            tabard: None,
+        }
+    }
+}
+
+/// How a worn item is cut.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Cut {
+    /// Chest: plate, with shoulder guards.
+    Plate,
+    /// Chest: a jerkin, coat or doublet, with sleeves.
+    Coat,
+    /// Chest: no sleeves.
+    Vest,
+    /// Chest: a long robe, sleeves to the wrists.
+    Robe,
+    /// Hands: gloves.
+    Gloves,
+    /// Hands: gloves up to the elbows.
+    Gauntlets,
+    /// Hands: just the forearms.
+    Bracers,
+    Trousers,
+    /// Feet: boots up to below the knees.
+    Boots,
+    /// Feet: sandals and slippers.
+    Shoes,
+    Helm,
+    Hood,
+    /// A band around the head, which hides no hair.
+    Circlet,
+}
+
+/// What a piece of armor is made of and how it's cut, from its slot and
+/// name.
+pub(super) fn wear_of(id: ItemId) -> (Stuff, Cut) {
+    let it = item(id);
+    let has = |words: &[&str]| words.iter().any(|w| it.name.contains(w));
+    // Leather first: a hide chestguard is leather.
+    let stuff = if has(&[
+        "Leather",
+        "Hide",
+        "hide",
+        "Jerkin",
+        "Coat",
+        "Grips",
+        "Bracers",
+        "Boots",
+        "Scout",
+        "Ridgerunner",
+        "Rimeheart",
+    ]) {
+        Stuff::Leather
+    } else if has(&[
+        "Hauberk",
+        "Breastplate",
+        "Chestguard",
+        "Legplates",
+        "Gauntlets",
+        "Sabatons",
+        "Crown",
+    ]) {
+        Stuff::Metal
+    } else {
+        Stuff::Cloth
+    };
+    let slot = match it.kind {
+        ItemKind::Armor { slot, .. } => slot,
+        _ => Slot::Chest,
+    };
+    let cut = match slot {
+        Slot::Head if has(&["Hood"]) => Cut::Hood,
+        Slot::Head if has(&["Circlet", "Crown"]) => Cut::Circlet,
+        Slot::Head => Cut::Helm,
+        Slot::Chest if has(&["Robe", "Vestment"]) => Cut::Robe,
+        Slot::Chest if has(&["Vest", "Wrap"]) => Cut::Vest,
+        Slot::Chest if stuff == Stuff::Metal => Cut::Plate,
+        Slot::Chest => Cut::Coat,
+        Slot::Hands if has(&["Gauntlets", "Wraps"]) => Cut::Gauntlets,
+        Slot::Hands if has(&["Bracers"]) => Cut::Bracers,
+        Slot::Hands => Cut::Gloves,
+        Slot::Legs => Cut::Trousers,
+        Slot::Feet if has(&["Sandals", "Slippers"]) => Cut::Shoes,
+        Slot::Feet => Cut::Boots,
+    };
+    (stuff, cut)
 }
 
 fn bytes(c: Color) -> [u8; 3] {
@@ -131,15 +291,15 @@ pub(super) struct Dress {
     /// Hair meshes worn (from the body's file).
     pub(super) hair: Vec<&'static str>,
     pub(super) props: Vec<Prop>,
-    /// Overall height, relative to a human.
+    /// Height, relative to the body's own.
     pub(super) scale: f32,
-    /// Breadth, relative to height.
-    pub(super) width: f32,
-    /// Head size.
-    pub(super) head: f32,
-    /// For ears and tusks.
-    pub(super) race: Option<Race>,
+    /// Girth of the body and limbs, relative to the body's own (the weight
+    /// slider).
+    pub(super) girth: f32,
     pub(super) mohawk: bool,
+    /// For a race on the human body (see `stand_in`): the race and its
+    /// head size.
+    pub(super) stand_in: Option<(Race, f32)>,
     /// Shoulder guards: their color and size.
     pub(super) pauldrons: Option<(Color, f32)>,
     /// A long robe's skirt: its color and its hem's.
@@ -166,15 +326,46 @@ enum Region {
 /// Where each spot of a body's texture is, found once from its mesh.
 struct Map {
     region: Vec<Region>,
-    /// Where on the body it is in the bind pose (as shares of the body's
-    /// height; y up from the feet, x to the left, z forward).
+    /// Where on the body it is in the bind pose (meters; y up from the
+    /// feet, x to the left, z forward).
     spot: Vec<Vec3>,
-    /// Spots painted grey in the original (underwear).
+    /// Spots painted grey in the original: underwear.
     pale: Vec<bool>,
     /// Average brightness of the skin and the hair, to shade against.
     skin_mean: f32,
     hair_mean: f32,
 }
+
+/// Where clothes end on a body, in meters up from its feet (and out from
+/// its middle), found from its skeleton so they fit every race.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Marks {
+    /// Where boots end.
+    boot_top: f32,
+    /// A belt's bottom and top.
+    belt: (f32, f32),
+    /// How high trousers come up when nothing is worn over them: over the
+    /// underwear.
+    trousers: f32,
+    /// A tabard's half width, bottom and top, front and back.
+    tabard: (f32, f32, f32),
+}
+
+/// Measures of a body that things drawn on it are sized by.
+#[derive(Clone, Copy, Debug)]
+struct Build {
+    /// How tall it stands (meters).
+    height: f32,
+    /// How far the top of the head is above the head bone.
+    crown: f32,
+    /// How thick the upper arms are.
+    arms: f32,
+    /// A long robe's skirt, from the waist down to the ankles: each ring's
+    /// height, half width, and front and back, clear of the legs.
+    skirt: [(f32, f32, f32, f32); SKIRT_RINGS],
+}
+
+const SKIRT_RINGS: usize = 5;
 
 struct Loaded {
     model: ModelFile,
@@ -186,7 +377,11 @@ struct Loaded {
     rest_world: Vec<Mat4>,
     /// The texture, shrunk to `ATLAS` square.
     picture: Picture,
+    /// For people: their texture's map, skin, marks and build.
     map: Option<Map>,
+    shape: Option<clothes::Shape>,
+    marks: Option<Marks>,
+    build: Option<Build>,
 }
 
 struct Library {
@@ -197,14 +392,21 @@ struct Library {
     files: Vec<Loaded>,
 }
 
+impl Library {
+    fn file(&self, file: File) -> &Loaded {
+        &self.files[file.index()]
+    }
+
+    /// The human male's build, which the game's sizes are set by.
+    fn standard(&self) -> Build {
+        self.file(File::Person(Race::Human, false))
+            .build
+            .expect("people have a build")
+    }
+}
+
 /// The textures are repainted at this many pixels square.
 const ATLAS: usize = 512;
-
-/// Where boots end and the belt sits, as a share of the body's height.
-const BOOT_TOP: f32 = 0.27;
-const BELT: (f32, f32) = (0.545, 0.575);
-/// A tabard's half width, bottom and top, front and back.
-const TABARD: (f32, f32, f32) = (0.05, 0.4, 0.76);
 
 fn library() -> &'static Library {
     static LIBRARY: OnceLock<Library> = OnceLock::new();
@@ -244,7 +446,20 @@ fn library() -> &'static Library {
                         .as_ref()
                         .expect("character files have a texture"),
                 );
-                let map = matches!(file, File::Male | File::Female).then(|| map(&model, &picture));
+                let person = matches!(file, File::Person(..));
+                let joint = |name: &str| {
+                    rig.node(name)
+                        .map_or(Vec3::ZERO, |i| rest_world[i].transform_point3(Vec3::ZERO))
+                };
+                let shape = person.then(|| clothes::shape(&model)).flatten();
+                let (map, marks, build) = match &shape {
+                    Some(shape) => {
+                        let map = map(&model, &picture, shape);
+                        let marks = marks(&joint, &map);
+                        (Some(map), Some(marks), Some(shape.build(&model, &joint)))
+                    }
+                    None => (None, None, None),
+                };
                 Loaded {
                     model,
                     binding,
@@ -252,11 +467,44 @@ fn library() -> &'static Library {
                     rest_world,
                     picture,
                     map,
+                    shape,
+                    marks,
+                    build,
                 }
             })
             .collect();
         Library { rig, upper, files }
     })
+}
+
+/// Where clothes end on a body with its joints where `joint` says and its
+/// texture mapped by `map`. The shares were measured on the human body.
+fn marks(joint: &dyn Fn(&str) -> Vec3, map: &Map) -> Marks {
+    let (pelvis, waist) = (joint("pelvis").y, joint("spine_01").y);
+    let (chest, neck) = (joint("spine_03").y, joint("neck_01").y);
+    let (knee, ankle) = (joint("calf_l").y, joint("foot_l").y);
+    let hips = (joint("thigh_l").x - joint("thigh_r").x).abs() / 2.0;
+    let belt = (
+        pelvis + (waist - pelvis) * 0.3,
+        pelvis + (waist - pelvis) * 0.75,
+    );
+    let middle = (belt.0 + belt.1) / 2.0;
+    // The top of the underwear's shorts (not a top's, higher up).
+    let shorts = (0..map.pale.len())
+        .filter(|&i| map.pale[i] && matches!(map.region[i], Region::Chest | Region::Hips))
+        .map(|i| map.spot[i].y)
+        .filter(|&y| y < middle + 0.12)
+        .fold(middle, f32::max);
+    Marks {
+        boot_top: ankle + (knee - ankle) * 0.88,
+        belt,
+        trousers: shorts + 0.012,
+        tabard: (
+            hips * 0.79,
+            knee + (pelvis - knee) * 0.45,
+            chest + (neck - chest) * 0.31,
+        ),
+    }
 }
 
 /// Box-filters a picture down to `ATLAS` square.
@@ -320,40 +568,22 @@ fn region_of(bone: &str) -> Region {
 
 /// Finds which part of the body each spot of the texture covers, by
 /// drawing the body's triangles flat onto the texture.
-fn map(model: &ModelFile, picture: &Picture) -> Map {
+fn map(model: &ModelFile, picture: &Picture, shape: &clothes::Shape) -> Map {
     let n = ATLAS * ATLAS;
     let mut region = vec![Region::None; n];
     let mut spot = vec![Vec3::ZERO; n];
-    let body_height = model
-        .parts
-        .iter()
-        .filter(|p| p.name == "Body")
-        .flat_map(|p| p.positions.iter().map(|v| v.y))
-        .fold(0.01f32, f32::max);
     for part in &model.parts {
-        let fixed = match part.name.as_str() {
-            "Body" => None,
-            "Eyes" => continue,
-            _ => Some(Region::Hair),
-        };
-        let joints = part.skin.map(|s| &model.skins[s].joints);
-        let vertex_region = |v: usize| {
-            if let Some(r) = fixed {
-                return r;
-            }
-            let (Some(joints), Some(j), Some(w)) =
-                (joints, part.joints.get(v), part.weights.get(v))
-            else {
-                return Region::Chest;
-            };
-            let k = (0..4).max_by(|&a, &b| w[a].total_cmp(&w[b])).unwrap_or(0);
-            region_of(&model.nodes[joints[j[k] as usize]].name)
+        let body = match part.name.as_str() {
+            "Body" => true,
+            // Modeled extras are colored by the swatches their texture
+            // points at, or by the skin or hair they borrow.
+            name if name == "Eyes" || name.starts_with("Extra_") => continue,
+            _ => false,
         };
         for tri in part.indices.as_chunks::<3>().0 {
             let v = tri.map(|i| i as usize);
             let uv = v.map(|i| part.uvs[i] * ATLAS as f32);
-            let regions = v.map(vertex_region);
-            let spots = v.map(|i| part.positions[i] / body_height);
+            let spots = v.map(|i| part.positions[i]);
             let (lo, hi) = (
                 uv[0].min(uv[1]).min(uv[2]).floor().max(Vec2::ZERO),
                 uv[0].max(uv[1]).max(uv[2]).ceil(),
@@ -374,8 +604,14 @@ fn map(model: &ModelFile, picture: &Picture) -> Map {
                         continue;
                     }
                     let i = y * ATLAS + x;
-                    let k = (0..3).max_by(|&a, &b| w[a].total_cmp(&w[b])).unwrap_or(0);
-                    region[i] = regions[k];
+                    // The body's parts meet where its bones' pulls do, as
+                    // the clothes are cut (see `clothes`).
+                    region[i] = if body {
+                        let w = w.map(|w| w.max(0.0));
+                        shape.region_in(part, v, w)
+                    } else {
+                        Region::Hair
+                    };
                     spot[i] = spots[0] * w[0] + spots[1] * w[1] + spots[2] * w[2];
                 }
             }
@@ -436,22 +672,57 @@ fn map(model: &ModelFile, picture: &Picture) -> Map {
     }
 }
 
-/// Paints a body's clothes, skin and hair onto its texture, keeping the
-/// light and shade painted into it.
-fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
+/// Underwear: plain linen.
+const UNDERWEAR: [u8; 3] = [214, 204, 182];
+const UNDERWEAR_PIECE: u8 = 9;
+
+/// Which piece of clothing covers a spot on the body (`at`, in the bind
+/// pose) in `region`, and the piece's number (0 for bare skin).
+fn piece(region: Region, at: Vec3, garb: &Garb, marks: &Marks) -> (Fill, u8) {
+    let h = at.y;
+    let waist = (marks.belt.0 + marks.belt.1) / 2.0;
+    let belt = (marks.belt.0..marks.belt.1).contains(&h);
+    let tabard = at.x.abs() < marks.tabard.0 && (marks.tabard.1..marks.tabard.2).contains(&h);
+    match region {
+        Region::None | Region::Head | Region::Hair => (None, 0),
+        Region::Chest | Region::Hips | Region::Thigh if garb.belt.is_some() && belt => {
+            (garb.belt, 7)
+        }
+        Region::Chest | Region::Hips | Region::Thigh if garb.tabard.is_some() && tabard => {
+            (garb.tabard, 8)
+        }
+        // Shirts and trousers meet at the waist, whichever bone moves it;
+        // without a shirt, trousers come up over the underwear.
+        Region::Chest | Region::Hips if h >= waist && garb.chest.is_some() => (garb.chest, 1),
+        Region::Chest | Region::Hips
+            if h >= waist && (h >= marks.trousers || garb.legs.is_none()) =>
+        {
+            (None, 0)
+        }
+        Region::UpperArm => (garb.sleeves, 2),
+        Region::Forearm => (garb.forearms, 3),
+        Region::Hand => (garb.hands, 4),
+        Region::Chest | Region::Hips | Region::Thigh => (garb.legs, 5),
+        Region::Calf if h < marks.boot_top && garb.boots.is_some() && !garb.shoes => {
+            (garb.boots, 6)
+        }
+        Region::Calf => (garb.legs, 5),
+        Region::Foot => (garb.boots, 6),
+    }
+}
+
+/// Paints a body's clothes, underwear, skin and hair onto its texture,
+/// keeping the light and shade painted into it.
+fn repaint(picture: &Picture, map: &Map, marks: &Marks, garb: &Garb) -> Vec<[u8; 4]> {
     let n = ATLAS * ATLAS;
     let mut pixels = picture.pixels.clone();
-    // Which piece of clothing each spot got, to outline their edges.
-    let mut piece = vec![0u8; n];
+    // Which piece of clothing each spot got, and its color, to outline
+    // where one color meets another.
+    let mut pieces = vec![0u8; n];
+    let mut colors: Vec<Option<[u8; 3]>> = vec![None; n];
     for i in 0..n {
         let region = map.region[i];
-        if region == Region::None {
-            continue;
-        }
-        let at = map.spot[i];
-        let h = at.y;
-        let pale = map.pale[i];
-        let (fill, id): (Fill, u8) = match region {
+        match region {
             Region::None => continue,
             Region::Hair => {
                 let shade = luma(pixels[i]) / map.hair_mean;
@@ -459,41 +730,22 @@ fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
                 pixels[i] = [r, g, b, 255];
                 continue;
             }
-            Region::Head => (None, 0),
-            Region::Chest | Region::Hips
-                if garb.belt.is_some() && (BELT.0..BELT.1).contains(&h) =>
-            {
-                (garb.belt, 7)
+            _ => {}
+        }
+        let (mut fill, mut id) = piece(region, map.spot[i], garb, marks);
+        if fill.is_none() {
+            id = 0;
+            if map.pale[i] && region != Region::Head {
+                fill = Some((UNDERWEAR, Stuff::Cloth));
+                id = UNDERWEAR_PIECE;
             }
-            Region::Chest | Region::Hips | Region::Thigh
-                if garb.tabard.is_some()
-                    && at.x.abs() < TABARD.0
-                    && (TABARD.1..TABARD.2).contains(&h) =>
-            {
-                (garb.tabard, 8)
-            }
-            Region::Chest => match garb.chest {
-                Some(_) => (garb.chest, 1),
-                // A bare chest keeps its underwear, in the trousers' color.
-                None if pale => (garb.legs, 5),
-                None => (None, 0),
-            },
-            Region::UpperArm => (garb.sleeves, 2),
-            Region::Forearm => (garb.forearms, 3),
-            Region::Hand => (garb.hands, 4),
-            Region::Hips | Region::Thigh => (garb.legs, 5),
-            Region::Calf if h < BOOT_TOP && garb.boots.is_some() => (garb.boots, 6),
-            Region::Calf => (garb.legs, 5),
-            Region::Foot => (garb.boots, 6),
-        };
+        }
+        pieces[i] = id;
+        colors[i] = fill.map(|f| f.0);
         let shade = luma(pixels[i]) / map.skin_mean;
         let color = match fill {
-            None => {
-                piece[i] = 0;
-                garb.skin.map(|c| c as f32 / 255.0 * shade)
-            }
+            None => garb.skin.map(|c| c as f32 / 255.0 * shade),
             Some((c, stuff)) => {
-                piece[i] = id;
                 // Clothes keep only some of the painted muscle, and a little
                 // weave.
                 let x = (i % ATLAS) as i32;
@@ -505,10 +757,11 @@ fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
                     Stuff::Metal => 1.05 + (shade - 1.0) * 0.8 + grain * 0.03,
                 };
                 // Plate is made of overlapping bands.
+                let h = map.spot[i].y;
                 let banded = stuff == Stuff::Metal
                     && matches!(region, Region::Chest | Region::Hips | Region::Thigh)
-                    && h < 0.7
-                    && (h / 0.034).fract() < 0.14;
+                    && h < marks.tabard.2
+                    && (h / 0.062).fract() < 0.14;
                 let k = if banded { k * 0.7 } else { k };
                 c.map(|c| c as f32 / 255.0 * k)
             }
@@ -516,7 +769,31 @@ fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
         let [r, g, b] = color.map(texture::byte);
         pixels[i] = [r, g, b, 255];
     }
-    // Dark seams where one piece of clothing meets another, or skin.
+    // Clothes reach a few spots past where they end, so the edges of their
+    // shells, cut finer than the texture's spots, never show skin.
+    let bare = |id: u8| id == 0 || id == UNDERWEAR_PIECE;
+    let body = |r: Region| r != Region::None && r != Region::Hair;
+    for _ in 0..3 {
+        let (before, ids, was) = (pixels.clone(), pieces.clone(), colors.clone());
+        for y in 1..ATLAS - 1 {
+            for x in 1..ATLAS - 1 {
+                let i = y * ATLAS + x;
+                if !body(map.region[i]) || !bare(ids[i]) {
+                    continue;
+                }
+                let around = [i - 1, i + 1, i - ATLAS, i + ATLAS];
+                if let Some(&j) = around
+                    .iter()
+                    .find(|&&j| body(map.region[j]) && !bare(ids[j]))
+                {
+                    pixels[i] = before[j];
+                    pieces[i] = ids[j];
+                    colors[i] = was[j];
+                }
+            }
+        }
+    }
+    // Dark seams where one color of clothing meets another, or skin.
     let mut out = pixels.clone();
     for y in 1..ATLAS - 1 {
         for x in 1..ATLAS - 1 {
@@ -527,7 +804,7 @@ fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
             let edge = [i - 1, i + 1, i - ATLAS, i + ATLAS].iter().any(|&j| {
                 map.region[j] != Region::None
                     && map.region[j] != Region::Hair
-                    && piece[j] != piece[i]
+                    && colors[j] != colors[i]
             });
             if edge {
                 let p = pixels[i];
@@ -544,22 +821,23 @@ fn repaint(picture: &Picture, map: &Map, garb: &Garb) -> Vec<[u8; 4]> {
 }
 
 thread_local! {
-    static TEXTURES: RefCell<HashMap<(Body, Option<Garb>), Texture2D>> =
+    static TEXTURES: RefCell<HashMap<(File, Option<Garb>), Texture2D>> =
         RefCell::new(HashMap::new());
 }
 
-/// A body's texture with its garb painted on (or a file's own, for `None`),
-/// made once and kept.
-fn painted(body: Body, garb: Option<Garb>) -> Texture2D {
+/// A file's texture with `garb` painted on (or its own, for `None`), made
+/// once and kept.
+fn painted(file: File, garb: Option<Garb>) -> Texture2D {
     TEXTURES.with(|t| {
         t.borrow_mut()
-            .entry((body, garb))
+            .entry((file, garb))
             .or_insert_with(|| {
-                let lib = library();
-                let file = &lib.files[body.file() as usize];
-                let pixels = match (garb, &file.map) {
-                    (Some(garb), Some(map)) => repaint(&file.picture, map, &garb),
-                    _ => file.picture.pixels.clone(),
+                let loaded = library().file(file);
+                let pixels = match (garb, &loaded.map, &loaded.marks) {
+                    (Some(garb), Some(map), Some(marks)) => {
+                        repaint(&loaded.picture, map, marks, &garb)
+                    }
+                    _ => loaded.picture.pixels.clone(),
                 };
                 texture::atlas(ATLAS, ATLAS, &pixels)
             })
@@ -567,101 +845,19 @@ fn painted(body: Body, garb: Option<Garb>) -> Texture2D {
     })
 }
 
-fn file_texture(file: File) -> Texture2D {
-    let body = match file {
-        File::Male => Body::Male,
-        File::Female => Body::Female,
-        // Props share no body, so key them by one that isn't theirs.
-        File::Props => return props_texture(),
-        File::Skeletons => Body::SkeletonMinion,
-    };
-    painted(body, None)
-}
-
-fn props_texture() -> Texture2D {
-    thread_local! {
-        static PROPS: Texture2D = {
-            let lib = library();
-            texture::atlas(ATLAS, ATLAS, &lib.files[File::Props as usize].picture.pixels)
-        };
-    }
-    PROPS.with(|t| t.clone())
-}
-
-/// The class's usual clothes.
-fn class_garb(class: Class) -> (Fill, Fill, Fill, Fill, Fill, Fill, Fill) {
-    let (torso, legs, sleeves, boots, _) = class_colors(class);
-    let brown = dark(LEATHER, 0.8);
-    // chest, sleeves, forearms, hands, legs, boots, belt
-    match class {
-        Class::Fighter | Class::Paladin => (
-            metal(torso),
-            metal(sleeves),
-            metal(sleeves),
-            metal(dark(sleeves, 0.85)),
-            metal(legs),
-            metal(dark(legs, 0.6)),
-            leather(brown),
-        ),
-        Class::Barbarian => (
-            None,
-            None,
-            leather(sleeves),
-            None,
-            leather(legs),
-            leather(boots),
-            leather(dark(torso, 0.7)),
-        ),
-        Class::Monk => (
-            cloth(torso),
-            None,
-            cloth(c(0.9, 0.86, 0.75)),
-            cloth(c(0.9, 0.86, 0.75)),
-            cloth(dark(legs, 0.5)),
-            None,
-            cloth(c(0.9, 0.86, 0.75)),
-        ),
-        Class::Rogue | Class::Ranger | Class::Artificer | Class::Bard => (
-            leather(torso),
-            leather(sleeves),
-            leather(dark(sleeves, 0.85)),
-            leather(boots),
-            cloth(legs),
-            leather(boots),
-            leather(brown),
-        ),
-        Class::Cleric => (
-            cloth(torso),
-            cloth(sleeves),
-            cloth(sleeves),
-            leather(boots),
-            cloth(legs),
-            leather(boots),
-            cloth(c(0.85, 0.7, 0.3)),
-        ),
-        Class::Druid | Class::Mage | Class::Sorcerer | Class::Warlock => (
-            cloth(torso),
-            cloth(sleeves),
-            cloth(sleeves),
-            None,
-            cloth(legs),
-            leather(boots),
-            cloth(dark(torso, 0.6)),
-        ),
-    }
-}
-
 /// Picks the body, clothes, props and build for someone.
 pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
     let a = look.appearance;
     let seed = look.seed;
-    let worn = |s: Slot| look.gear[s.index()].map(|id| rgb(item(id).color));
     let person = matches!(
         outfit,
         Outfit::Class(_) | Outfit::Merchant | Outfit::QuestGiver
     );
-    let sex = if person { a.body } else { (seed / 7 % 2) as u8 };
-    let human = if sex == 1 { Body::Female } else { Body::Male };
+    let female = if person {
+        a.body == 1
+    } else {
+        seed / 7 % 2 == 1
+    };
     let skin = bytes(if person {
         skin_color(a.race, a.skin)
     } else {
@@ -681,48 +877,76 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
         hands: None,
         legs: None,
         boots: None,
+        shoes: false,
         belt: None,
         tabard: None,
     };
     use File::Props as P;
-    let mut body = human;
+    let mut body = Body::Person(if person { a.race } else { Race::Human }, female);
+    let mut scale = if person { a.height_scale() } else { 1.0 };
+    let girth = if person { a.weight_scale() } else { 1.0 };
     let mut pauldrons = None;
     let mut robe = None;
     let props: Vec<Prop> = match outfit {
         Outfit::Class(class) => {
-            let (chest, sleeves, forearms, hands, legs, boots, belt) = class_garb(class);
-            let stuff = |f: Fill| f.map_or(Stuff::Cloth, |f| f.1);
-            // Worn armor takes its item's color.
-            let wear = |f: Fill, slot: Slot, bare: Stuff| match worn(slot) {
-                Some(c) => Some((bytes(c), f.map_or(bare, |f| f.1))),
-                None => f,
+            // What they wear is the items they have on.
+            let worn = |slot: Slot| {
+                look.gear[slot.index()].map(|id| {
+                    let color = rgb(item(id).color);
+                    let (stuff, cut) = wear_of(id);
+                    (color, Some((bytes(color), stuff)), cut)
+                })
             };
-            garb.chest = wear(chest, Slot::Chest, Stuff::Leather);
-            garb.sleeves = sleeves.or(garb.chest.filter(|_| worn(Slot::Chest).is_some()));
-            garb.forearms = forearms;
-            garb.hands = wear(hands, Slot::Hands, Stuff::Leather);
-            if worn(Slot::Hands).is_some() {
-                garb.forearms = garb.hands;
-            }
-            garb.legs = wear(legs, Slot::Legs, stuff(legs));
-            garb.boots = wear(boots, Slot::Feet, Stuff::Leather);
-            garb.belt = belt;
-            let (torso, _, sleeve, _, cape) = class_colors(class);
-            if matches!(class, Class::Fighter | Class::Paladin | Class::Cleric) {
-                garb.tabard = cape.and_then(cloth);
-            }
-            pauldrons = match class {
-                Class::Fighter | Class::Paladin => {
-                    Some((dark(worn(Slot::Chest).unwrap_or(sleeve), 0.8), 1.2))
+            if let Some((color, fill, cut)) = worn(Slot::Chest) {
+                garb.chest = fill;
+                match cut {
+                    Cut::Plate => {
+                        garb.sleeves = fill;
+                        pauldrons = Some((dark(color, 0.8), 1.2));
+                    }
+                    Cut::Coat => {
+                        garb.sleeves = fill;
+                        if fill.is_some_and(|f| f.1 == Stuff::Leather) {
+                            pauldrons = Some((dark(color, 0.85), 0.75));
+                        }
+                    }
+                    Cut::Robe => {
+                        garb.sleeves = fill;
+                        garb.forearms = fill;
+                        let hem = class_colors(class).4.unwrap_or(dark(color, 0.6));
+                        robe = Some((color, hem));
+                    }
+                    _ => {}
                 }
-                Class::Rogue | Class::Ranger | Class::Artificer | Class::Bard => {
-                    Some((dark(worn(Slot::Chest).unwrap_or(torso), 0.85), 0.75))
+                garb.belt = match cut {
+                    Cut::Robe | Cut::Vest => cloth(dark(color, 0.6)),
+                    _ => leather(dark(LEATHER, 0.8)),
+                };
+                if matches!(class, Class::Fighter | Class::Paladin | Class::Cleric) {
+                    garb.tabard = class_colors(class).4.and_then(cloth);
                 }
-                _ => None,
-            };
-            if robed(class) {
-                let color = worn(Slot::Chest).unwrap_or(torso);
-                robe = Some((color, cape.unwrap_or(dark(color, 0.6))));
+            }
+            if let Some((_, fill, cut)) = worn(Slot::Hands) {
+                match cut {
+                    Cut::Bracers => garb.forearms = fill,
+                    Cut::Gauntlets => {
+                        garb.hands = fill;
+                        garb.forearms = fill;
+                    }
+                    _ => garb.hands = fill,
+                }
+            }
+            if let Some((color, fill, _)) = worn(Slot::Legs) {
+                // Under a robe, legs that stride out of the skirt show the
+                // robe.
+                garb.legs = if robe.is_some() { garb.chest } else { fill };
+                if garb.belt.is_none() {
+                    garb.belt = leather(dark(color, 0.6));
+                }
+            }
+            if let Some((_, fill, cut)) = worn(Slot::Feet) {
+                garb.boots = fill;
+                garb.shoes = cut == Cut::Shoes;
             }
             let mut props: Vec<Prop> = match class {
                 Class::Barbarian => vec![(P, "2H_Axe")],
@@ -737,15 +961,14 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
                 Class::Druid | Class::Mage => vec![(P, "2H_Staff")],
                 Class::Sorcerer | Class::Warlock => vec![(P, "1H_Wand"), (P, "Spellbook")],
             };
-            if worn(Slot::Head).is_some() {
-                props.push(match class {
-                    Class::Fighter | Class::Paladin | Class::Cleric => (P, "Knight_Helmet"),
-                    Class::Barbarian | Class::Monk => (P, "Barbarian_Hat"),
-                    Class::Rogue | Class::Ranger | Class::Artificer | Class::Bard => {
-                        (File::Skeletons, "Skeleton_Rogue_Hood")
-                    }
-                    _ => (P, "Mage_Hat"),
-                });
+            if let Some(id) = look.gear[Slot::Head.index()] {
+                match wear_of(id) {
+                    (_, Cut::Circlet) => {}
+                    (_, Cut::Hood) => props.push((File::Skeletons, "Skeleton_Rogue_Hood")),
+                    (Stuff::Metal, _) => props.push((P, "Knight_Helmet")),
+                    (Stuff::Leather, _) => props.push((P, "Barbarian_Hat")),
+                    (Stuff::Cloth, _) => props.push((P, "Mage_Hat")),
+                }
             }
             props
         }
@@ -793,6 +1016,7 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
                     ]
                 }
                 HumanoidStyle::Raider => {
+                    body = Body::Person(Race::Human, false);
                     garb.forearms = leather(dark(primary, 0.8));
                     garb.legs = leather(secondary);
                     garb.boots = leather(dark(secondary, 0.7));
@@ -814,11 +1038,16 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
                     vec![(P, "1H_Wand"), (P, "Spellbook_open"), (P, "Mage_Hat")]
                 }
                 HumanoidStyle::Shaman | HumanoidStyle::TrollShaman | HumanoidStyle::TroggShaman => {
-                    if style == HumanoidStyle::Shaman {
-                        garb.skin = bytes(skin_color(Race::Orc, (seed % 5) as u8));
+                    body = match style {
+                        HumanoidStyle::Shaman => Body::Person(Race::Orc, female),
+                        HumanoidStyle::TrollShaman => Body::Person(Race::Orc, false),
+                        _ => Body::Person(Race::Dwarf, false),
+                    };
+                    garb.skin = if style == HumanoidStyle::Shaman {
+                        bytes(skin_color(Race::Orc, (seed % 5) as u8))
                     } else {
-                        garb.skin = bytes(primary);
-                    }
+                        bytes(primary)
+                    };
                     garb.chest = cloth(secondary);
                     garb.forearms = leather(dark(secondary, 0.7));
                     garb.legs = cloth(dark(secondary, 0.8));
@@ -827,17 +1056,20 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
                     vec![(P, "2H_Staff")]
                 }
                 HumanoidStyle::Satyr | HumanoidStyle::Trickster => {
+                    body = Body::Person(Race::Elf, female);
                     garb.skin = bytes(primary);
                     garb.legs = leather(dark(secondary, 0.6));
                     garb.boots = leather(dark(secondary, 0.4));
                     vec![(P, "Knife"), (P, "Throwable")]
                 }
                 HumanoidStyle::Trogg => {
+                    body = Body::Person(Race::Dwarf, false);
                     garb.skin = bytes(primary);
                     rags(&mut garb);
                     vec![(P, "1H_Axe")]
                 }
                 HumanoidStyle::Troll => {
+                    body = Body::Person(Race::Orc, false);
                     garb.skin = bytes(primary);
                     rags(&mut garb);
                     garb.forearms = leather(dark(secondary, 0.6));
@@ -874,47 +1106,9 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
         // Giants are still built from shapes; see `humanoid`.
         Outfit::Giant(..) => vec![],
     };
-    // Bare-skinned brutes are one gender.
-    if matches!(
-        outfit,
-        Outfit::Mob(
-            HumanoidStyle::Trogg
-                | HumanoidStyle::Troll
-                | HumanoidStyle::Raider
-                | HumanoidStyle::TrollShaman
-                | HumanoidStyle::TroggShaman,
-            _
-        )
-    ) {
-        body = Body::Male;
-    }
-
-    let (race, mut scale, mut width, mut head) = if person {
-        let shape = race_shape(a.race);
-        let head = match a.race {
-            Race::Goblin | Race::Gnome => 1.18,
-            Race::Undead => 0.95,
-            _ => 1.0,
-        };
-        (
-            Some(a.race),
-            shape.scale,
-            shape.limbs.clamp(0.88, 1.15),
-            head,
-        )
-    } else {
-        (None, 1.0, 1.0, 1.0)
-    };
     match outfit {
-        Outfit::Mob(HumanoidStyle::Troll | HumanoidStyle::TrollShaman, _) => {
-            scale = 1.15;
-            width = 1.08;
-        }
-        Outfit::Mob(HumanoidStyle::Trogg | HumanoidStyle::TroggShaman, _) => {
-            scale = 0.85;
-            width = 1.15;
-            head = 1.1;
-        }
+        Outfit::Mob(HumanoidStyle::Troll | HumanoidStyle::TrollShaman, _) => scale = 1.15,
+        Outfit::Mob(HumanoidStyle::Trogg | HumanoidStyle::TroggShaman, _) => scale = 0.85,
         _ => {}
     }
 
@@ -924,7 +1118,7 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
     } else {
         (seed / 5 % 4) as u8
     };
-    let female = body == Body::Female;
+    let female = matches!(body, Body::Person(_, true));
     let mut hair: Vec<&'static str> = match (style, female) {
         (0, false) => vec!["Hair_Beard"],
         (0, true) => vec!["Hair_BuzzedFemale"],
@@ -934,29 +1128,35 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
         (_, false) => vec!["Hair_Buzzed"],
         (_, true) => vec!["Hair_BuzzedFemale"],
     };
-    // Bearded races.
-    if !female && matches!(a.race, Race::Gnome) && person && !hair.contains(&"Hair_Beard") {
-        hair.push("Hair_Beard");
-    }
     let hatted = props.iter().any(|p| is_hat(p.1));
     if hatted {
         // Only a beard shows under a hat.
         hair.retain(|h| *h == "Hair_Beard");
     }
-    if !matches!(body, Body::Male | Body::Female) {
+    if !body.person() {
         hair.clear();
     }
-    let mohawk = person && style == 4 && !hatted && matches!(body, Body::Male | Body::Female);
+    let mohawk = person && style == 4 && !hatted && body.person();
+    let stand_in = match body {
+        Body::Person(race, _) if person => stand_in(race).map(|(size, head)| {
+            scale *= size;
+            (race, head)
+        }),
+        _ => None,
+    };
+    // Dwarf men are bearded, whatever their hair.
+    if matches!(stand_in, Some((Race::Dwarf, _))) && !female && !hair.contains(&"Hair_Beard") {
+        hair.push("Hair_Beard");
+    }
     Dress {
         body,
         garb,
         hair,
         props,
         scale,
-        width,
-        head,
-        race,
+        girth,
         mohawk,
+        stand_in,
         pauldrons,
         robe,
     }
@@ -1108,19 +1308,24 @@ fn posed(lib: &Library, body: &Loaded, layers: &[Layer]) -> Vec<Transform> {
     pose
 }
 
-/// A long robe's skirt: rings of cloth from the hips to the ankles, each
-/// spot following the hips and the leg on its side.
-fn robe_skirt(b: &mut Batch, frame: &dyn Fn(&str) -> Mat4, hips: Vec3, color: Color, hem: Color) {
+/// A long robe's skirt: rings of cloth from the waist to the ankles (see
+/// `Build::skirt`), each spot following the hips and the leg on its side.
+fn robe_skirt(
+    b: &mut Batch,
+    frame: &dyn Fn(&str) -> Mat4,
+    rings: &[(f32, f32, f32, f32); SKIRT_RINGS],
+    girth: f32,
+    (color, hem): (Color, Color),
+) {
     const SIDES: usize = 18;
-    const RINGS: usize = 5;
     let (pelvis, left, right) = (frame("pelvis"), frame("thigh_l"), frame("thigh_r"));
     let (left_knee, right_knee) = (frame("calf_l"), frame("calf_r"));
     let ring = |r: usize, k: usize| {
-        let t = r as f32 / (RINGS - 1) as f32;
+        let t = r as f32 / (SKIRT_RINGS - 1) as f32;
         let a = std::f32::consts::TAU * k as f32 / SIDES as f32;
-        let (rx, rz) = (0.165 + t * 0.11, 0.125 + t * 0.12);
-        let y = hips.y + 0.065 - t * (hips.y - 0.13);
-        let p = vec3(hips.x + a.sin() * rx, y, hips.z + 0.01 + a.cos() * rz);
+        let (y, wide, front, back) = rings[r];
+        let (rx, rz) = (wide * girth, (front - back) / 2.0 * girth);
+        let p = vec3(a.sin() * rx, y, (front + back) / 2.0 + a.cos() * rz);
         let n = vec3(a.sin() / rx, 0.25, a.cos() / rz).normalize();
         // Left of the body is +x: each side follows its own leg, the front
         // and back both; lower down, more of the leg and less of the hips.
@@ -1131,8 +1336,8 @@ fn robe_skirt(b: &mut Batch, frame: &dyn Fn(&str) -> Mat4, hips: Vec3, color: Co
         let m = pelvis * (1.0 - k) + legs * k;
         (m.transform_point3(p), m.transform_vector3(n))
     };
-    for r in 0..RINGS - 1 {
-        let shade = if r == RINGS - 2 { hem } else { color };
+    for r in 0..SKIRT_RINGS - 1 {
+        let shade = if r == SKIRT_RINGS - 2 { hem } else { color };
         for k in 0..SIDES {
             let (a, na) = ring(r, k);
             let (b2, nb) = ring(r, (k + 1) % SIDES);
@@ -1147,51 +1352,124 @@ fn is_hat(name: &str) -> bool {
     name.ends_with("_Hat") || name.ends_with("_Helmet") || name.ends_with("_Hood")
 }
 
-/// How tall the male body is, in its file's units (meters).
-const BODY_HEIGHT: f32 = 1.81;
+/// Bends a body thicker or thinner (`girth` of its own) around its bones:
+/// for each joint, a stretch across its bone, in the pose the body was
+/// bound in. Heads, hands, feet and fingers keep their size.
+fn thickened(model: &ModelFile, girth: f32) -> Vec<Mat4> {
+    let mut adjust = vec![Mat4::IDENTITY; model.nodes.len()];
+    for skin in &model.skins {
+        for (&j, inv) in skin.joints.iter().zip(&skin.inverse_bind) {
+            let k = match region_of(&model.nodes[j].name) {
+                Region::Head | Region::Hand | Region::Foot => continue,
+                _ if model.nodes[j].name == "neck_01" => continue,
+                _ => girth,
+            };
+            let bind = inv.inverse();
+            let at = bind.transform_point3(Vec3::ZERO);
+            let along = bind.transform_vector3(Vec3::Y).normalize_or_zero();
+            // Scale by k across the bone and keep its length.
+            let across = Mat3::IDENTITY * k
+                + Mat3::from_cols(along * along.x, along * along.y, along * along.z) * (1.0 - k);
+            adjust[j] =
+                Mat4::from_translation(at) * Mat4::from_mat3(across) * Mat4::from_translation(-at);
+        }
+    }
+    adjust
+}
+
+/// How tall a race's body stands, as the game draws it (before the height
+/// slider).
+pub(super) fn stature(race: Race, female: bool) -> f32 {
+    let lib = library();
+    let file = Body::Person(race, female).file();
+    let build = lib.file(file).build.expect("people have a build");
+    let size = stand_in(race).map_or(1.0, |s| s.0);
+    2.1 * build.height / lib.standard().height * size
+}
 
 pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f32, pose: Pose) {
     let lib = library();
     let dress = dress(outfit, look);
     let style = style_of(outfit);
-    let file = &lib.files[dress.body.file() as usize];
+    let id = dress.body.file();
+    let file = lib.file(id);
     let mut skeleton = posed(lib, file, &layers(style, pose));
-    if let Some(head) = lib.rig.node("Head") {
-        skeleton[head].scale *= dress.head;
+    let head = dress.stand_in.map_or(1.0, |s| s.1);
+    if let Some(i) = lib.rig.node("Head") {
+        skeleton[i].scale *= head;
     }
     let skeleton = lib.rig.world(&skeleton);
-    let size = 2.1 / BODY_HEIGHT * dress.scale;
+    let standard = lib.standard();
+    let size = 2.1 / standard.height * dress.scale;
     let transform = Mat4::from_translation(pos)
         * Mat4::from_rotation_y(yaw)
-        * Mat4::from_scale(vec3(size * dress.width, size, size * dress.width));
+        * Mat4::from_scale(Vec3::splat(size));
     // A flush of red when hit.
     let hurt = if pose.dead { 0.0 } else { pose.hurt };
     let tint = Color::new(1.0, 1.0 - hurt * 0.35, 1.0 - hurt * 0.4, 1.0);
 
     let world = file.model.world_on(&skeleton, &file.binding);
-    let garb = matches!(dress.body, Body::Male | Body::Female).then_some(dress.garb);
-    let texture = painted(dress.body, garb);
-    b.textured(&texture, |b| {
-        file.model.draw_posed(b, transform, &world, |part| {
-            let shown = if part.skin.is_some() {
-                dress.body.wears(&part.name) || dress.hair.contains(&part.name.as_str())
-            } else {
-                dress
-                    .props
-                    .iter()
-                    .any(|&(from, name)| from == dress.body.file() && name == part.name)
-            };
-            shown.then_some(tint)
-        });
-    });
+    let adjust = (dress.girth != 1.0).then(|| thickened(&file.model, dress.girth));
+    let joints = file
+        .model
+        .joint_matrices(transform, &world, adjust.as_deref());
+    let held = |part: &ModelPart| {
+        dress
+            .props
+            .iter()
+            .any(|&(from, name)| from == id && name == part.name)
+    };
+    let dressed = dress
+        .body
+        .person()
+        .then(|| clothes::dressed(id, file, &dress.garb))
+        .flatten();
+    match dressed {
+        Some(dressed) => {
+            // The skin that shows, in its underwear, with the eyes, brows,
+            // hair and modeled extras.
+            b.textured(&painted(id, Some(dress.garb.bare())), |b| {
+                let parts = std::iter::once(&dressed.skin)
+                    .chain(file.model.parts.iter().filter(|p| p.name != "Body"));
+                file.model
+                    .draw_parts(b, transform, &world, &joints, parts, |part| {
+                        let shown = if part.skin.is_some() {
+                            dress.body.wears(&part.name) || dress.hair.contains(&part.name.as_str())
+                        } else {
+                            held(part)
+                        };
+                        shown.then_some(tint)
+                    });
+            });
+            if let Some(clothes) = &dressed.clothes {
+                b.textured(&painted(id, Some(dress.garb)), |b| {
+                    file.model
+                        .draw_parts(b, transform, &world, &joints, [clothes], |_| Some(tint));
+                });
+            }
+        }
+        _ => {
+            b.textured(&painted(id, None), |b| {
+                file.model
+                    .draw_parts(b, transform, &world, &joints, &file.model.parts, |part| {
+                        let shown = if part.skin.is_some() {
+                            dress.body.wears(&part.name)
+                        } else {
+                            held(part)
+                        };
+                        shown.then_some(tint)
+                    });
+            });
+        }
+    }
     // Props from other files, with their own textures.
     for from in [File::Props, File::Skeletons] {
-        if from == dress.body.file() || !dress.props.iter().any(|p| p.0 == from) {
+        if from == id || !dress.props.iter().any(|p| p.0 == from) {
             continue;
         }
-        let other = &lib.files[from as usize];
+        let other = lib.file(from);
         let world = other.model.world_on(&skeleton, &other.binding);
-        b.textured(&file_texture(from), |b| {
+        b.textured(&painted(from, None), |b| {
             other.model.draw_posed(b, transform, &world, |part| {
                 (part.skin.is_none() && dress.props.contains(&(from, part.name.as_str())))
                     .then_some(tint)
@@ -1214,11 +1492,14 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
             file.rest_world[i].transform_point3(Vec3::ZERO)
         })
     };
+    // Sized to this body: its arms, hips and head against a human's.
+    let build = file.build.unwrap_or(standard);
     if let Some((color, k)) = dress.pauldrons {
+        let k = k * (build.arms / standard.arms).min(1.25) * dress.girth;
         for side in ["l", "r"] {
             let bone = format!("upperarm_{side}");
             let out = if side == "l" { 1.0 } else { -1.0 };
-            let center = rest(&bone) + vec3(0.035 * out, 0.035, 0.0);
+            let center = rest(&bone) + vec3(0.035 * out, 0.035, 0.0) * k;
             let m = frame(&bone);
             b.ellipsoid_axes(
                 m.transform_point3(center),
@@ -1231,50 +1512,34 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
             );
         }
     }
-    if let Some((color, hem)) = dress.robe {
-        robe_skirt(b, &frame, rest("pelvis"), color, hem);
+    if let Some(colors) = dress.robe {
+        robe_skirt(b, &frame, &build.skirt, dress.girth, colors);
     }
-    let head = rest("Head");
-    let grown = size * dress.head;
-    // Ears and tusks.
-    if let Some(race) = dress.race {
+    // Long ears on goblins and gnomes still on the human body.
+    if let Some((race @ (Race::Goblin | Race::Gnome), head_size)) = dress.stand_in {
         let skin = skin_color(race, look.appearance.skin);
-        let ear = |b: &mut Batch, side: f32, dir: Vec3, radius: f32| {
-            let base = at("Head", head + vec3(0.074 * side, 0.068, -0.012));
-            let tip = along("Head", dir * vec3(side, 1.0, 1.0));
-            b.cone(base, tip, radius * grown, 0.0, 8, skin);
+        let head = rest("Head");
+        let (dir, radius) = match race {
+            Race::Goblin => (vec3(0.11, 0.025, -0.015), 0.028),
+            _ => (vec3(0.05, 0.02, -0.012), 0.022),
         };
         for side in [-1.0, 1.0] {
-            match race {
-                Race::Elf => ear(b, side, vec3(0.075, 0.05, -0.03), 0.018),
-                Race::Goblin => ear(b, side, vec3(0.11, 0.025, -0.015), 0.028),
-                Race::Gnome => ear(b, side, vec3(0.03, 0.012, -0.008), 0.02),
-                Race::Orc => {
-                    ear(b, side, vec3(0.035, 0.02, -0.012), 0.02);
-                    let tusk = at("Head", head + vec3(0.022 * side, 0.005, 0.088));
-                    b.cone(
-                        tusk,
-                        along("Head", vec3(0.004 * side, 0.03, 0.006)),
-                        0.007 * grown,
-                        0.0,
-                        6,
-                        BONE,
-                    );
-                }
-                _ => {}
-            }
+            let base = at("Head", head + vec3(0.074 * side, 0.068, -0.012));
+            let tip = along("Head", dir * vec3(side, 1.0, 1.0));
+            b.cone(base, tip, radius * size * head_size, 0.0, 8, skin);
         }
     }
     // A mohawk is a crest of hair on a shaved head.
     if dress.mohawk {
+        let k = build.crown / standard.crown;
         let hair = hair_color(look.appearance.hair_color);
-        let center = head + vec3(0.0, 0.085, -0.012);
-        for k in 0..7 {
-            let a = -1.15 + k as f32 * 0.36;
+        let center = rest("Head") + vec3(0.0, 0.085, -0.012) * k;
+        for i in 0..7 {
+            let a = -1.15 + i as f32 * 0.36;
             let dir = vec3(0.0, a.cos(), a.sin());
-            let base = at("Head", center + dir * 0.095);
-            let up = along("Head", dir * 0.05);
-            b.cone(base, up, 0.022 * grown, 0.0, 6, hair);
+            let base = at("Head", center + dir * 0.095 * k);
+            let up = along("Head", dir * 0.05 * k);
+            b.cone(base, up, 0.022 * size * k, 0.0, 6, hair);
         }
     }
     // Spell light gathering in the hands while casting.
@@ -1327,10 +1592,13 @@ mod tests {
         outfits
     }
 
+    const HUMAN: File = File::Person(Race::Human, false);
+
     #[test]
     fn every_file_loads_on_the_shared_skeleton() {
         let lib = library();
-        for (file, loaded) in File::ALL.iter().zip(&lib.files) {
+        for (i, (file, loaded)) in File::ALL.iter().zip(&lib.files).enumerate() {
+            assert_eq!(file.index(), i);
             assert!(!loaded.model.parts.is_empty(), "{file:?}");
             // Every bone the skins bend with is in the skeleton.
             for skin in &loaded.model.skins {
@@ -1343,19 +1611,60 @@ mod tests {
                 }
             }
         }
-        // The bodies' textures know where the clothes go.
-        for file in [File::Male, File::Female] {
-            let map = lib.files[file as usize].map.as_ref().unwrap();
-            for region in [
-                Region::Head,
-                Region::Chest,
-                Region::Hand,
-                Region::Thigh,
-                Region::Foot,
-                Region::Hair,
-            ] {
-                assert!(map.region.contains(&region), "{file:?} {region:?}");
+        // Every race's bodies know where the clothes go.
+        for race in SCULPTED {
+            for female in [false, true] {
+                let file = File::Person(race, female);
+                let loaded = lib.file(file);
+                let map = loaded.map.as_ref().unwrap();
+                for region in [
+                    Region::Head,
+                    Region::Chest,
+                    Region::Hand,
+                    Region::Thigh,
+                    Region::Foot,
+                    Region::Hair,
+                ] {
+                    assert!(map.region.contains(&region), "{file:?} {region:?}");
+                }
+                assert!(map.pale.iter().any(|p| *p), "{file:?} has no underwear");
+                let marks = loaded.marks.unwrap();
+                assert!(marks.boot_top < marks.belt.0 && marks.belt.1 < marks.tabard.2);
+                assert!(loaded.shape.is_some() && loaded.build.is_some(), "{file:?}");
             }
+        }
+    }
+
+    #[test]
+    fn sculpted_races_have_bodies_of_their_own() {
+        let lib = library();
+        let body = |race| {
+            &lib.file(File::Person(race, false))
+                .model
+                .parts
+                .iter()
+                .find(|p| p.name == "Body")
+                .unwrap()
+                .positions
+        };
+        for race in SCULPTED {
+            let height = lib.file(File::Person(race, false)).build.unwrap().height;
+            assert!((1.5..2.2).contains(&height), "{race:?} is {height} m");
+            if race != Race::Human {
+                assert!(body(race) != body(Race::Human), "{race:?} is a human");
+            }
+        }
+        // Orcs and elves stand taller than humans.
+        for race in [Race::Orc, Race::Elf] {
+            assert!(stature(race, false) > stature(Race::Human, false));
+        }
+        // The rest borrow the human body, at their own size.
+        for race in [Race::Dwarf, Race::Gnome, Race::Goblin] {
+            assert_eq!(
+                Body::Person(race, true).file(),
+                File::Person(Race::Human, true)
+            );
+            assert!(stature(race, false) < stature(Race::Human, false) * 0.85);
         }
     }
 
@@ -1366,14 +1675,22 @@ mod tests {
             for seed in 0..6 {
                 let mut l = look(EntityKind::Player(Class::Mage));
                 l.seed = seed;
+                l.appearance.race = Race::ALL[seed as usize % Race::ALL.len()];
                 l.appearance.hair_style = seed as u8;
                 l.appearance.body = seed as u8 % 2;
-                // With and without a helmet.
-                for head in [None, Some(items::LINEN_HOOD)] {
+                // With and without a hat of each kind.
+                for head in [
+                    None,
+                    Some(items::LINEN_HOOD),
+                    Some(items::LEATHER_CAP),
+                    Some(items::WOLFHIDE_HELM),
+                    Some(items::SILKWEAVE_CIRCLET),
+                    Some(items::CROWN_OF_THE_SUNKEN_KING),
+                ] {
                     l.gear[Slot::Head.index()] = head;
                     let d = dress(outfit, &l);
                     for (from, name) in &d.props {
-                        let model = &lib.files[*from as usize].model;
+                        let model = &lib.file(*from).model;
                         assert!(
                             model
                                 .parts
@@ -1382,7 +1699,7 @@ mod tests {
                             "{from:?} has no {name}"
                         );
                     }
-                    let model = &lib.files[d.body.file() as usize].model;
+                    let model = &lib.file(d.body.file()).model;
                     for hair in &d.hair {
                         assert!(model.parts.iter().any(|p| p.name == *hair), "no {hair}");
                     }
@@ -1453,7 +1770,7 @@ mod tests {
         assert!(!l[1].upper);
 
         let lib = library();
-        let body = &lib.files[File::Male as usize];
+        let body = lib.file(HUMAN);
         let running = posed(
             lib,
             body,
@@ -1468,26 +1785,90 @@ mod tests {
 
     #[test]
     fn bodies_keep_their_own_proportions() {
-        // The female skeleton is smaller; posing it keeps her bone lengths.
+        // Posing a body keeps its own bone lengths, however long they are.
         let lib = library();
-        let (male, female) = (
-            &lib.files[File::Male as usize],
-            &lib.files[File::Female as usize],
-        );
         let idle = layers(Style::Staff, Pose::default());
         let arm = lib.rig.node("lowerarm_l").unwrap();
-        let m = posed(lib, male, &idle)[arm].translation.length();
-        let f = posed(lib, female, &idle)[arm].translation.length();
-        assert!((m - male.rest[arm].translation.length()).abs() < 1e-4);
-        assert!((f - female.rest[arm].translation.length()).abs() < 1e-4);
-        assert!(f < m);
+        for file in File::ALL {
+            let body = lib.file(file);
+            let posed = posed(lib, body, &idle)[arm].translation.length();
+            assert!((posed - body.rest[arm].translation.length()).abs() < 1e-4);
+        }
     }
 
     #[test]
-    fn clothes_are_painted_where_they_go() {
+    fn worn_items_are_cut_from_their_names() {
+        use items::*;
+        for (id, want) in [
+            (SQUIRES_HAUBERK, (Stuff::Metal, Cut::Plate)),
+            (TRACKERS_JERKIN, (Stuff::Leather, Cut::Coat)),
+            (MINSTRELS_DOUBLET, (Stuff::Cloth, Cut::Coat)),
+            (LEATHER_VEST, (Stuff::Leather, Cut::Vest)),
+            (INITIATES_WRAP, (Stuff::Cloth, Cut::Vest)),
+            (NOVICES_VESTMENTS, (Stuff::Cloth, Cut::Robe)),
+            (APPRENTICES_ROBE, (Stuff::Cloth, Cut::Robe)),
+            (SQUIRES_GAUNTLETS, (Stuff::Metal, Cut::Gauntlets)),
+            (HAND_WRAPS, (Stuff::Cloth, Cut::Gauntlets)),
+            (HIDE_BRACERS, (Stuff::Leather, Cut::Bracers)),
+            (SPELLWEAVER_GLOVES, (Stuff::Cloth, Cut::Gloves)),
+            (SQUIRES_LEGPLATES, (Stuff::Metal, Cut::Trousers)),
+            (HIDE_BREECHES, (Stuff::Leather, Cut::Trousers)),
+            (FUR_BOOTS, (Stuff::Leather, Cut::Boots)),
+            (SQUIRES_SABATONS, (Stuff::Metal, Cut::Boots)),
+            (LINEN_SANDALS, (Stuff::Cloth, Cut::Shoes)),
+            (WOLFHIDE_HELM, (Stuff::Leather, Cut::Helm)),
+            (LINEN_HOOD, (Stuff::Cloth, Cut::Hood)),
+            (CROWN_OF_THE_SUNKEN_KING, (Stuff::Metal, Cut::Circlet)),
+            (HEARTSTONE_CHESTGUARD, (Stuff::Metal, Cut::Plate)),
+            (RIMEHEART_CHESTGUARD, (Stuff::Leather, Cut::Coat)),
+            (ASHFIST_GAUNTLETS, (Stuff::Metal, Cut::Gauntlets)),
+        ] {
+            assert_eq!(wear_of(id), want, "{}", item(id).name);
+        }
+    }
+
+    #[test]
+    fn people_wear_what_they_have_on() {
         let lib = library();
-        let file = &lib.files[File::Male as usize];
-        let map = file.map.as_ref().unwrap();
+        for class in Class::ALL {
+            for race in Race::ALL {
+                let mut l = look(EntityKind::Player(class));
+                l.appearance.race = race;
+                l.gear = class.starter_gear();
+                let d = dress(Outfit::Class(class), &l);
+                assert_eq!(d.body, Body::Person(race, false));
+                assert!(d.garb.legs.is_some(), "{class:?} has no trousers");
+                assert_eq!(
+                    d.garb.chest.is_some(),
+                    l.gear[Slot::Chest.index()].is_some()
+                );
+                let file = lib.file(d.body.file());
+                let dressed = clothes::dressed(d.body.file(), file, &d.garb).unwrap();
+                let clothes = dressed.clothes.as_ref().expect("clothes");
+                let body = file.model.parts.iter().find(|p| p.name == "Body").unwrap();
+                // The clothes stand off the skin they hide.
+                assert!(dressed.skin.indices.len() < body.indices.len());
+                assert!(!clothes.indices.is_empty());
+                assert_eq!(clothes.positions.len(), clothes.uvs.len());
+                assert!(
+                    clothes
+                        .indices
+                        .iter()
+                        .all(|&i| (i as usize) < clothes.positions.len())
+                );
+                // Undressed, they're in their underwear.
+                let bare = clothes::dressed(d.body.file(), file, &d.garb.bare()).unwrap();
+                assert!(bare.clothes.is_none());
+                assert_eq!(bare.skin.indices.len(), body.indices.len());
+            }
+        }
+    }
+
+    #[test]
+    fn clothes_and_underwear_are_painted_where_they_go() {
+        let lib = library();
+        let file = lib.file(HUMAN);
+        let (map, marks) = (file.map.as_ref().unwrap(), file.marks.as_ref().unwrap());
         let mut garb = dress(
             Outfit::Class(Class::Mage),
             &look(EntityKind::Player(Class::Mage)),
@@ -1496,39 +1877,84 @@ mod tests {
         garb.skin = [60, 160, 60];
         garb.chest = Some(([200, 20, 20], Stuff::Cloth));
         garb.belt = None;
-        let pixels = repaint(&file.picture, map, &garb);
-        let find = |r: Region| {
+        let find = |pixels: &[[u8; 4]], r: Region, pale: bool| {
             (0..pixels.len())
-                .filter(|&i| map.region[i] == r && !map.pale[i])
+                .filter(|&i| map.region[i] == r && map.pale[i] == pale)
                 .map(|i| pixels[i])
                 .nth(200)
                 .unwrap()
         };
-        let face = find(Region::Head);
+        let pixels = repaint(&file.picture, map, marks, &garb);
+        let face = find(&pixels, Region::Head, false);
         assert!(face[1] > face[0] && face[1] > face[2], "{face:?}");
-        let chest = find(Region::Chest);
+        let chest = find(&pixels, Region::Chest, false);
         assert!(chest[0] > chest[1] && chest[0] > chest[2], "{chest:?}");
+        // Bare, the underwear is linen.
+        let pixels = repaint(&file.picture, map, marks, &garb.bare());
+        let shorts = find(&pixels, Region::Hips, true);
+        assert!(shorts[0] > 120 && shorts[0] >= shorts[2], "{shorts:?}");
+    }
+
+    #[test]
+    fn heavier_bodies_are_thicker_but_as_long() {
+        let lib = library();
+        let file = lib.file(HUMAN);
+        let adjust = thickened(&file.model, 1.2);
+        let arm = file.model.node("upperarm_l").unwrap();
+        let hand = file.model.node("hand_l").unwrap();
+        assert_eq!(adjust[hand], Mat4::IDENTITY);
+        // The upper arm bone runs out along x: a point beside it moves
+        // further out, one on it stays.
+        let skin = &file.model.skins[0];
+        let k = skin.joints.iter().position(|&j| j == arm).unwrap();
+        let bind = skin.inverse_bind[k].inverse();
+        let (at, along) = (
+            bind.transform_point3(Vec3::ZERO),
+            bind.transform_vector3(Vec3::Y).normalize(),
+        );
+        let on = at + along * 0.1;
+        assert!(adjust[arm].transform_point3(on).distance(on) < 1e-4);
+        let beside = on + along.any_orthonormal_vector() * 0.05;
+        let moved = adjust[arm].transform_point3(beside);
+        assert!(((moved - on).length() - 0.06).abs() < 1e-4);
     }
 
     #[test]
     fn races_and_classes_look_different() {
         let mut l = look(EntityKind::Player(Class::Fighter));
+        l.gear = Class::Fighter.starter_gear();
         let human = dress(Outfit::Class(Class::Fighter), &l);
         l.appearance.race = Race::Orc;
         let orc = dress(Outfit::Class(Class::Fighter), &l);
         assert_ne!(human.garb.skin, orc.garb.skin);
-        assert!(orc.width > human.width);
+        assert_ne!(human.body, orc.body);
+        l.gear = Class::Mage.starter_gear();
         let mage = dress(Outfit::Class(Class::Mage), &l);
         assert_ne!(mage.garb.chest, orc.garb.chest);
+        assert!(mage.robe.is_some() && orc.pauldrons.is_some());
         l.appearance.body = 1;
-        assert_eq!(dress(Outfit::Class(Class::Mage), &l).body, Body::Female);
-        // A helmet shows when one is worn, and hides the hair.
-        assert!(!orc.props.iter().any(|p| p.1 == "Knight_Helmet"));
+        assert_eq!(
+            dress(Outfit::Class(Class::Mage), &l).body,
+            Body::Person(Race::Orc, true)
+        );
+        // A hat shows when one is worn, and hides the hair; a crown hides
+        // none.
+        assert!(!orc.props.iter().any(|p| is_hat(p.1)));
         l.appearance.body = 0;
         l.appearance.hair_style = 2;
-        l.gear[Slot::Head.index()] = Some(items::LINEN_HOOD);
+        l.gear[Slot::Head.index()] = Some(items::WOLFHIDE_HELM);
         let helmed = dress(Outfit::Class(Class::Fighter), &l);
-        assert!(helmed.props.iter().any(|p| p.1 == "Knight_Helmet"));
+        assert!(helmed.props.iter().any(|p| p.1 == "Barbarian_Hat"));
         assert!(helmed.hair.is_empty());
+        l.gear[Slot::Head.index()] = Some(items::CROWN_OF_THE_SUNKEN_KING);
+        let crowned = dress(Outfit::Class(Class::Fighter), &l);
+        assert!(!crowned.props.iter().any(|p| is_hat(p.1)));
+        assert_eq!(crowned.hair, ["Hair_Long"]);
+        // Sliders change the size of the person, not the race's body.
+        l.appearance.height = Appearance::SLIDER_MAX;
+        l.appearance.weight = 0;
+        let tall = dress(Outfit::Class(Class::Fighter), &l);
+        assert_eq!(tall.body, crowned.body);
+        assert!(tall.scale > crowned.scale && tall.girth < crowned.girth);
     }
 }

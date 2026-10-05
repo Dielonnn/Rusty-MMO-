@@ -1,10 +1,11 @@
 //! Character and creature models, and how they move.
 //!
 //! People (players, townsfolk and humanoid mobs) are rigged, animated models
-//! (`rigged`): a male or female body (or a skeleton) on a shared skeleton,
-//! with class gear painted on for race, class and armor, and animated by how they fight: a barbarian
-//! chops with a great axe, a monk throws punches and kicks, a rogue stabs
-//! with two knives, casters channel and throw spells, and so on.
+//! (`rigged`): each race's own male or female body (or a skeleton) on a
+//! shared skeleton, dressed in what they wear, and animated by how they
+//! fight: a barbarian chops with a great axe, a monk throws punches and
+//! kicks, a rogue stabs with two knives, casters channel and throw spells,
+//! and so on.
 //!
 //! Creatures and giants are still built from shaded primitives in their own
 //! `Frame`, so all of it turns together, posed by an `Anim` (angles for each
@@ -99,6 +100,11 @@ fn race_shape(race: Race) -> RaceShape {
             head: 1.35,
             limbs: 1.0,
         },
+        Race::Dwarf => RaceShape {
+            scale: 0.73,
+            head: 1.2,
+            limbs: 1.25,
+        },
         Race::Undead => RaceShape {
             scale: 0.98,
             head: 0.95,
@@ -111,7 +117,7 @@ fn race_shape(race: Race) -> RaceShape {
 pub fn model_height(kind: EntityKind, appearance: Appearance) -> f32 {
     match kind {
         EntityKind::Player(_) | EntityKind::Merchant(_) | EntityKind::QuestGiver(_) => {
-            2.1 * race_shape(appearance.race).scale
+            rigged::stature(appearance.race, appearance.body == 1) * appearance.height_scale()
         }
         EntityKind::Mob { kind, .. } => match kind.template().model {
             MobModel::Wolf => 1.3,
@@ -202,6 +208,13 @@ pub fn skin_color(race: Race, i: u8) -> Color {
             c(0.85, 0.65, 0.5),
             c(0.7, 0.5, 0.38),
             c(0.98, 0.88, 0.84),
+        ],
+        Race::Dwarf => [
+            c(0.96, 0.78, 0.66),
+            c(0.9, 0.68, 0.55),
+            c(0.78, 0.55, 0.42),
+            c(0.6, 0.4, 0.3),
+            c(0.42, 0.28, 0.2),
         ],
         Race::Undead => [
             c(0.62, 0.66, 0.62),

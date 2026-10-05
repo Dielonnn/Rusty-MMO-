@@ -433,20 +433,52 @@ impl ModelFile {
         b: &mut Batch,
         transform: Mat4,
         world: &[Mat4],
-        mut paint: impl FnMut(&ModelPart) -> Option<Color>,
+        paint: impl FnMut(&ModelPart) -> Option<Color>,
     ) {
-        let joint_matrices: Vec<Vec<Mat4>> = self
-            .skins
+        let joints = self.joint_matrices(transform, world, None);
+        self.draw_parts(b, transform, world, &joints, self.parts.iter(), paint);
+    }
+
+    /// What each skin's joints do to the vertices bound to them, with the
+    /// model posed at `world` and placed by `transform`. `adjust` (one per
+    /// node) reshapes each joint's vertices first, in the space they were
+    /// bound in (to make a body thicker or thinner).
+    pub fn joint_matrices(
+        &self,
+        transform: Mat4,
+        world: &[Mat4],
+        adjust: Option<&[Mat4]>,
+    ) -> Vec<Vec<Mat4>> {
+        self.skins
             .iter()
             .map(|s| {
                 s.joints
                     .iter()
                     .zip(&s.inverse_bind)
-                    .map(|(&j, inv)| transform * world[j] * *inv)
+                    .map(|(&j, inv)| {
+                        let m = transform * world[j] * *inv;
+                        match adjust {
+                            Some(a) => m * a[j],
+                            None => m,
+                        }
+                    })
                     .collect()
             })
-            .collect();
-        for part in &self.parts {
+            .collect()
+    }
+
+    /// Draws `parts` (this model's own, or others made from them that use
+    /// its nodes and skins) with `joints` from `joint_matrices`.
+    pub fn draw_parts<'a>(
+        &self,
+        b: &mut Batch,
+        transform: Mat4,
+        world: &[Mat4],
+        joints: &[Vec<Mat4>],
+        parts: impl IntoIterator<Item = &'a ModelPart>,
+        mut paint: impl FnMut(&ModelPart) -> Option<Color>,
+    ) {
+        for part in parts {
             let Some(tint) = paint(part) else {
                 continue;
             };
@@ -457,7 +489,7 @@ impl ModelFile {
                 part.color.a * tint.a,
             );
             let place = transform * world[part.node];
-            let skin = part.skin.map(|s| &joint_matrices[s]);
+            let skin = part.skin.map(|s| &joints[s]);
             // Each vertex moved once, however many triangles share it.
             let moved: Vec<(Vec3, Vec3)> = (0..part.positions.len())
                 .map(|i| match skin {

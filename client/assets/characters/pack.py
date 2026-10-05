@@ -17,8 +17,10 @@ Writes:
 - rig.glb: the skeleton (male proportions) and every animation clip the
   game uses. Clips only turn bones (and move the hips), so they play on any
   body built on the skeleton whatever its proportions.
-- male.glb, female.glb: a body with its eyes, brows and every hairstyle,
-  skinned to the skeleton, with one texture holding the skin, hair and eyes.
+- <race>_<sex>.glb (human_male.glb, orc_female.glb, ...): a body sculpted
+  for its race (see sculpt.py and races/) with its eyes, brows, every
+  hairstyle and the race's own modeled parts, skinned to the skeleton, with
+  one texture holding the skin, hair, eyes and flat colours.
 - props.glb: the KayKit weapons and hats, each hanging off the skeleton
   bone that holds it (a hand or the head), resized to fit.
 - skeletons.glb: the four KayKit skeleton bodies and their gear, reshaped
@@ -27,6 +29,7 @@ Writes:
 Usage:
   pack.py <Universal Base Characters[Standard] dir> <UAL1_Standard.glb>
           <UAL2_Standard.glb> <KayKit Adventurers clone> <KayKit Skeletons clone>
+  pack.py <Universal Base Characters[Standard] dir> --bodies   (bodies only)
 
 Needs Python 3 with numpy, Pillow and Blender's `bpy` module (`pip install
 bpy`), which thins out the dense meshes.
@@ -108,9 +111,6 @@ SKELETON_GEAR = {"Skeleton_Warrior_Helmet": 0.24, "Skeleton_Rogue_Hood": 0.24,
                  "Skeleton_Mage_Hat": 0.24}
 
 FPS = 30
-
-# How much of each dense mesh to keep (Blender's decimate).
-THIN = {"Body": 0.42, "Hair_Long": 0.5, "Hair_Buns": 0.5, "Brows": 0.6}
 
 
 # ---- Reading glTF ----
@@ -534,9 +534,11 @@ def grip_pose(skel, doc):
 
 # ---- Bodies ----
 
-def thin(data, ratio):
+def thin(data, ratio, keep=None):
     """Collapses a skinned mesh's edges until `ratio` of its triangles are
-    left (with Blender), keeping texture seams and bone weights."""
+    left (with Blender), keeping texture seams and bone weights, and gives
+    it smooth normals. `keep` (0..1 per vertex) protects detail: the face
+    keeps more of its triangles than the rest. A ratio of 1 only smooths."""
     import bpy
 
     pos = data["positions"]
@@ -550,6 +552,9 @@ def thin(data, ratio):
     first[weld[::-1]] = np.arange(len(weld))[::-1]
     mesh = bpy.data.meshes.new("thin")
     tris = data["indices"].reshape(-1, 3)
+    # Drop triangles that welding squashed (two corners on one point).
+    w = weld[tris]
+    tris = tris[(w[:, 0] != w[:, 1]) & (w[:, 1] != w[:, 2]) & (w[:, 0] != w[:, 2])]
     mesh.from_pydata(pos[first].tolist(), [], weld[tris].tolist())
     uv = mesh.uv_layers.new(name="uv")
     corner_uv = data["uvs"][tris.reshape(-1)]
@@ -562,11 +567,19 @@ def thin(data, ratio):
         for j, w in zip(data["joints"][src], data["weights"][src]):
             if w > 0:
                 groups[j].add([v], float(w), "ADD")
-    mod = obj.modifiers.new("decimate", "DECIMATE")
-    mod.ratio = ratio
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    if ratio < 1.0:
+        mod = obj.modifiers.new("decimate", "DECIMATE")
+        mod.ratio = ratio
+        if keep is not None:
+            group = obj.vertex_groups.new(name="keep")
+            for v in range(count):
+                group.add([v], float(1.0 - np.clip(keep[first[v]], 0.0, 1.0)), "REPLACE")
+            mod.vertex_group = group.name
+            mod.vertex_group_factor = 4.0
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_apply(modifier=mod.name)
     mesh = obj.data
+    mesh.shade_smooth()
     mesh.calc_loop_triangles()
     nv = len(mesh.vertices)
     co = np.zeros(nv * 3, np.float32)
@@ -586,7 +599,8 @@ def thin(data, ratio):
     joints = np.zeros((nv, 4), np.int64)
     weights = np.zeros((nv, 4))
     for v in mesh.vertices:
-        gs = sorted(((g.weight, g.group) for g in v.groups), reverse=True)[:4]
+        gs = sorted(((g.weight, g.group) for g in v.groups
+                     if obj.vertex_groups[g.group].name != "keep"), reverse=True)[:4]
         for k, (w, g) in enumerate(gs):
             joints[v.index, k] = int(obj.vertex_groups[g].name)
             weights[v.index, k] = w
@@ -655,59 +669,6 @@ def place_uvs(data, rect):
 def write_part(writer, name, data, skin, parent=None):
     writer.mesh(name, parent, data["positions"], data["normals"], data["uvs"], data["indices"],
                 data["joints"], data["weights"], skin)
-
-
-def pack_body(ubc, sex, skel_doc, skel):
-    folder = os.path.join(ubc, "Base Characters", "Godot - UE")
-    textures = os.path.join(ubc, "Base Characters", "Textures")
-    hair_dir = os.path.join(ubc, "Hairstyles", "Rigged to Head Bone", "glTF (Godot -Unreal)")
-    w = Writer()
-    w.skeleton(skel.bones())
-    skin = w.skin(list(range(len(skel.names))), [np.linalg.inv(m) for m in skel.world])
-
-    # One texture: the skin (left 3/4), the two hair textures and the eyes.
-    size = 1024
-    atlas = Image.new("RGB", (size, size), (128, 128, 128))
-    body_file = {"Male": "T_Superhero_Male_Ligh.png",
-                 "Female": "T_Superhero_Female_Light_BaseColor.png"}[sex]
-    rects = {
-        "body": (0, 0, 768, 768),
-        "MI_Hair_1": (768, 0, 256, 256),
-        "MI_Hair_2": (768, 256, 256, 256),
-        "MI_Eyes": (768, 512, 256, 256),
-    }
-    sources = {
-        "body": body_file,
-        "MI_Hair_1": "T_Hair_1_BaseColor.png",
-        "MI_Hair_2": "T_Hair_2_BaseColor.png",
-        "MI_Eyes": "T_Eye_Brown.png",
-    }
-    for key, (x, y, rw, rh) in rects.items():
-        img = Image.open(os.path.join(textures, sources[key])).convert("RGB")
-        atlas.paste(img.resize((rw, rh), Image.LANCZOS), (x, y))
-    rect = lambda key: tuple(v / size for v in rects[key])
-
-    for m in range(len(skel_doc["meshes"])):
-        data = to_skeleton(mesh_data(skel_doc, m), skel_doc, skel)
-        mat = data["material"]
-        if mat.startswith("MI_Superhero"):
-            part, key = "Body", "body"
-        elif mat == "MI_Eyes":
-            part, key = "Eyes", mat
-        else:
-            part, key = "Brows", mat
-        if part in THIN:
-            data = thin(data, THIN[part])
-        write_part(w, part, place_uvs(data, rect(key)), skin)
-    for hair in HAIRS:
-        doc = load(os.path.join(hair_dir, hair + ".gltf"))
-        fit = Skeleton(doc)
-        data = to_skeleton(mesh_data(doc, 0), doc, skel, fit)
-        if hair in THIN:
-            data = thin(data, THIN[hair])
-        write_part(w, hair, place_uvs(data, rect(data["material"])), skin)
-    w.texture(atlas)
-    w.save(os.path.join(HERE, sex.lower() + ".glb"))
 
 
 # ---- KayKit gear and skeletons ----
@@ -854,14 +815,28 @@ def nearest(kk, name, known):
     return kk["nodes"][i]["name"] if i is not None else "hips"
 
 
+def pack_races(ubc):
+    """One body file per race and sex (see sculpt.py and races/)."""
+    import sculpt
+    for race in sculpt.RACES:
+        # Races not sculpted yet use the human body (see rigged.rs).
+        if not os.path.exists(os.path.join(HERE, "races", race + ".py")):
+            continue
+        for sex in sculpt.SEXES:
+            body = sculpt.make(ubc, race, sex)
+            sculpt.write(body, os.path.join(HERE, f"{race}_{sex.lower()}.glb"))
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[2] == "--bodies":
+        pack_races(sys.argv[1])
+        return
     ubc, ual1, ual2, adventurers, skeletons = sys.argv[1:6]
     adventurers = os.path.join(adventurers, "addons/kaykit_character_pack_adventures/Characters/gltf")
     skeletons = os.path.join(skeletons, "addons/kaykit_character_pack_skeletons/Characters/gltf")
     folder = os.path.join(ubc, "Base Characters", "Godot - UE")
     male_doc = load(os.path.join(folder, "Superhero_Male_FullBody.gltf"))
-    female_doc = load(os.path.join(folder, "Superhero_Female_FullBody.gltf"))
-    male, female = Skeleton(male_doc), Skeleton(female_doc)
+    male = Skeleton(male_doc)
 
     lib1, lib2 = load(ual1), load(ual2)
     w = Writer()
@@ -871,8 +846,7 @@ def main():
     retarget(w, male, load(os.path.join(adventurers, "Knight.glb")), grip_pose(male, lib1))
     w.save(os.path.join(HERE, "rig.glb"))
 
-    pack_body(ubc, "Male", male_doc, male)
-    pack_body(ubc, "Female", female_doc, female)
+    pack_races(ubc)
     pack_props(adventurers, male)
     pack_skeletons(skeletons, male)
 
