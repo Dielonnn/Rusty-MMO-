@@ -5,6 +5,31 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.5
+
+Commit: the one titled "v8.5: music and ambience".
+
+- **Music**: every place has its own tune, composed by the game itself
+  (no music files): the login and character screens, each of the six
+  starting areas, the Sunken Vault, the Cinderforge, Frosthowl Cavern, and
+  a fast boss tune with war drums that kicks in while a dungeon boss
+  nearby is fighting. Each style has its own key, tempo, chords and
+  instruments (flute, bells, plucked strings, reed, hand drums).
+- **Ambience**: a background loop for each place: wind and birds and
+  crickets in Amberfall, desert wind in Scorchsand, a forest full of birds
+  in Silverbough, a dripping cave in Grubdeep, howling wind on Frostcog,
+  creaking branches and crows in Witherwood, lapping water in the Sunken
+  Vault, crackling lava in the Cinderforge, and cave wind in Frosthowl.
+- Music and ambience fade over (2.5 seconds, placeholder) when you go
+  somewhere new. The boss tune starts when a dungeon boss within 60 yards
+  (placeholder) is in combat.
+- The **Music** and **Ambience** sliders in Settings now work, and
+  Mute all / Mute when minimized silence them too.
+- Each tune is composed in the background the first time you go there, so
+  there's no loading wait. Tunes for places you've left are let go to save
+  memory.
+- Same protocol as v8.2 (18).
+
 ## v8.4
 
 Commit: the one titled "v8.4: sound effects".

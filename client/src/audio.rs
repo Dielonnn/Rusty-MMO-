@@ -3,13 +3,22 @@
 //!
 //! Interface sounds play at full volume. Sounds in the world get quieter
 //! with distance from you and aren't played at all past `HEARING`.
+//!
+//! Music and ambience (see `music.rs`) are composed on a background thread
+//! the first time they're wanted, then loop, fading over when you move to
+//! a place with different music.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
+use macroquad::audio::{
+    PlaySoundParams, Sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound,
+};
 use macroquad::prelude::*;
 use shared::data::School;
 
+use crate::music::{self, Ambience, Track};
 use crate::settings::{self, Bus};
 use crate::synth::{Shape, Wave, bell, noise, note, pluck, sweep, tone};
 
@@ -20,6 +29,8 @@ const FULL_VOLUME: f32 = 8.0;
 /// The same sound won't start again within this many seconds, so a
 /// big fight doesn't stack dozens of copies.
 const REPEAT_GAP: f32 = 0.05;
+/// How many seconds music and ambience take to fade in or out. Placeholder.
+const FADE: f32 = 2.5;
 
 /// Every sound effect.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -352,11 +363,160 @@ fn impact(school: School) -> Wave {
     }
 }
 
+/// A looping piece of music or ambience.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Loop {
+    Music(Track),
+    Ambience(Ambience),
+}
+
+impl Loop {
+    fn bus(self) -> Bus {
+        match self {
+            Loop::Music(_) => Bus::Music,
+            Loop::Ambience(_) => Bus::Ambience,
+        }
+    }
+
+    fn same_kind(self, other: Loop) -> bool {
+        matches!(
+            (self, other),
+            (Loop::Music(_), Loop::Music(_)) | (Loop::Ambience(_), Loop::Ambience(_))
+        )
+    }
+}
+
+/// A loop that's playing, fading towards `target` (0 or 1).
+struct Layer {
+    what: Loop,
+    sound: Sound,
+    gain: f32,
+    target: f32,
+    /// The volume last sent to the mixer.
+    volume: f32,
+}
+
 struct Engine {
     /// Every sound, and when it last started by the game clock.
     sounds: Vec<(Sfx, Sound, f64)>,
     minimized: bool,
     subscriber: usize,
+    /// The music and ambience wanted now.
+    want: [Option<Loop>; 2],
+    /// Loops composed and loaded, ready to play.
+    ready: HashMap<Loop, Sound>,
+    /// Loops being composed on the background thread.
+    composing: HashSet<Loop>,
+    done_tx: Sender<(Loop, Vec<u8>)>,
+    done_rx: Receiver<(Loop, Vec<u8>)>,
+    layers: Vec<Layer>,
+}
+
+/// Loads a sound right away. Loading is only ever slow on the web, so on
+/// desktop the future is done the first time it's asked.
+fn load_now(bytes: &[u8]) -> Option<Sound> {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    let mut fut = std::pin::pin!(load_sound_from_bytes(bytes));
+    match fut.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(Ok(sound)) => Some(sound),
+        _ => None,
+    }
+}
+
+impl Engine {
+    /// Starts composing anything wanted that isn't ready, takes in finished
+    /// loops, and fades loops in and out.
+    fn update_loops(&mut self, dt: f32) {
+        while let Ok((what, wav)) = self.done_rx.try_recv() {
+            self.composing.remove(&what);
+            if let Some(sound) = load_now(&wav) {
+                self.ready.insert(what, sound);
+            }
+        }
+        for what in self.want.into_iter().flatten() {
+            if !self.ready.contains_key(&what) && self.composing.insert(what) {
+                let tx = self.done_tx.clone();
+                std::thread::spawn(move || {
+                    let wave = match what {
+                        Loop::Music(t) => music::compose(t),
+                        Loop::Ambience(a) => music::ambience(a),
+                    };
+                    let _ = tx.send((what, wave.to_wav()));
+                });
+            }
+        }
+
+        // Fade in what's wanted once it's ready; fade out the rest.
+        for layer in &mut self.layers {
+            layer.target = if self.want.contains(&Some(layer.what)) {
+                1.0
+            } else {
+                0.0
+            };
+        }
+        for what in self.want.into_iter().flatten() {
+            let playing = self.layers.iter().any(|l| l.what == what);
+            if let (false, Some(sound)) = (playing, self.ready.get(&what)) {
+                // Wait for the old one of its kind to fade out first, so
+                // two tunes don't play over each other.
+                let busy = self
+                    .layers
+                    .iter()
+                    .any(|l| l.what.same_kind(what) && l.gain > 0.25);
+                if !busy {
+                    play_sound(
+                        sound,
+                        PlaySoundParams {
+                            looped: true,
+                            volume: 0.0,
+                        },
+                    );
+                    self.layers.push(Layer {
+                        what,
+                        sound: sound.clone(),
+                        gain: 0.0,
+                        target: 1.0,
+                        volume: 0.0,
+                    });
+                }
+            }
+        }
+
+        let s = settings::current();
+        let muted = s.mute_all || (s.mute_in_background && self.minimized);
+        let step = dt / FADE;
+        for layer in &mut self.layers {
+            layer.gain = if layer.target > layer.gain {
+                (layer.gain + step).min(layer.target)
+            } else {
+                (layer.gain - step).max(layer.target)
+            };
+            let volume = if muted {
+                0.0
+            } else {
+                layer.gain * s.volume(Bus::Master) * s.volume(layer.what.bus())
+            };
+            if (volume - layer.volume).abs() > 0.001 {
+                layer.volume = volume;
+                set_sound_volume(&layer.sound, volume);
+            }
+        }
+        // Faded out: stop, and forget it unless it's wanted again, so a
+        // long trip doesn't keep every tune in memory.
+        let want = self.want;
+        let ready = &mut self.ready;
+        self.layers.retain(|l| {
+            let gone = l.gain <= 0.0 && l.target <= 0.0;
+            if gone {
+                stop_sound(&l.sound);
+                if !want.contains(&Some(l.what)) {
+                    ready.remove(&l.what);
+                }
+            }
+            !gone
+        });
+    }
 }
 
 thread_local! {
@@ -372,16 +532,43 @@ pub async fn init() {
         }
     }
     let subscriber = macroquad::input::utils::register_input_subscriber();
+    let (done_tx, done_rx) = channel();
     ENGINE.with(|e| {
         *e.borrow_mut() = Some(Engine {
             sounds,
             minimized: false,
             subscriber,
+            want: [None, None],
+            ready: HashMap::new(),
+            composing: HashSet::new(),
+            done_tx,
+            done_rx,
+            layers: Vec::new(),
         })
     });
 }
 
-/// Notices the window being minimized or restored. Call once a frame.
+/// Which music should play: `None` for silence. Call every frame; it fades
+/// over when it changes.
+pub fn set_music(track: Option<Track>) {
+    ENGINE.with(|e| {
+        if let Some(e) = e.borrow_mut().as_mut() {
+            e.want[0] = track.map(Loop::Music);
+        }
+    });
+}
+
+/// Which ambience should play, like `set_music`.
+pub fn set_ambience(amb: Option<Ambience>) {
+    ENGINE.with(|e| {
+        if let Some(e) = e.borrow_mut().as_mut() {
+            e.want[1] = amb.map(Loop::Ambience);
+        }
+    });
+}
+
+/// Notices the window being minimized or restored, and keeps music and
+/// ambience going. Call once a frame.
 pub fn update() {
     struct Watch(bool);
     impl miniquad::EventHandler for Watch {
@@ -399,6 +586,7 @@ pub fn update() {
             let mut watch = Watch(e.minimized);
             macroquad::input::utils::repeat_all_miniquad_input(&mut watch, e.subscriber);
             e.minimized = watch.0;
+            e.update_loops(get_frame_time().min(0.1));
         }
     });
 }
@@ -492,6 +680,7 @@ mod dump {
     #[test]
     #[ignore]
     fn dump_wavs() {
+        use super::{Ambience, Track, music};
         let dir = std::env::temp_dir().join("sfx");
         let dir = dir.as_path();
         std::fs::create_dir_all(dir).unwrap();
@@ -501,6 +690,19 @@ mod dump {
                 .trim_end_matches('-')
                 .to_string();
             std::fs::write(dir.join(format!("{name}.wav")), sfx.make().to_wav()).unwrap();
+        }
+        let mut tracks = vec![Track::Menu, Track::Boss];
+        tracks.extend(shared::world::Zone::ALL.map(Track::Zone));
+        tracks.extend(shared::dungeon::DungeonId::ALL.map(Track::Dungeon));
+        for t in tracks {
+            let name = format!("music-{t:?}").replace(['(', ')'], "");
+            std::fs::write(dir.join(format!("{name}.wav")), music::compose(t).to_wav()).unwrap();
+        }
+        let mut ambs: Vec<Ambience> = shared::world::Zone::ALL.map(Ambience::Zone).to_vec();
+        ambs.extend(shared::dungeon::DungeonId::ALL.map(Ambience::Dungeon));
+        for a in ambs {
+            let name = format!("ambience-{a:?}").replace(['(', ')'], "");
+            std::fs::write(dir.join(format!("{name}.wav")), music::ambience(a).to_wav()).unwrap();
         }
     }
 }

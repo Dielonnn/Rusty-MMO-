@@ -14,6 +14,7 @@ use shared::world::*;
 
 use crate::audio::{self, Sfx};
 use crate::hud::{self, Layout};
+use crate::music::{Ambience, Track};
 use crate::render::{self, Batch, Look, Pose, Scene};
 use crate::settings::SettingsWindow;
 use macroquad::models::{Mesh, draw_mesh};
@@ -25,6 +26,8 @@ const TURN_SPEED: f32 = 2.6;
 const GRAVITY: f32 = 25.0;
 const JUMP_SPEED: f32 = 8.0;
 const MOUSE_SENSITIVITY: f32 = 0.006;
+/// A dungeon boss fighting within this many yards brings on the boss music.
+const BOSS_MUSIC_RANGE: f32 = 60.0;
 
 /// Another entity as the client knows it.
 pub struct Ent {
@@ -383,6 +386,9 @@ impl Game {
         self.send_movement(dt);
 
         self.update_zone();
+        let (track, amb) = self.soundtrack();
+        audio::set_music(track);
+        audio::set_ambience(amb);
         // The map picture also backs the minimap, so make it once we're in.
         if self.my_id.is_some()
             && !self.in_dungeon()
@@ -414,6 +420,33 @@ impl Game {
             self.settings = None;
         }
         Outcome::Continue
+    }
+
+    /// The music and ambience for where you are: the area's or dungeon's,
+    /// or the boss tune while a dungeon boss nearby is fighting.
+    fn soundtrack(&self) -> (Option<Track>, Option<Ambience>) {
+        if self.my_id.is_none_or(|id| !self.entities.contains_key(&id)) {
+            return (None, None);
+        }
+        match self.place {
+            Place::Zone(z) => (Some(Track::Zone(z)), Some(Ambience::Zone(z))),
+            Place::Dungeon(index) => {
+                let d = dungeon::of(index);
+                let boss = d.boss();
+                let fighting = self.entities.values().any(|e| {
+                    matches!(e.view.kind, EntityKind::Mob { kind, .. } if kind == boss)
+                        && e.view.in_combat
+                        && !e.view.dead
+                        && e.pos.distance(self.pos) < BOSS_MUSIC_RANGE
+                });
+                let track = if fighting {
+                    Track::Boss
+                } else {
+                    Track::Dungeon(d.id)
+                };
+                (Some(track), Some(Ambience::Dungeon(d.id)))
+            }
+        }
     }
 
     /// Notices when you arrive in a different starting area.
