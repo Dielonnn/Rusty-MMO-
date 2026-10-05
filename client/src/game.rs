@@ -12,6 +12,7 @@ use shared::net::Connection;
 use shared::protocol::*;
 use shared::world::*;
 
+use crate::audio::{self, Sfx};
 use crate::hud::{self, Layout};
 use crate::render::{self, Batch, Look, Pose, Scene};
 use crate::settings::SettingsWindow;
@@ -100,6 +101,26 @@ pub struct Windows {
 }
 
 impl Windows {
+    /// How many windows are open, to hear one open or close.
+    fn open_count(&self) -> usize {
+        [
+            self.bags,
+            self.character,
+            self.skills,
+            self.vendor.is_some(),
+            self.talents,
+            self.spellbook,
+            self.sandbox,
+            self.map,
+            self.quest_giver.is_some(),
+            self.quest_log,
+            self.travel,
+        ]
+        .into_iter()
+        .filter(|&open| open)
+        .count()
+    }
+
     pub fn any(&self) -> bool {
         self.bags
             || self.character
@@ -268,6 +289,20 @@ impl Game {
     }
 
     fn send(&mut self, msg: ClientMsg) {
+        match &msg {
+            ClientMsg::DropItem(_) => audio::play(Sfx::Drop),
+            ClientMsg::Equip(_) | ClientMsg::Unequip(_) | ClientMsg::UnequipWeapon => {
+                audio::play(Sfx::Equip)
+            }
+            ClientMsg::UseItem(i) => match self.me.bags.get(*i).copied().flatten() {
+                Some((id, _)) if matches!(item(id).kind, ItemKind::Food { .. }) => {
+                    audio::play(Sfx::Eat)
+                }
+                Some(_) => audio::play(Sfx::Drink),
+                None => {}
+            },
+            _ => {}
+        }
         // A failed send shows up as a disconnect on the next poll.
         let _ = self.conn.send(&msg);
     }
@@ -280,10 +315,20 @@ impl Game {
     }
 
     pub fn error(&mut self, text: &str) {
+        audio::play(Sfx::Error);
         self.errors.retain(|(t, _)| t != text);
         self.errors.push((text.to_string(), 0.0));
         if self.errors.len() > 3 {
             self.errors.remove(0);
+        }
+    }
+
+    /// Plays a sound where an entity is, quieter the further it is from you.
+    fn sound_at(&self, sfx: Sfx, id: EntityId) {
+        if Some(id) == self.my_id {
+            audio::play(sfx);
+        } else if let Some(e) = self.entities.get(&id) {
+            audio::play_at(sfx, e.pos, self.pos);
         }
     }
 
@@ -324,9 +369,15 @@ impl Game {
         // Opened this frame: it starts taking clicks next frame, so the
         // click that opened it doesn't land on it too.
         let settings_open = self.settings.is_some();
+        let windows_before = self.windows.open_count();
         if let Some(outcome) = self.input(&layout, &draggable) {
             self.lock_cursor(false);
             return outcome;
+        }
+        match self.windows.open_count().cmp(&windows_before) {
+            std::cmp::Ordering::Greater => audio::play(Sfx::WindowOpen),
+            std::cmp::Ordering::Less => audio::play(Sfx::WindowClose),
+            std::cmp::Ordering::Equal => {}
         }
         self.simulate(dt);
         self.send_movement(dt);
@@ -510,6 +561,11 @@ impl Game {
                 if snap.me.hotbar != self.me.hotbar {
                     self.hotbar = snap.me.hotbar;
                 }
+                if (snap.me.invite.is_some() && self.me.invite.is_none())
+                    || (snap.me.duel_invite.is_some() && self.me.duel_invite.is_none())
+                {
+                    audio::play(Sfx::Invite);
+                }
                 self.me = snap.me;
                 if !self.me.sandbox {
                     self.windows.sandbox = false;
@@ -589,6 +645,13 @@ impl Game {
                     e.hurt = 0.0;
                 }
                 self.vfx.hit(target, ability, crit);
+                let sfx = match ability {
+                    None if Some(target) == me => Sfx::Hurt,
+                    None if crit => Sfx::Crit,
+                    None => Sfx::Hit,
+                    Some(id) => Sfx::Impact(shared::data::ability(id).school),
+                };
+                self.sound_at(sfx, target);
                 if Some(source) == me || Some(target) == me {
                     let color = if Some(target) == me {
                         Color::new(1.0, 0.3, 0.25, 1.0)
@@ -633,6 +696,15 @@ impl Game {
                 ability: id,
             } => {
                 let a = ability(id);
+                let melee = a.range <= MELEE_RANGE && !a.projectile;
+                let sfx = if melee {
+                    Sfx::Swing
+                } else if a.projectile && a.school == School::Physical {
+                    Sfx::Bow
+                } else {
+                    Sfx::Cast(a.school)
+                };
+                self.sound_at(sfx, caster);
                 let class = match self.entities.get(&caster).map(|e| e.view.kind) {
                     Some(EntityKind::Player(c)) => Some(c),
                     _ => None,
@@ -675,6 +747,7 @@ impl Game {
             }
             GameEvent::Died { id, killer } => {
                 if Some(id) == me {
+                    audio::play(Sfx::Death);
                     self.chat.push(ChatLine {
                         text: format!(
                             "You were killed by {}.",
@@ -688,6 +761,7 @@ impl Game {
             GameEvent::LevelUp { id, level } => {
                 self.vfx.level_up(id);
                 if Some(id) == me {
+                    audio::play(Sfx::LevelUp);
                     self.banner = Some((format!("Level {level}!"), String::new(), 0.0));
                     self.system(&format!("Congratulations, you have reached level {level}!"));
                 }
@@ -706,6 +780,17 @@ impl Game {
                 });
             }
             GameEvent::Looted { money, items } => {
+                if items
+                    .iter()
+                    .any(|(id, _)| matches!(item(*id).quality, Quality::Rare))
+                {
+                    audio::play(Sfx::RareDrop);
+                } else if !items.is_empty() {
+                    audio::play(Sfx::Pickup);
+                }
+                if money > 0 {
+                    audio::play(Sfx::Coins);
+                }
                 if money > 0 {
                     self.chat.push(ChatLine {
                         text: format!("You loot {}.", format_money(money)),
@@ -726,6 +811,7 @@ impl Game {
                 }
             }
             GameEvent::Crafted(id) => {
+                audio::play(Sfx::SkillUp);
                 let it = item(id);
                 self.chat.push(ChatLine {
                     text: format!("You create {}.", it.name),
@@ -733,6 +819,7 @@ impl Game {
                 });
             }
             GameEvent::Bought { item: id, price } => {
+                audio::play(Sfx::Coins);
                 let it = item(id);
                 self.chat.push(ChatLine {
                     text: format!("You buy {} for {}.", it.name, format_money(price)),
@@ -744,6 +831,7 @@ impl Game {
                 count,
                 money,
             } => {
+                audio::play(Sfx::Coins);
                 let it = item(id);
                 let what = if count > 1 {
                     format!("{} x{count}", it.name)
@@ -756,6 +844,7 @@ impl Game {
                 });
             }
             GameEvent::QuestAccepted(id) => {
+                audio::play(Sfx::QuestAccept);
                 let q = shared::quests::quest(id);
                 self.system(&format!("Quest accepted: {}", q.name));
             }
@@ -786,6 +875,7 @@ impl Game {
                 reward,
                 ..
             } => {
+                audio::play(Sfx::QuestComplete);
                 let q = shared::quests::quest(id);
                 self.banner = Some((q.name.to_string(), "Quest complete!".into(), 0.0));
                 self.system(&format!("{} completed.", q.name));
@@ -809,10 +899,15 @@ impl Game {
                 text: format!("[{from}]: {text}"),
                 color: WHITE,
             }),
-            GameEvent::PartyChat { from, text } => self.chat.push(ChatLine {
-                text: format!("[Party] [{from}]: {text}"),
-                color: Color::new(0.55, 0.75, 1.0, 1.0),
-            }),
+            GameEvent::PartyChat { from, text } => {
+                if self.my_view().is_none_or(|v| v.name != from) {
+                    audio::play(Sfx::Message);
+                }
+                self.chat.push(ChatLine {
+                    text: format!("[Party] [{from}]: {text}"),
+                    color: Color::new(0.55, 0.75, 1.0, 1.0),
+                })
+            }
             GameEvent::System(text) => self.system(&text),
             GameEvent::Emote { who, emote, text } => {
                 if let Some(e) = self.entities.get_mut(&who) {
@@ -1014,6 +1109,9 @@ impl Game {
             self.rmb = None;
             self.lock_cursor(false);
             if left_pressed {
+                if layout.menu_buttons.iter().any(|b| b.contains(mouse)) {
+                    audio::play(Sfx::Click);
+                }
                 if layout.menu_buttons[0].contains(mouse) {
                     self.menu_open = false;
                 } else if layout.menu_buttons[1].contains(mouse) {

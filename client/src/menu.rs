@@ -9,6 +9,7 @@ use shared::net::Connection;
 use shared::protocol::*;
 use shared::world::Zone;
 
+use crate::audio::{self, Sfx};
 use crate::game::Game;
 use crate::hud::{self, BORDER, GOLD, button, button_ex, panel, text, text_centered};
 use crate::render::{self, Batch, Look, Pose, Scene};
@@ -250,6 +251,12 @@ impl Login {
             }
             if is_mouse_button_pressed(MouseButton::Left) {
                 let m = mouse();
+                if [solo, join, sandbox, quit, settings]
+                    .iter()
+                    .any(|r| r.contains(m))
+                {
+                    audio::play(Sfx::Click);
+                }
                 if account_box.contains(m) {
                     self.focus = Field::Account;
                 } else if password_box.contains(m) {
@@ -652,6 +659,13 @@ impl Characters {
 
         if is_mouse_button_pressed(MouseButton::Left) {
             let m = mouse();
+            if rows
+                .iter()
+                .chain([&enter, &create, &delete, &back])
+                .any(|r| r.contains(m))
+            {
+                audio::play(Sfx::Click);
+            }
             if let Some(i) = rows.iter().position(|r| r.contains(m)) {
                 self.selected = i;
                 self.confirm_delete = false;
@@ -821,6 +835,9 @@ impl Characters {
         let mut submit = is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter);
         if is_mouse_button_pressed(MouseButton::Left) {
             let m = mouse();
+            if [create, back].iter().any(|r| r.contains(m)) {
+                audio::play(Sfx::Click);
+            }
             for (r, class) in classes.iter().zip(Class::ALL) {
                 if r.contains(m) {
                     c.class = class;
