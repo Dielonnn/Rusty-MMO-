@@ -43,6 +43,9 @@ pub const BAG_SLOTS: usize = 60;
 pub const BAG_COLUMNS: usize = 10;
 /// How close you have to be to loot a corpse or pick up a dropped item.
 pub const LOOT_RANGE: f32 = 6.0;
+/// Chance that a spider's hit (a mob whose ability is Web) also webs you
+/// in place.
+pub const WEB_CHANCE: f32 = 0.25;
 /// Seconds an item dropped on the ground is only the dropper's to pick up.
 pub const DROP_PROTECTION: f32 = 5.0;
 /// Seconds before an item left on the ground disappears.

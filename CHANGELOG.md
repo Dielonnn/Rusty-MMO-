@@ -23,6 +23,9 @@ Commit: the one titled "v7.15: bigger bags, tougher dungeons, dropping items, em
   Bob."), aimed at your target if you have one, with a label over your head.
   Sitting and the backflip move your character; sitting lasts until you move
   or fight.
+- **Spiders web you**: every hit from a Cave Spider or Vault Crawler has a
+  25% chance to web you in place for 4 seconds (before, they spat a web every
+  10 seconds).
 - Protocol version 16 (an older client can't join a v7.15 server).
 
 ## v7.14

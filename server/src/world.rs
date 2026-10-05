@@ -2843,7 +2843,8 @@ impl World {
             return;
         }
         let e = self.entities.get_mut(&id).unwrap();
-        if let Some((spell, interval)) = t.spell {
+        // Spiders web on a hit (below) rather than on a timer.
+        if let Some((spell, interval)) = t.spell.filter(|(s, _)| *s != ids::WEB) {
             let a = ability(spell);
             let in_range = match a.targeting {
                 Targeting::AroundCaster(r) => dist <= r * 0.8 + t.size * 0.5,
@@ -2877,6 +2878,13 @@ impl World {
                 * scale
                 * if crit { CRIT_MULTIPLIER } else { 1.0 };
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
+            let webs = t.spell.is_some_and(|(s, _)| s == ids::WEB);
+            if webs
+                && self.entities.get(&target).is_some_and(|t| !t.dead)
+                && self.rng.chance(WEB_CHANCE)
+            {
+                let _ = self.try_use(id, ids::WEB);
+            }
         }
     }
 }
@@ -5191,5 +5199,44 @@ mod tests {
             .filter(|k| k.template().boss)
             .count();
         assert_eq!(bosses, shared::dungeon::DungeonId::ALL.len());
+    }
+
+    #[test]
+    fn spiders_web_you_on_about_a_quarter_of_their_hits() {
+        let mut w = World::new(84);
+        let p = join(&mut w, "Prey", Class::Fighter, 3);
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let spider = engage(&mut w, p, MobKind::CaveSpider);
+        sturdy(&mut w, spider);
+        w.handle(p, ClientMsg::StopAttack);
+        w.handle(
+            p,
+            ClientMsg::UseAbility {
+                ability: ids::HEROIC_STRIKE,
+                target: Some(spider),
+            },
+        );
+        w.drain_outbox();
+        let (mut hits, mut webs) = (0, 0);
+        for _ in 0..(200.0 / DT) as usize {
+            w.tick(DT);
+            for (_, m) in w.drain_outbox() {
+                match m {
+                    ServerMsg::Event(GameEvent::Damage {
+                        source,
+                        target,
+                        ability: None,
+                        ..
+                    }) if source == spider && target == p => hits += 1,
+                    ServerMsg::Event(GameEvent::AbilityUsed {
+                        caster, ability, ..
+                    }) if caster == spider && ability == ids::WEB => webs += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(hits >= 60, "{hits} hits");
+        let rate = webs as f32 / hits as f32;
+        assert!((0.12..0.4).contains(&rate), "{webs} webs in {hits} hits");
     }
 }
