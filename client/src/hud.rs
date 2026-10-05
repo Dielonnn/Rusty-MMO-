@@ -213,19 +213,21 @@ impl Layout {
         let menu_w = 240.0;
         let menu_x = (w - menu_w) / 2.0;
 
+        // Clear of the hotbars, which it would overlap on a narrow screen.
+        let bags_h = BAG_SLOTS.div_ceil(BAG_COLUMNS) as f32 * (SLOT + 4.0) + 76.0;
         let bags_rect = drag::place(
             Win::Bags,
             Rect::new(
-                w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
-                h - 330.0,
-                5.0 * (SLOT + 4.0) + 20.0,
-                4.0 * (SLOT + 4.0) + 76.0,
+                w - 16.0 - BAG_COLUMNS as f32 * (SLOT + 4.0) - 20.0,
+                (top_y - 16.0 - bags_h).max(16.0),
+                BAG_COLUMNS as f32 * (SLOT + 4.0) + 20.0,
+                bags_h,
             ),
         );
         let bag_slots = if windows.bags {
             (0..BAG_SLOTS)
                 .map(|i| {
-                    let (col, row) = (i % 5, i / 5);
+                    let (col, row) = (i % BAG_COLUMNS, i / BAG_COLUMNS);
                     Rect::new(
                         bags_rect.x + 12.0 + col as f32 * (SLOT + 4.0),
                         bags_rect.y + 36.0 + row as f32 * (SLOT + 4.0),
@@ -845,6 +847,8 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         return;
     };
     nameplates(game, cam);
+    ground_labels(game, cam);
+    emote_labels(game, cam);
     floating_text(game, cam);
 
     // Unit frames.
@@ -1055,7 +1059,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         help();
     }
     let level = me.level;
-    let tracker_top = if game.show_help { 700.0 } else { 240.0 };
+    let tracker_top = if game.show_help { 830.0 } else { 240.0 };
     crate::quests_ui::draw_tracker(&game.me.quests, level, &game.me.bags, tracker_top);
     if let Some((msg, t)) = &game.quest_flash {
         let alpha = (3.0 - t).min(1.0);
@@ -1433,6 +1437,7 @@ fn item_tooltips(game: &Game, layout: &Layout) {
             } else if matches!(item(*id).kind, ItemKind::Food { .. }) {
                 lines.push(("Right-click to eat".into(), hint));
             }
+            lines.push(("Shift+right-click to drop".into(), hint));
             tooltip_box(&lines, *r, true);
         }
     }
@@ -1796,6 +1801,56 @@ fn nameplates(game: &Game, cam: &Camera3D) {
     }
 }
 
+/// Names of dropped items nearby, greyed out while only the dropper may
+/// take them.
+fn ground_labels(game: &Game, cam: &Camera3D) {
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let hovered = game.pick_ground(cam, mouse).map(|g| g.id);
+    for g in &game.ground {
+        if g.pos.distance(game.pos) > 25.0 {
+            continue;
+        }
+        let Some(p) = project(cam, g.pos + Vec3::Y * 0.8) else {
+            continue;
+        };
+        let (id, n) = g.stack;
+        let mut label = item(id).name.to_string();
+        if n > 1 {
+            label += &format!(" x{n}");
+        }
+        let color = if g.locked > 0.0 {
+            label += &format!(" ({:.0}s)", g.locked.ceil());
+            Color::new(0.6, 0.6, 0.6, 0.9)
+        } else {
+            quality_color(item(id).quality)
+        };
+        let size = if hovered == Some(g.id) { 18.0 } else { 14.0 };
+        text_centered(&label, p.x, p.y, size, color);
+    }
+}
+
+/// "*waves*" over players playing an emote.
+fn emote_labels(game: &Game, cam: &Camera3D) {
+    for e in game.entities.values() {
+        let Some((emote, t)) = e.emote else { continue };
+        // Sitting lasts; its label doesn't.
+        if e.view.dead || t > 2.5 || e.pos.distance(game.pos) > 60.0 {
+            continue;
+        }
+        let h = render::model_height(e.view.kind, e.view.appearance);
+        let Some(p) = project(cam, e.pos + Vec3::Y * (h + 0.45)) else {
+            continue;
+        };
+        text_centered(
+            emote.label(),
+            p.x,
+            p.y - 26.0,
+            15.0,
+            Color::new(1.0, 0.55, 0.25, 1.0),
+        );
+    }
+}
+
 fn floating_text(game: &Game, cam: &Camera3D) {
     for f in &game.floats {
         let height = game.entities.get(&f.entity).map_or(2.0, |e| {
@@ -2001,7 +2056,8 @@ fn help() {
         ("Mouse wheel", "Zoom"),
         ("Tab", "Target the next enemy"),
         ("Left click", "Target"),
-        ("Right click", "Attack, loot, or trade"),
+        ("Right click", "Attack, loot, trade, pick up"),
+        ("Shift + right click", "Drop an item from your bags"),
         ("1 - 6, Q, E", "Use abilities"),
         ("Shift + 1 - 6, Q, E", "Use the top hotbar"),
         ("Y", "Spell book (drag spells to bars)"),
@@ -2014,10 +2070,11 @@ fn help() {
         ("Enter", "Chat (/help lists commands)"),
         ("/invite NAME", "Party up (or target, Invite)"),
         ("/p MESSAGE", "Talk to your party"),
+        ("/wave /sit /kiss ...", "Emotes (/help lists them)"),
         ("/duel NAME", "Duel (or target, Duel)"),
         ("H", "Hide this help"),
     ];
-    let w = 380.0;
+    let w = 410.0;
     let h = 40.0 + lines.len() as f32 * 20.0;
     let x = screen_width() - w - 16.0;
     let y = 236.0;
@@ -2026,6 +2083,6 @@ fn help() {
     for (i, (key, what)) in lines.iter().enumerate() {
         let ly = y + 50.0 + i as f32 * 20.0;
         text(key, x + 12.0, ly, 17.0, Color::new(1.0, 0.9, 0.6, 1.0));
-        text(what, x + 150.0, ly, 17.0, WHITE);
+        text(what, x + 175.0, ly, 17.0, WHITE);
     }
 }

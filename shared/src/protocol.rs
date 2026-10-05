@@ -11,12 +11,13 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::data::{AbilityId, Appearance, Class, Hotbar, ItemId, MobKind, Race, Slot};
+use crate::emote::Emote;
 use crate::quests::{QuestId, QuestLog};
 use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -83,6 +84,10 @@ pub enum ClientMsg {
     },
     /// Use the item in a bag slot (drink a potion).
     UseItem(usize),
+    /// Drop everything in a bag slot on the ground.
+    DropItem(usize),
+    /// Pick up an item lying on the ground.
+    PickUp(u32),
     /// Put a point into the talent with this index (see `talents`).
     LearnTalent(usize),
     /// Take back every talent point.
@@ -194,6 +199,26 @@ pub struct Snapshot {
     pub hazards: Vec<HazardView>,
     /// The teleporter out of the vault, once its boss is dead.
     pub portal: Option<Vec3>,
+    /// Items dropped on the ground nearby.
+    pub ground: Vec<GroundItemView>,
+}
+
+/// An item someone dropped on the ground.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct GroundItemView {
+    pub id: u32,
+    pub stack: Stack,
+    pub pos: Vec3,
+    /// Seconds until anyone may pick it up (0 once they can, or if you
+    /// dropped it).
+    pub locked: f32,
+}
+
+/// An emote someone is playing, and for how long so far.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EmoteView {
+    pub emote: Emote,
+    pub elapsed: f32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -231,6 +256,8 @@ pub struct EntityView {
     pub weapon: Option<ItemId>,
     /// A corpse with loot you're allowed to take.
     pub lootable: bool,
+    /// The emote this player is playing (`/wave`, `/sit`, ...).
+    pub emote: Option<EmoteView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -458,4 +485,10 @@ pub enum GameEvent {
         text: String,
     },
     System(String),
+    /// Someone nearby did an emote ("Bob waves.").
+    Emote {
+        who: EntityId,
+        emote: Emote,
+        text: String,
+    },
 }

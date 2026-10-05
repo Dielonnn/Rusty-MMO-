@@ -120,6 +120,12 @@ full experience for their level and quest credit, and members take turns
 looting (10 seconds each, then it's open to the party). `/p MESSAGE` is party
 chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 
+### Emotes
+
+`/kiss`, `/sit`, `/backflip`, `/wave`, `/flipoff`, `/no` (wag a finger) and
+`/point` play an emote; everyone nearby sees it in chat, aimed at your target
+if you have one. Sitting lasts until you move or fight.
+
 ### Waystones and dungeons
 
 Every town has a waystone beside its square. Stand next to it and press `F`
@@ -328,6 +334,11 @@ Healing and Mana Potions (50 copper each), Light Leather and Linen Cloth. While
 their window is open, right-click items in your bags to sell them for a quarter
 of their price. Right-click a potion in your bags to drink it (potions share a
 30 second cooldown).
+
+Your backpack holds 60 stacks. Shift+right-click an item in it to drop it on
+the ground in front of you. For 5 seconds only you can pick it back up; after
+that anyone can (right-click it). Items left on the ground disappear after 5
+minutes.
 
 ### The world
 

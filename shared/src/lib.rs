@@ -3,6 +3,7 @@
 
 pub mod data;
 pub mod dungeon;
+pub mod emote;
 pub mod layout;
 pub mod net;
 pub mod props;
