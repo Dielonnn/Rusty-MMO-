@@ -158,6 +158,13 @@ impl Store {
 
     /// Writes the save file if anything changed.
     pub fn save(&mut self) -> io::Result<()> {
+        self.write().map_err(|e| match &self.path {
+            Some(path) => io::Error::new(e.kind(), format!("{}: {e}", path.display())),
+            None => e,
+        })
+    }
+
+    fn write(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };

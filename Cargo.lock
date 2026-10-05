@@ -91,7 +91,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "client"
-version = "8.2.0"
+version = "8.2.1"
 dependencies = [
  "gltf",
  "macroquad",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "8.2.0"
+version = "8.2.1"
 dependencies = [
  "argon2",
  "glam",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "8.2.0"
+version = "8.2.1"
 dependencies = [
  "bincode",
  "glam",

@@ -2,7 +2,6 @@
 //! select, and character creation, all over a view of a starting town.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 
 use macroquad::prelude::*;
 use shared::data::{Appearance, Class, Race};
@@ -14,26 +13,7 @@ use crate::game::Game;
 use crate::hud::{self, BORDER, GOLD, button, button_ex, panel, text, text_centered};
 use crate::render::{self, Batch, Look, Pose, Scene};
 
-/// Where saves and settings live: `%APPDATA%\RustyMMO` on Windows,
-/// `~/Library/Application Support/RustyMMO` on macOS and
-/// `~/.local/share/rusty-mmo` elsewhere.
-pub fn data_dir() -> PathBuf {
-    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
-    if cfg!(windows) {
-        if let Some(d) = env("APPDATA") {
-            return d.join("RustyMMO");
-        }
-    } else if cfg!(target_os = "macos") {
-        if let Some(h) = env("HOME") {
-            return h.join("Library/Application Support/RustyMMO");
-        }
-    } else if let Some(d) = env("XDG_DATA_HOME") {
-        return d.join("rusty-mmo");
-    } else if let Some(h) = env("HOME") {
-        return h.join(".local/share/rusty-mmo");
-    }
-    PathBuf::from(".")
-}
+pub use shared::data_dir;
 
 /// The account and server last used, remembered between runs.
 fn load_settings() -> (String, String) {

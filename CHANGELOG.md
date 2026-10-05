@@ -5,6 +5,24 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.2.1
+
+Commit: the one titled "v8.2.1: the server keeps its save in one place".
+
+- **Server saves carry over between versions**: the dedicated server now
+  saves characters to `server_characters.json` in the game's data folder
+  (`%APPDATA%\RustyMMO` on Windows, next to the solo saves) instead of the
+  folder it was started from. Unzipping a new version somewhere else no
+  longer starts you with an empty save.
+- The first time it runs, the server copies in an old `characters.json` from
+  the folder it's started from or the folder its exe is in, and says so. The
+  old file is left where it was.
+- The server prints the full path of its save when it starts, and if it
+  can't write there (Windows "access is denied") it says so straight away and
+  stops, instead of running without saving. `--save FILE` still picks any
+  other file.
+- Same protocol as v8.2 (18), so v8.2 clients can join.
+
 ## v8.2
 
 Commit: the one titled "v8.2: bigger bags, tougher dungeons, dropping items, emotes".
