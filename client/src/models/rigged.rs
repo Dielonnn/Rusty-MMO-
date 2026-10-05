@@ -1005,9 +1005,7 @@ pub(super) fn layers(style: Style, pose: Pose) -> Vec<Layer> {
     } else {
         match style {
             Style::Fists => "Unarmed_Idle",
-            Style::TwoHander | Style::Giant | Style::Hammer => "2H_Melee_Idle",
             Style::SwordBoard => "Idle_Shield_Loop",
-            Style::Daggers | Style::Brute => "Sword_Idle",
             Style::Rifle => "Pistol_Idle_Loop",
             Style::Merchant => "Idle_FoldArms_Loop",
             _ => "Idle_Loop",

@@ -7,7 +7,7 @@ built from that commit.
 
 ## v8.0
 
-Commit: the one titled "v8.0: Quaternius characters".
+Commit: the one titled "v8.0: Relaxed idle stances".
 
 - **Real character models**: players, townsfolk and humanoid mobs are now
   rigged 3D models with bending limbs, skin, faces and skeletal animation,
