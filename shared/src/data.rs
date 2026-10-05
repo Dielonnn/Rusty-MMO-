@@ -2477,6 +2477,8 @@ pub mod items {
     pub const ASHWOOD_LONGBOW: ItemId = ItemId(34);
     pub const EMBERWAND: ItemId = ItemId(35);
     pub const MOONWHISPER_STAFF: ItemId = ItemId(36);
+    // The Sunken Vault.
+    pub const CROWN_OF_THE_SUNKEN_KING: ItemId = ItemId(37);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2614,7 +2616,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 37] = [
+pub static ITEMS: [Item; 38] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2969,6 +2971,19 @@ pub static ITEMS: [Item; 37] = [
         (0.6, 0.7, 0.95),
         900,
     ),
+    Item {
+        description: "Morvane's drowned crown, still cold from the deep.",
+        ..armor(
+            "Crown of the Sunken King",
+            Slot::Head,
+            14.0,
+            6.0,
+            5.0,
+            Quality::Rare,
+            (0.3, 0.85, 0.8),
+            4000,
+        )
+    },
 ];
 
 /// What every merchant sells.
@@ -3197,6 +3212,7 @@ const CASTER_LOOT: LootTable = LootTable {
 const BOSS_LOOT: LootTable = LootTable {
     copper_per_level: (40, 80),
     items: &[
+        (items::CROWN_OF_THE_SUNKEN_KING, 1.0, 1, 1),
         (items::ANCIENT_CORE, 1.0, 2, 2),
         (items::LINEN_CLOTH, 1.0, 3, 5),
     ],
@@ -3874,6 +3890,7 @@ mod tests {
             (IRON_SWORD, "Iron Sword"),
             (HEARTSTONE_GREATSWORD, "Heartstone Greatsword"),
             (MOONWHISPER_STAFF, "Moonwhisper Staff"),
+            (CROWN_OF_THE_SUNKEN_KING, "Crown of the Sunken King"),
         ] {
             assert_eq!(item(id).name, name);
         }

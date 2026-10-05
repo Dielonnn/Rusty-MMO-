@@ -121,7 +121,8 @@ chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 Every town has a waystone beside its square. Stand next to it and press `F`
 to travel to any other starting area's town, or, from level 8, into the
 Sunken Vault: a dungeon of flooded halls, packs of hounds, crawlers and
-drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King.
+drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King,
+who drops the Crown of the Sunken King, a blue helm.
 Your party shares one copy of the vault; anyone else gets their own. Mobs you
 kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
 inside and you come back at the vault's entrance; the waystone there takes you

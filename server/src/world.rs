@@ -4168,6 +4168,7 @@ mod tests {
             let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
             assert!(loot.items.iter().any(|(i, _)| RARE_DROPS.contains(i)));
             assert!(loot.items.contains(&(items::ANCIENT_CORE, 2)));
+            assert!(loot.items.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)));
         }
     }
 }

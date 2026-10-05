@@ -24,8 +24,10 @@ Commit: the one titled "v7.4: Waystones and the Sunken Vault".
 - Dying in the vault brings you back at its entrance, whose waystone takes you
   back to the town you came from. Logging out inside puts you by that town's
   waystone next time
-- **Loot**: Morvane always drops a green armor piece and 2 Ancient Cores, and
-  half the time a green weapon. The Stone Warden drops like other elites
+- **Crown of the Sunken King**: a new blue helm (14 armor, +6 stamina, +5
+  power) that Morvane always drops
+- **Loot**: Morvane also always drops a green armor piece and 2 Ancient Cores,
+  and half the time a green weapon. The Stone Warden drops like other elites
 - The minimap and the world map (`M`) show the vault's halls and room names
 - Older games can't join a v7.4 server (protocol 9)
 
