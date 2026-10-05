@@ -5,6 +5,25 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.8
+
+Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies".
+
+- **New bodies for four races**: dwarves, goblins, gnomes and the undead
+  no longer borrow a shrunken human body. Each has its own sculpted body,
+  male and female, like the orcs and elves:
+  - **Dwarves**: short and very broad, with a barrel chest and belly,
+    thick arms, big hands and feet, a heavy brow, a big bulbous nose, and
+    (the men) a long full spade beard.
+  - **Goblins**: small and wiry, hunched, with a potbelly, skinny arms and
+    legs, big hands and long feet, a big head with huge ears sticking out
+    sideways, a long hooked nose, a wide sly mouth and gold slit eyes.
+  - **Gnomes**: tiny, with a big round head, short arms and legs, a round
+    button nose, full cheeks, big bright blue eyes and little pointed ears.
+  - **Undead**: gaunt and stooped, with wasted limbs, bony knees and long
+    bony fingers, a hollow belly under showing ribs, dark sunken sockets
+    with pale glowing eyes, hollow cheeks and patches of rot.
+
 ## v8.5
 
 Commit: the one titled "v8.5: music and ambience".

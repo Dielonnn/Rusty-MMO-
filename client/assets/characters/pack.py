@@ -819,8 +819,10 @@ def pack_races(ubc):
     """One body file per race and sex (see sculpt.py and races/)."""
     import sculpt
     for race in sculpt.RACES:
-        # Races not sculpted yet use the human body (see rigged.rs).
         if not os.path.exists(os.path.join(HERE, "races", race + ".py")):
+            continue
+        # Sculpting from the game's human body (`game`) keeps that body.
+        if ubc == sculpt.GAME and race == "human":
             continue
         for sex in sculpt.SEXES:
             body = sculpt.make(ubc, race, sex)

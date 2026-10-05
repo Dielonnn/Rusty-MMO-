@@ -38,6 +38,8 @@ import pack
 HERE = os.path.dirname(os.path.abspath(__file__))
 RACES = ["human", "orc", "elf", "goblin", "gnome", "dwarf", "undead"]
 SEXES = ["Male", "Female"]
+# In place of the Quaternius folder: start from the game's human body.
+GAME = "game"
 
 # Flat colours for modeled parts, in the spare corner of the texture.
 SWATCHES = {
@@ -87,6 +89,10 @@ class Body:
     def __init__(self, ubc, sex):
         self.sex = sex
         self.race = None
+        self.prethinned = ubc == GAME
+        if self.prethinned:
+            self._from_game()
+            return
         folder = os.path.join(ubc, "Base Characters", "Godot - UE")
         textures = os.path.join(ubc, "Base Characters", "Textures")
         hair_dir = os.path.join(ubc, "Hairstyles", "Rigged to Head Bone", "glTF (Godot -Unreal)")
@@ -133,6 +139,30 @@ class Body:
             hdoc = pack.load(os.path.join(hair_dir, hair + ".gltf"))
             data = pack.to_skeleton(pack.mesh_data(hdoc, 0), hdoc, self.skel, pack.Skeleton(hdoc))
             self.parts[hair] = pack.place_uvs(data, rect(HAIR_RECTS[data["material"]]))
+        self.base = list(self.parts)
+        self._axes()
+
+    def _from_game(self):
+        """Starts from the game's own human body (`human_<sex>.glb`) instead
+        of the Quaternius files: the same skeleton, meshes and texture,
+        already thinned to game size."""
+        doc = pack.load(os.path.join(HERE, f"human_{self.sex.lower()}.glb"))
+        self.skel = pack.Skeleton(doc)
+        self.names = self.skel.names
+        self.index = self.skel.index
+        self.parent = self.skel.parent
+        self.local = [m.copy() for m in self.skel.local]
+        self.world = [m.copy() for m in self.skel.world]
+        self.texture = pack.image_of(doc, 0).resize((ATLAS, ATLAS), Image.LANCZOS)
+        self.cells = 0
+        for color in SWATCHES.values():
+            self.swatch(color)
+        self.parts = {}
+        for m, mesh in enumerate(doc["meshes"]):
+            if mesh["name"].startswith("Extra_"):
+                continue
+            data = pack.to_skeleton(pack.mesh_data(doc, m), doc, self.skel)
+            self.parts[mesh["name"]] = data
         self.base = list(self.parts)
         self._axes()
 
@@ -538,7 +568,8 @@ def finish(body):
             keep = np.clip(body.weight_of("Body", ["Head", "neck_01"]) * 1.5, 0, 1)
             keep = np.maximum(keep, body.weight_of("Body", ["hand_*", "index*", "middle*",
                                                              "ring*", "pinky*", "thumb*"]) * 0.5)
-        out[name] = pack.thin(d, THIN.get(name, 1.0), keep)
+        ratio = 1.0 if body.prethinned and name in body.base else THIN.get(name, 1.0)
+        out[name] = pack.thin(d, ratio, keep)
     return out
 
 

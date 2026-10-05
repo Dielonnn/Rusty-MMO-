@@ -17,9 +17,8 @@ LICENSE files here:
   the four skeleton bodies and their gear, rebuilt on the Quaternius skeleton.
 
 A race can have its own body, male and female, sculpted from the
-Quaternius base bodies by `sculpt.py` and its file in `races/` (`orc.py`,
-`elf.py`; `human.py` keeps the base body; races without a file use the
-human body in game until they get one): the bones and the mesh are reshaped together (longer legs,
+Quaternius base bodies by `sculpt.py` and its file in `races/` (`orc.py`, `elf.py`, `dwarf.py`,
+`goblin.py`, `gnome.py`, `undead.py`; `human.py` keeps the base body): the bones and the mesh are reshaped together (longer legs,
 broader shoulders, a bigger head), the flesh is moulded with brushes (a
 jutting brow, a hunched back, long pointed ears), and race parts such as
 tusks and beards are modeled as `Extra_` meshes on the same skeleton and
@@ -49,6 +48,13 @@ To change a race, edit its file in `races/`, look at it with
 female), and rebuild the bodies with
 
     python pack.py <Universal Base Characters dir> --bodies
+
+In place of the Universal Base Characters folder, both can take `game`:
+the race is then sculpted from the game's own `human_male.glb` and
+`human_female.glb` (already thinned, so they aren't thinned again). The
+dwarf, goblin, gnome and undead bodies were made that way:
+
+    python sculpt.py game goblin preview.png
 
 Both need numpy, Pillow and `bpy` (Blender as a Python module, used to
 thin the meshes and render the previews) installed. The `.glb` files are
