@@ -5,6 +5,23 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.3
+
+Commit: the one titled "v8.3: settings window with audio volumes".
+
+- **Settings window**: press Esc and pick **Settings** in the Game Menu, or
+  click **Settings** on the login screen.
+- **Audio tab**: sliders for Master, Music, Effects, Ambience and Interface
+  volume, plus Mute all and Mute in background. The game has no sounds yet;
+  these are ready for when it does (v8.4). Defaults are 80/50/80/60/70% for
+  now.
+- Settings are saved as soon as you change them, to `client_settings.txt`
+  in the game's data folder (`%APPDATA%\RustyMMO` on Windows), so they carry
+  over to new versions. **Reset to Defaults** puts them back.
+- The Graphics, Controls, Interface and Gameplay tabs are shown but greyed
+  out; they arrive in v8.6.
+- Same protocol as v8.2 (18), so v8.2 servers and clients still work together.
+
 ## v8.2.1
 
 Commit: the one titled "v8.2.1: server save location and host level command".

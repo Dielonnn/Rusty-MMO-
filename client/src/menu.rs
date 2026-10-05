@@ -12,6 +12,7 @@ use shared::world::Zone;
 use crate::game::Game;
 use crate::hud::{self, BORDER, GOLD, button, button_ex, panel, text, text_centered};
 use crate::render::{self, Batch, Look, Pose, Scene};
+use crate::settings::SettingsWindow;
 
 pub use shared::data_dir;
 
@@ -181,6 +182,7 @@ pub struct Login {
     /// The single-player servers, once started: solo and sandbox.
     local: [Option<SocketAddr>; 2],
     batch: Batch,
+    settings: Option<SettingsWindow>,
 }
 
 impl Login {
@@ -195,6 +197,7 @@ impl Login {
             time: 0.0,
             local: [None; 2],
             batch: Batch::new(),
+            settings: None,
         }
     }
 
@@ -210,9 +213,9 @@ impl Login {
         let (w, h) = (screen_width(), screen_height());
         let p = Rect::new(
             (w - 440.0) / 2.0,
-            ((h - 516.0) / 2.0).max(10.0),
+            ((h - 536.0) / 2.0).max(10.0),
             440.0,
-            516.0,
+            536.0,
         );
         let inner = p.x + 24.0;
         let iw = p.w - 48.0;
@@ -223,46 +226,55 @@ impl Login {
         let join = Rect::new(inner + iw * 0.5 + 6.0, p.y + 342.0, iw * 0.5 - 6.0, 44.0);
         let sandbox = Rect::new(inner, p.y + 396.0, iw * 0.5 - 6.0, 40.0);
         let quit = Rect::new(inner + iw * 0.5 + 6.0, p.y + 396.0, iw * 0.5 - 6.0, 40.0);
+        let settings = Rect::new(inner, p.y + 446.0, iw, 40.0);
 
-        match self.focus {
-            Field::Account => type_into(&mut self.account, 24, |c| !c.is_control()),
-            Field::Password => type_into(&mut self.password, 64, |c| !c.is_control()),
-            Field::Address => type_into(&mut self.address, 64, |c| {
-                !c.is_control() && !c.is_whitespace()
-            }),
-        }
-        if is_key_pressed(KeyCode::Tab) {
-            self.focus = match self.focus {
-                Field::Account => Field::Password,
-                Field::Password => Field::Address,
-                Field::Address => Field::Account,
-            };
-        }
+        // The Settings window takes all the input while it's open. Opened
+        // this frame, it starts taking clicks next frame, so the click that
+        // opened it doesn't land on it too.
+        let settings_open = self.settings.is_some();
         let mut start = None;
-        if is_mouse_button_pressed(MouseButton::Left) {
-            let m = mouse();
-            if account_box.contains(m) {
-                self.focus = Field::Account;
-            } else if password_box.contains(m) {
-                self.focus = Field::Password;
-            } else if address_box.contains(m) {
-                self.focus = Field::Address;
-            } else if solo.contains(m) {
-                start = Some(Mode::Solo);
-            } else if join.contains(m) {
-                start = Some(Mode::Online);
-            } else if sandbox.contains(m) {
-                start = Some(Mode::Sandbox);
-            } else if quit.contains(m) {
-                std::process::exit(0);
+        if !settings_open {
+            match self.focus {
+                Field::Account => type_into(&mut self.account, 24, |c| !c.is_control()),
+                Field::Password => type_into(&mut self.password, 64, |c| !c.is_control()),
+                Field::Address => type_into(&mut self.address, 64, |c| {
+                    !c.is_control() && !c.is_whitespace()
+                }),
             }
-        }
-        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
-            start = Some(if self.focus == Field::Account {
-                Mode::Solo
-            } else {
-                Mode::Online
-            });
+            if is_key_pressed(KeyCode::Tab) {
+                self.focus = match self.focus {
+                    Field::Account => Field::Password,
+                    Field::Password => Field::Address,
+                    Field::Address => Field::Account,
+                };
+            }
+            if is_mouse_button_pressed(MouseButton::Left) {
+                let m = mouse();
+                if account_box.contains(m) {
+                    self.focus = Field::Account;
+                } else if password_box.contains(m) {
+                    self.focus = Field::Password;
+                } else if address_box.contains(m) {
+                    self.focus = Field::Address;
+                } else if solo.contains(m) {
+                    start = Some(Mode::Solo);
+                } else if join.contains(m) {
+                    start = Some(Mode::Online);
+                } else if sandbox.contains(m) {
+                    start = Some(Mode::Sandbox);
+                } else if quit.contains(m) {
+                    std::process::exit(0);
+                } else if settings.contains(m) {
+                    self.settings = Some(SettingsWindow::open());
+                }
+            }
+            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                start = Some(if self.focus == Field::Account {
+                    Mode::Solo
+                } else {
+                    Mode::Online
+                });
+            }
         }
 
         panel(p);
@@ -321,6 +333,7 @@ impl Login {
         button(join, "Join Server");
         button(sandbox, "Sandbox");
         button(quit, "Quit");
+        button(settings, "Settings");
         text_centered(
             "Solo and sandbox characters are saved on this computer.",
             cx,
@@ -338,6 +351,10 @@ impl Login {
                     Color::new(1.0, 0.45, 0.4, 1.0),
                 );
             }
+        }
+
+        if settings_open && self.settings.as_mut().is_some_and(|s| !s.frame()) {
+            self.settings = None;
         }
 
         let mode = start?;

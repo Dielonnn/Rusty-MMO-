@@ -14,6 +14,7 @@ use shared::world::*;
 
 use crate::hud::{self, Layout};
 use crate::render::{self, Batch, Look, Pose, Scene};
+use crate::settings::SettingsWindow;
 use macroquad::models::{Mesh, draw_mesh};
 use shared::emote::Emote;
 
@@ -164,6 +165,8 @@ pub struct Game {
     pub windows: Windows,
     pub show_help: bool,
     pub menu_open: bool,
+    /// The Settings window, opened from the Game Menu.
+    pub settings: Option<SettingsWindow>,
     pub time: f32,
     batch: Batch,
     /// The starting area you're in (or came from, in the Sunken Vault),
@@ -230,6 +233,7 @@ impl Game {
             windows: Windows::default(),
             show_help: true,
             menu_open: false,
+            settings: None,
             time: 0.0,
             batch: Batch::new(),
             zone: Zone::Amberfall,
@@ -317,6 +321,9 @@ impl Game {
             draggable.push((crate::drag::Win::QuestLog, l.window));
         }
         layout.party = hud::PartyLayout::new(self, layout.target_frame);
+        // Opened this frame: it starts taking clicks next frame, so the
+        // click that opened it doesn't land on it too.
+        let settings_open = self.settings.is_some();
         if let Some(outcome) = self.input(&layout, &draggable) {
             self.lock_cursor(false);
             return outcome;
@@ -352,6 +359,9 @@ impl Game {
         scene.end_3d();
         set_default_camera();
         hud::draw(self, &layout, &cam);
+        if settings_open && self.settings.as_mut().is_some_and(|s| !s.frame()) {
+            self.settings = None;
+        }
         Outcome::Continue
     }
 
@@ -951,6 +961,14 @@ impl Game {
         let cam = self.camera();
         let dead = self.my_view().is_some_and(|v| v.dead);
 
+        // The Settings window takes all the input while it's open.
+        if self.settings.is_some() {
+            self.lmb = None;
+            self.rmb = None;
+            self.lock_cursor(false);
+            return None;
+        }
+
         // Typing in chat. The key that sends or cancels a message doesn't
         // also count as a game key this frame.
         let typing = self.chat_input.is_some();
@@ -999,9 +1017,11 @@ impl Game {
                 if layout.menu_buttons[0].contains(mouse) {
                     self.menu_open = false;
                 } else if layout.menu_buttons[1].contains(mouse) {
+                    self.settings = Some(SettingsWindow::open());
+                } else if layout.menu_buttons[2].contains(mouse) {
                     self.send(ClientMsg::Logout);
                     return Some(Outcome::Logout);
-                } else if layout.menu_buttons[2].contains(mouse) {
+                } else if layout.menu_buttons[3].contains(mouse) {
                     std::process::exit(0);
                 }
             }
