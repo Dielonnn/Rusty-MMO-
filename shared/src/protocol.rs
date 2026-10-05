@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -114,6 +114,12 @@ pub enum ClientMsg {
     PartyPromote(String),
     /// Use the waystone you're standing at.
     Travel(Destination),
+    /// Challenge a player (by name) to a duel.
+    DuelRequest(String),
+    /// Take up the duel you were challenged to.
+    DuelAccept,
+    /// Turn down a duel challenge.
+    DuelDecline,
 }
 
 /// Where a waystone can take you.
@@ -309,6 +315,23 @@ pub struct SelfView {
     pub invite: Option<String>,
     /// What's on your two hotbars.
     pub hotbar: Hotbar,
+    /// Who has challenged you to a duel, if anyone.
+    pub duel_invite: Option<String>,
+    /// The duel you're in, if any.
+    pub duel: Option<DuelView>,
+}
+
+/// A duel between two players. Nobody dies: it ends when one of them is
+/// nearly beaten, leaves the area or logs out.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct DuelView {
+    pub opponent: EntityId,
+    /// Seconds until the fighting starts; zero or below once it has.
+    pub countdown: f32,
+    /// Where the duel started; the area is `DUEL_AREA` around it.
+    pub flag: Vec3,
+    /// Seconds you've been outside the area (you forfeit at `DUEL_LEAVE_TIME`).
+    pub away: f32,
 }
 
 /// The party you're in, yourself included.

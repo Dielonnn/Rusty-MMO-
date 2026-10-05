@@ -48,6 +48,16 @@ pub const MAX_PARTY_SIZE: usize = 8;
 pub const PARTY_RANGE: f32 = 60.0;
 /// Seconds before an unanswered party invite runs out.
 pub const PARTY_INVITE_TIME: f32 = 60.0;
+/// Seconds before an unanswered duel challenge runs out.
+pub const DUEL_REQUEST_TIME: f32 = 30.0;
+/// How close you have to be to challenge someone to a duel.
+pub const DUEL_REQUEST_RANGE: f32 = 30.0;
+/// Seconds between accepting a duel and the fighting starting.
+pub const DUEL_COUNTDOWN: f32 = 3.0;
+/// How far from the duel flag (where it started) duelists may go.
+pub const DUEL_AREA: f32 = 40.0;
+/// Seconds outside the duel area before you forfeit.
+pub const DUEL_LEAVE_TIME: f32 = 5.0;
 /// Seconds a party's corpse is kept for whoever's turn it is to loot.
 pub const LOOT_TURN_TIME: f32 = 10.0;
 /// How close you have to be to trade with a merchant.
