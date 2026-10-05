@@ -3545,7 +3545,7 @@ impl MobKind {
 // ---- Appearance ----
 
 /// How a character looks, chosen at character creation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Appearance {
     /// Characters made before races existed are human.
     #[serde(default)]
@@ -3555,10 +3555,43 @@ pub struct Appearance {
     pub skin: u8,
     pub hair_style: u8,
     pub hair_color: u8,
+    /// Height slider, 0 (shortest) to `SLIDER_MAX` (tallest). Characters
+    /// made before the slider existed are in the middle.
+    #[serde(default = "slider_middle")]
+    pub height: u8,
+    /// Weight (plumpness) slider, 0 (thinnest) to `SLIDER_MAX` (heaviest).
+    #[serde(default = "slider_middle")]
+    pub weight: u8,
+}
+
+fn slider_middle() -> u8 {
+    Appearance::SLIDER_MAX / 2
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            race: Race::default(),
+            body: 0,
+            skin: 0,
+            hair_style: 0,
+            hair_color: 0,
+            height: slider_middle(),
+            weight: slider_middle(),
+        }
+    }
 }
 
 impl Appearance {
     pub const BODIES: u8 = 2;
+    /// The top of the height and weight sliders.
+    pub const SLIDER_MAX: u8 = 100;
+    /// How far the height slider stretches the race's usual height, each way
+    /// (placeholder until the range is settled).
+    pub const HEIGHT_RANGE: f32 = 0.1;
+    /// How far the weight slider widens or narrows the body, each way
+    /// (placeholder until the range is settled).
+    pub const WEIGHT_RANGE: f32 = 0.2;
     pub const SKINS: u8 = 5;
     pub const HAIR_STYLES: u8 = 5;
     pub const HAIR_COLORS: u8 = 6;
@@ -3575,13 +3608,56 @@ impl Appearance {
             skin: self.skin % Self::SKINS,
             hair_style: self.hair_style % Self::HAIR_STYLES,
             hair_color: self.hair_color % Self::HAIR_COLORS,
+            height: self.height.min(Self::SLIDER_MAX),
+            weight: self.weight.min(Self::SLIDER_MAX),
         }
+    }
+
+    /// The height slider as a multiplier on the race's usual height: 1.0 in
+    /// the middle, `1 - HEIGHT_RANGE` to `1 + HEIGHT_RANGE` at the ends.
+    pub fn height_scale(self) -> f32 {
+        1.0 + Self::slider(self.height) * Self::HEIGHT_RANGE
+    }
+
+    /// The weight slider as a multiplier on body width: 1.0 in the middle,
+    /// `1 - WEIGHT_RANGE` to `1 + WEIGHT_RANGE` at the ends.
+    pub fn weight_scale(self) -> f32 {
+        1.0 + Self::slider(self.weight) * Self::WEIGHT_RANGE
+    }
+
+    /// A slider value from -1 (bottom) to 1 (top).
+    fn slider(value: u8) -> f32 {
+        let max = Self::SLIDER_MAX as f32;
+        (value.min(Self::SLIDER_MAX) as f32 - max / 2.0) / (max / 2.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_appearance_loads_with_middle_sliders() {
+        let old = r#"{"race":"Orc","body":1,"skin":2,"hair_style":3,"hair_color":4}"#;
+        let a: Appearance = serde_json::from_str(old).unwrap();
+        assert_eq!(a.race, Race::Orc);
+        assert_eq!((a.height, a.weight), (50, 50));
+        assert_eq!(a.height_scale(), 1.0);
+        assert_eq!(a.weight_scale(), 1.0);
+        assert_eq!(Appearance::default().height, 50);
+    }
+
+    #[test]
+    fn sliders_clamp_and_scale() {
+        let a = Appearance {
+            height: 250,
+            weight: 0,
+            ..Default::default()
+        };
+        assert_eq!(a.clamped().height, Appearance::SLIDER_MAX);
+        assert!((a.height_scale() - (1.0 + Appearance::HEIGHT_RANGE)).abs() < 1e-6);
+        assert!((a.weight_scale() - (1.0 - Appearance::WEIGHT_RANGE)).abs() < 1e-6);
+    }
 
     #[test]
     fn ability_ids_match_table() {

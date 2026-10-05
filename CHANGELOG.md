@@ -5,6 +5,19 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.3
+
+Commit: the one titled "v7.3: Height and weight sliders".
+
+- **Height and weight sliders** in character creation: drag them to make a
+  character shorter or taller, thinner or heavier. The choice is saved with
+  the character and sent to everyone who sees them. Characters don't change
+  shape yet: the models catch up in a later release
+- Characters made before v7.3 start with both sliders in the middle
+- Other players and the character list now know which weapon each character
+  holds, ready for the models to draw it
+- Protocol version 9: clients and servers must both be v7.3
+
 ## v7.2
 
 Commit: the one titled "v7.2: Account passwords".
