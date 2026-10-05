@@ -52,7 +52,7 @@ female), and rebuild the bodies with
 In place of the Universal Base Characters folder, both can take `game`:
 the race is then sculpted from the game's own `human_male.glb` and
 `human_female.glb` (already thinned, so they aren't thinned again). The
-dwarf, goblin, gnome and undead bodies were made that way:
+elf, dwarf, goblin, gnome and undead bodies were made that way:
 
     python sculpt.py game goblin preview.png
 

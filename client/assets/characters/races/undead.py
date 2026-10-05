@@ -4,7 +4,8 @@ Gaunt and stooped: wasted limbs with bony knees and elbows, long bony
 fingers, a sunken belly under ribs that show through the skin, the head
 hanging forward from bent shoulders. A skull-like face: hollow cheeks
 under sharp cheekbones, deep dark sockets with glowing eyes, a jutting
-jaw, and grey-green patches of rot.
+jaw, a nose rotted down to a stub, and patches of rot; on the left side
+the ribs and the jawbone show through holes rotted in the flesh.
 """
 
 import numpy as np
@@ -57,6 +58,11 @@ def sculpt_head(body, k):
     bm = _brow_mask(body, eye)
     _masked(body, "Brows", bm, eye + v(0, 0.018, 0.006), (0.05, 0.03, 0.05),
             factors=(1.0, 0.6, 1.0))
+    # The nose has rotted down to a flattened stub.
+    body.scale(tip + v(0, 0.004, -0.014), (0.026, 0.03, 0.032), (0.85, 0.9, 0.45), sym=False,
+               bones=head)
+    # Deeper hollows under the cheekbones.
+    body.inflate(eye + v(0.03, -0.05, -0.02), (0.02, 0.02, 0.025), -0.006 * k, bones=head)
 
 
 def glowing_eyes(image, draw, body):
@@ -124,6 +130,8 @@ def decay(body):
         c = eye * v(side, 1, 1) + v(0, -0.002, -0.006)
         dark = np.maximum(dark, blob(c, v(0.046, 0.036, 0.06)) * 1.0)
         dark = np.maximum(dark, blob(c + v(0.008 * side, -0.034, -0.006), v(0.032, 0.024, 0.045)) * 0.8)
+    # The rotted nose.
+    dark = np.maximum(dark, blob(m["tip"], v(0.014, 0.012, 0.016)) * 0.7)
     # Ribs: curved bands round the chest and flanks.
     ax = np.abs(x)
     y0, y1 = sp2[1] - 0.04, sp3[1] + 0.06
@@ -132,6 +140,23 @@ def decay(body):
               * smoothstep((ax - 0.03) / 0.03) * smoothstep((0.2 - ax) / 0.03)
               * (z > -0.06))
     dark = np.maximum(dark, band ** 2 * inside * 0.55)
+    # Bared bone: on the left flank the flesh has rotted off the ribs, and
+    # the jawbone shows through the left cheek. Painted lighter (keeping
+    # the skin's hue, so the game still reads it as skin, and its grey
+    # tint turns it bone-pale), ringed with dark rot.
+    light = np.zeros(q.shape[:2])
+    flank = sp2 + v(0.12, 0.05, 0.05)
+    open_ = blob(flank, v(0.07, 0.075, 0.09)) * (x > 0.04)
+    rib = np.clip((band - 0.45) / 0.3, 0, 1)
+    light = np.maximum(light, rib * smoothstep(open_ * 2.0))
+    dark = np.maximum(dark, (1 - rib) * smoothstep(open_ * 2.0) * 0.95)
+    dark = np.maximum(dark, blob(flank, v(0.09, 0.095, 0.11)) * (x > 0.03) * (1 - open_) * 0.9)
+    tip, chin = m["tip"], m["chin"]
+    jaw = v(0.034, (tip[1] + chin[1]) / 2, chin[2] - 0.03)
+    bone = blob(jaw, v(0.018, 0.013, 0.02))
+    light = np.maximum(light, smoothstep(bone * 2.5))
+    dark = np.maximum(dark, blob(jaw, v(0.028, 0.022, 0.03)) * (1 - smoothstep(bone * 2.5)) * 0.9)
+    light = np.nan_to_num(light)
     # A hollow belly under the ribs.
     dark = np.maximum(dark, blob(sp1 + v(0, 0.05, 0.1), v(0.1, 0.06, 0.1)) * 0.45)
     # Blotches of rot.
@@ -153,7 +178,10 @@ def decay(body):
     # Skin only: the grey underwear is left alone.
     sat = (a.max(2) - a.min(2)) / np.maximum(a.max(2), 1.0)
     region = region * smoothstep((sat[..., None] - 0.12) / 0.08)
-    a = a * (1 - f * region * 0.9)
+    lit = Image.fromarray((np.clip(light, 0, 1) * 255).astype(np.uint8)).filter(
+        ImageFilter.GaussianBlur(1.5))
+    lit = np.asarray(lit, np.float32)[..., None] / 255.0
+    a = a * (1 - f * region * 0.9) * (1 + lit * region * 0.55)
     body.texture.paste(Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)))
 
 
@@ -198,9 +226,9 @@ def build(body):
         up = smoothstep((p[:, 1] - lo) / (hi - lo))
         side = 1.0 - smoothstep((np.abs(p[:, 0]) - 0.08) / 0.09)
         return np.maximum(up * side, body.weight_of(name, "Head"))
-    shift(body, ["neck_01"], (0, -0.03 * s, 0.07 * s), neck_field)
+    shift(body, ["neck_01"], (0, -0.035 * s, 0.085 * s), neck_field)
     sp3 = body.joint("spine_03")
-    body.grab(sp3 + v(0, 0.12, -0.13), (0.24, 0.17, 0.12), (0, 0.01 * s, -0.045 * s), sym=False)
+    body.grab(sp3 + v(0, 0.12, -0.13), (0.24, 0.17, 0.12), (0, 0.015 * s, -0.06 * s), sym=False)
     body.smooth(sp3 + v(0, 0.12, -0.14), (0.2, 0.15, 0.09), 0.3, 3, sym=False)
     body.smooth(body.joint("neck_01") + v(0, 0.0, 0.05), (0.09, 0.05, 0.05), 0.4, 4, sym=False)
 

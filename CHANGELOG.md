@@ -7,7 +7,7 @@ built from that commit.
 
 ## v8.8
 
-Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies".
+Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies, elf rework".
 
 - **New bodies for four races**: dwarves, goblins, gnomes and the undead
   no longer borrow a shrunken human body. Each has its own sculpted body,
@@ -22,7 +22,12 @@ Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies".
     button nose, full cheeks, big bright blue eyes and little pointed ears.
   - **Undead**: gaunt and stooped, with wasted limbs, bony knees and long
     bony fingers, a hollow belly under showing ribs, dark sunken sockets
-    with pale glowing eyes, hollow cheeks and patches of rot.
+    with pale glowing eyes, hollow cheeks, a nose rotted to a stub and
+    patches of rot. On the left side, the ribs and the jawbone show
+    through holes rotted in the flesh.
+- **Elves, reworked a little**: longer, fuller ears that sweep up and
+  back, bigger eyes, a less gaunt face, a shorter neck, and a lean but
+  less spindly build with slightly broader shoulders on the men.
 
 ## v8.5
 
