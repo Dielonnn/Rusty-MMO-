@@ -4164,11 +4164,16 @@ mod tests {
     #[test]
     fn the_sunken_king_always_drops_green_gear() {
         let mut w = World::new(16);
-        for _ in 0..20 {
+        let mut crowns = 0;
+        for _ in 0..400 {
             let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
             assert!(loot.items.iter().any(|(i, _)| RARE_DROPS.contains(i)));
             assert!(loot.items.contains(&(items::ANCIENT_CORE, 2)));
-            assert!(loot.items.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)));
+            if loot.items.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)) {
+                crowns += 1;
+            }
         }
+        // The crown drops a quarter of the time.
+        assert!((70..130).contains(&crowns), "{crowns} crowns in 400 kills");
     }
 }

@@ -3212,7 +3212,7 @@ const CASTER_LOOT: LootTable = LootTable {
 const BOSS_LOOT: LootTable = LootTable {
     copper_per_level: (40, 80),
     items: &[
-        (items::CROWN_OF_THE_SUNKEN_KING, 1.0, 1, 1),
+        (items::CROWN_OF_THE_SUNKEN_KING, 0.25, 1, 1),
         (items::ANCIENT_CORE, 1.0, 2, 2),
         (items::LINEN_CLOTH, 1.0, 3, 5),
     ],

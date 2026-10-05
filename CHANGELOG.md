@@ -25,7 +25,7 @@ Commit: the one titled "v7.4: Waystones and the Sunken Vault".
   back to the town you came from. Logging out inside puts you by that town's
   waystone next time
 - **Crown of the Sunken King**: a new blue helm (14 armor, +6 stamina, +5
-  power) that Morvane always drops
+  power) that Morvane drops a quarter of the time
 - **Loot**: Morvane also always drops a green armor piece and 2 Ancient Cores,
   and half the time a green weapon. The Stone Warden drops like other elites
 - The minimap and the world map (`M`) show the vault's halls and room names
