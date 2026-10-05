@@ -16,11 +16,11 @@ use macroquad::audio::{
     PlaySoundParams, Sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound,
 };
 use macroquad::prelude::*;
-use shared::data::School;
+use shared::data::{HumanoidStyle, MobKind, MobModel, School};
 
 use crate::music::{self, Ambience, Track};
 use crate::settings::{self, Bus};
-use crate::synth::{Shape, Wave, bell, noise, note, pluck, sweep, tone};
+use crate::synth::{Rng, Shape, Wave, bell, noise, note, pluck, sweep, tone};
 
 /// How far away (in yards) a sound in the world can be heard. Placeholder.
 pub const HEARING: f32 = 40.0;
@@ -29,6 +29,8 @@ const FULL_VOLUME: f32 = 8.0;
 /// The same sound won't start again within this many seconds, so a
 /// big fight doesn't stack dozens of copies.
 const REPEAT_GAP: f32 = 0.05;
+/// At most this many sounds start in one frame; the rest are dropped.
+const MAX_PER_FRAME: usize = 8;
 /// How many seconds music and ambience take to fade in or out. Placeholder.
 const FADE: f32 = 2.5;
 
@@ -63,6 +65,86 @@ pub enum Sfx {
     Drink,
     Cast(School),
     Impact(School),
+    // Monsters
+    Mob(Voice, Cry),
+    /// Marked ground about to be hit (the Sunken King's Tidal Crash).
+    Warning,
+    /// Marked ground being hit.
+    Crash,
+    /// A dungeon boss starting a spell.
+    BossCast,
+    /// A dungeon boss dying.
+    BossDown,
+    /// The way out opening after a boss.
+    Portal,
+    // World
+    /// Travelling by waystone or teleporter.
+    Teleport,
+    /// A footstep; the flag picks one of two so steps don't repeat exactly.
+    Step(Surface, bool),
+}
+
+/// The kinds of monster voice. Monsters built on the same body share one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Voice {
+    /// Wolves and hounds.
+    Beast,
+    Boar,
+    /// Spiders, scorpions and crabs.
+    Bug,
+    /// Bandits, cultists, trolls and other people.
+    Person,
+    /// Skeletons.
+    Bones,
+    /// Golems, colossi, yetis and treants.
+    Giant,
+}
+
+/// What a monster's voice is doing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cry {
+    /// Starting a fight.
+    Aggro,
+    Hurt,
+    Death,
+}
+
+/// What you're walking on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Surface {
+    Grass,
+    Sand,
+    Snow,
+    Stone,
+    Water,
+}
+
+const VOICES: [Voice; 6] = [
+    Voice::Beast,
+    Voice::Boar,
+    Voice::Bug,
+    Voice::Person,
+    Voice::Bones,
+    Voice::Giant,
+];
+const SURFACES: [Surface; 5] = [
+    Surface::Grass,
+    Surface::Sand,
+    Surface::Snow,
+    Surface::Stone,
+    Surface::Water,
+];
+
+/// The voice a monster has, from the body it's built on.
+pub fn voice(kind: MobKind) -> Voice {
+    match kind.template().model {
+        MobModel::Wolf => Voice::Beast,
+        MobModel::Boar => Voice::Boar,
+        MobModel::Spider | MobModel::Scorpion => Voice::Bug,
+        MobModel::Humanoid(HumanoidStyle::Skeleton) => Voice::Bones,
+        MobModel::Humanoid(_) => Voice::Person,
+        MobModel::Giant(_) => Voice::Giant,
+    }
 }
 
 const SCHOOLS: [School; 7] = [
@@ -106,6 +188,13 @@ impl Sfx {
         ];
         all.extend(SCHOOLS.iter().map(|&s| Cast(s)));
         all.extend(SCHOOLS.iter().map(|&s| Impact(s)));
+        for v in VOICES {
+            all.extend([Cry::Aggro, Cry::Hurt, Cry::Death].map(|c| Mob(v, c)));
+        }
+        all.extend([Warning, Crash, BossCast, BossDown, Portal, Teleport]);
+        for surface in SURFACES {
+            all.extend([Step(surface, false), Step(surface, true)]);
+        }
         all
     }
 
@@ -253,7 +342,189 @@ impl Sfx {
                 .normalize(0.4),
             Cast(school) => cast(school),
             Impact(school) => impact(school),
+            Mob(v, c) => mob_voice(v, c),
+            Warning => tone(Shape::Saw, 98.0, 147.0, 0.9, 0.05, 0.6)
+                .mix(0.0, tone(Shape::Saw, 99.0, 148.5, 0.9, 0.05, 0.6))
+                .lowpass(900.0)
+                .tremolo(9.0, 0.5)
+                .normalize(0.55),
+            Crash => noise(1.0, 0.002, 2.0, 201)
+                .lowpass(700.0)
+                .mix(0.0, tone(Shape::Sine, 70.0, 28.0, 0.9, 0.002, 1.5))
+                .mix(0.05, sweep(0.6, 2500.0, 400.0, 202).gain(0.5))
+                .normalize(0.8),
+            BossCast => tone(Shape::Saw, 73.4, 73.4, 1.1, 0.25, 0.8)
+                .mix(0.0, tone(Shape::Saw, 110.0, 110.0, 1.1, 0.25, 0.8))
+                .mix(0.0, tone(Shape::Saw, 87.3, 87.3, 1.1, 0.25, 0.8).gain(0.7))
+                .lowpass(650.0)
+                .normalize(0.6),
+            BossDown => fanfare(&[0, 4, 7, 12, 16, 19], 0.13, 2.2)
+                .mix(
+                    0.0,
+                    tone(Shape::Sine, 65.0, 40.0, 1.0, 0.005, 1.5).gain(0.6),
+                )
+                .normalize(0.65),
+            Portal => sweep(1.2, 400.0, 6000.0, 211)
+                .gain(0.6)
+                .mix(0.3, bell(note(19), 1.2).gain(0.5))
+                .mix(0.5, bell(note(26), 1.0).gain(0.4))
+                .normalize(0.5),
+            Teleport => sweep(0.7, 300.0, 7000.0, 221)
+                .mix(0.35, bell(note(24), 0.9).gain(0.6))
+                .echo(0.12, 0.3)
+                .normalize(0.55),
+            Step(surface, alt) => step(surface, if alt { 2 } else { 1 }),
         }
+    }
+}
+
+/// A monster's cry. Each voice is built differently: growls are buzzy
+/// tones that wobble, bugs hiss and click, giants rumble.
+fn mob_voice(v: Voice, c: Cry) -> Wave {
+    let seed = 300 + VOICES.iter().position(|x| *x == v).unwrap_or(0) as u32 * 10;
+    match (v, c) {
+        (Voice::Beast, Cry::Aggro) => tone(Shape::Saw, 120.0, 95.0, 0.7, 0.08, 0.8)
+            .lowpass(700.0)
+            .tremolo(32.0, 0.6)
+            .normalize(0.6),
+        (Voice::Beast, Cry::Hurt) => tone(Shape::Triangle, 700.0, 1100.0, 0.08, 0.005, 1.0)
+            .mix(0.08, tone(Shape::Triangle, 1000.0, 500.0, 0.12, 0.005, 1.5))
+            .normalize(0.45),
+        (Voice::Beast, Cry::Death) => tone(Shape::Triangle, 900.0, 300.0, 0.6, 0.01, 1.2)
+            .mix(
+                0.0,
+                tone(Shape::Saw, 110.0, 70.0, 0.5, 0.01, 1.5)
+                    .lowpass(500.0)
+                    .gain(0.5),
+            )
+            .normalize(0.5),
+        (Voice::Boar, Cry::Aggro) => [0.0, 0.18]
+            .into_iter()
+            .fold(Wave::new(), |w, at| {
+                w.mix(
+                    at,
+                    tone(Shape::Square, 85.0, 65.0, 0.16, 0.01, 1.2)
+                        .lowpass(500.0)
+                        .tremolo(25.0, 0.5),
+                )
+            })
+            .normalize(0.6),
+        (Voice::Boar, Cry::Hurt) => tone(Shape::Saw, 900.0, 1500.0, 0.18, 0.01, 1.2)
+            .lowpass(3000.0)
+            .normalize(0.4),
+        (Voice::Boar, Cry::Death) => tone(Shape::Saw, 1300.0, 500.0, 0.5, 0.01, 1.2)
+            .lowpass(2500.0)
+            .mix(
+                0.3,
+                tone(Shape::Square, 80.0, 50.0, 0.3, 0.01, 1.5).lowpass(400.0),
+            )
+            .normalize(0.5),
+        (Voice::Bug, Cry::Aggro) => noise(0.5, 0.05, 1.2, seed)
+            .highpass(3000.0)
+            .tremolo(40.0, 0.7)
+            .normalize(0.4),
+        (Voice::Bug, Cry::Hurt) => clicks(5, 0.03, seed + 1).normalize(0.45),
+        (Voice::Bug, Cry::Death) => clicks(12, 0.045, seed + 2)
+            .mix(
+                0.0,
+                noise(0.6, 0.01, 2.0, seed + 3).highpass(2000.0).gain(0.4),
+            )
+            .normalize(0.45),
+        (Voice::Person, Cry::Aggro) => tone(Shape::Saw, 190.0, 160.0, 0.35, 0.02, 0.8)
+            .lowpass(1300.0)
+            .mix(0.0, noise(0.3, 0.02, 1.0, seed).lowpass(2500.0).gain(0.25))
+            .normalize(0.55),
+        (Voice::Person, Cry::Hurt) => tone(Shape::Saw, 170.0, 120.0, 0.16, 0.01, 1.5)
+            .lowpass(1000.0)
+            .normalize(0.5),
+        (Voice::Person, Cry::Death) => tone(Shape::Saw, 180.0, 75.0, 0.8, 0.01, 1.2)
+            .lowpass(900.0)
+            .normalize(0.5),
+        (Voice::Bones, Cry::Aggro) => clicks(10, 0.04, seed)
+            .mix(
+                0.05,
+                tone(Shape::Sine, 110.0, 100.0, 0.6, 0.1, 1.0)
+                    .tremolo(6.0, 0.4)
+                    .gain(0.6),
+            )
+            .normalize(0.5),
+        (Voice::Bones, Cry::Hurt) => clicks(4, 0.03, seed + 1).normalize(0.5),
+        (Voice::Bones, Cry::Death) => clicks(18, 0.035, seed + 2)
+            .mix(
+                0.15,
+                noise(0.4, 0.005, 2.0, seed + 3).lowpass(1500.0).gain(0.5),
+            )
+            .normalize(0.55),
+        (Voice::Giant, Cry::Aggro) => tone(Shape::Saw, 70.0, 55.0, 1.2, 0.1, 0.8)
+            .mix(0.0, noise(1.2, 0.1, 0.8, seed).lowpass(400.0).gain(0.8))
+            .lowpass(600.0)
+            .tremolo(18.0, 0.5)
+            .normalize(0.7),
+        (Voice::Giant, Cry::Hurt) => thump(60.0, seed + 1, 0.6),
+        (Voice::Giant, Cry::Death) => (0..8)
+            .fold(tone(Shape::Sine, 60.0, 25.0, 1.4, 0.005, 1.2), |w, i| {
+                w.mix(
+                    0.1 + i as f32 * 0.12,
+                    noise(0.25, 0.003, 2.0, seed + 10 + i).lowpass(900.0 - i as f32 * 60.0),
+                )
+            })
+            .normalize(0.7),
+    }
+}
+
+/// A run of quick clicks: legs, pincers, bones.
+fn clicks(count: u32, gap: f32, seed: u32) -> Wave {
+    let mut rng = Rng::new(seed);
+    let mut w = Wave::new();
+    let mut at = 0.0;
+    for i in 0..count {
+        w = w.mix(at, noise(0.012, 0.0005, 3.0, seed + i).highpass(1800.0));
+        at += gap * (0.7 + rng.next().abs() * 0.6);
+    }
+    w
+}
+
+/// One footstep. `variant` changes the noise so steps don't repeat exactly.
+fn step(surface: Surface, variant: u32) -> Wave {
+    let seed = 400 + variant * 7;
+    match surface {
+        Surface::Grass => noise(0.07, 0.004, 2.0, seed)
+            .lowpass(1600.0)
+            .highpass(200.0)
+            .normalize(0.3),
+        Surface::Sand => noise(0.1, 0.01, 1.5, seed)
+            .lowpass(2600.0)
+            .highpass(500.0)
+            .normalize(0.25),
+        Surface::Snow => clicks(6, 0.012, seed)
+            .lowpass(3500.0)
+            .mix(
+                0.0,
+                noise(0.08, 0.005, 1.5, seed + 1).lowpass(1200.0).gain(0.6),
+            )
+            .normalize(0.3),
+        Surface::Stone => noise(0.03, 0.001, 3.0, seed)
+            .highpass(900.0)
+            .mix(
+                0.0,
+                tone(Shape::Sine, 160.0, 110.0, 0.05, 0.001, 2.0).gain(0.7),
+            )
+            .normalize(0.35),
+        Surface::Water => noise(0.16, 0.005, 1.5, seed)
+            .lowpass(2200.0)
+            .mix(
+                0.02,
+                tone(
+                    Shape::Sine,
+                    500.0 + variant as f32 * 60.0,
+                    900.0,
+                    0.06,
+                    0.003,
+                    1.5,
+                )
+                .gain(0.3),
+            )
+            .normalize(0.35),
     }
 }
 
@@ -410,6 +681,8 @@ struct Engine {
     done_tx: Sender<(Loop, Vec<u8>)>,
     done_rx: Receiver<(Loop, Vec<u8>)>,
     layers: Vec<Layer>,
+    /// Sounds started this frame.
+    started: usize,
 }
 
 /// Loads a sound right away. Loading is only ever slow on the web, so on
@@ -544,6 +817,7 @@ pub async fn init() {
             done_tx,
             done_rx,
             layers: Vec::new(),
+            started: 0,
         })
     });
 }
@@ -586,6 +860,7 @@ pub fn update() {
             let mut watch = Watch(e.minimized);
             macroquad::input::utils::repeat_all_miniquad_input(&mut watch, e.subscriber);
             e.minimized = watch.0;
+            e.started = 0;
             e.update_loops(get_frame_time().min(0.1));
         }
     });
@@ -628,11 +903,15 @@ fn play_scaled(sfx: Sfx, scale: f32) {
         if volume <= 0.001 {
             return;
         }
+        if e.started >= MAX_PER_FRAME {
+            return;
+        }
         let now = get_time();
         if let Some((_, sound, last)) = e.sounds.iter_mut().find(|(s, ..)| *s == sfx)
             && now - *last >= REPEAT_GAP as f64
         {
             *last = now;
+            e.started += 1;
             play_sound(
                 sound,
                 PlaySoundParams {

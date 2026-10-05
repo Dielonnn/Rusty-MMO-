@@ -28,6 +28,53 @@ Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies, elf rework
 - **Elves, reworked a little**: longer, fuller ears that sweep up and
   back, bigger eyes, a less gaunt face, a shorter neck, and a lean but
   less spindly build with slightly broader shoulders on the men.
+## v8.7
+
+Commit: the one titled "v8.7: monster, boss and footstep sounds".
+
+- **Monsters have voices.** Six kinds: wolves, boars, bugs (spiders and
+  scorpions), people (bandits, troggs, trolls and the rest), skeletons and
+  giants. Each growls when it joins a fight, cries
+  out when you land a critical hit on it, and has a death sound.
+- **Bosses**: a horn when a boss starts casting, a warning hum when ground
+  is marked for an attack, a crash when the attack lands, and a fanfare
+  when a boss dies.
+- A shimmer when a boss-kill portal opens, and a whoosh when you travel by
+  waystone or portal.
+- **Footsteps** that change with the ground: grass, sand, snow, stone
+  (Grubdeep and every dungeon) and splashing in shallow water. They speed
+  up and slow down with how fast you're moving.
+- Every sound in the world gets quieter with distance and goes silent past
+  40 yards. Sounds don't move left and right between speakers: macroquad's
+  sound library has no panning.
+- No more than eight sounds start in one frame, so a big fight stays
+  clean.
+- Still no files to download or license: every sound is made by the game.
+
+## v8.6
+
+Commit: the one titled "v8.6: controls, graphics, interface and gameplay settings".
+
+- **Every Settings tab works now.** "Reset This Tab" puts just the tab
+  you're on back to its defaults.
+- **Controls**: rebind 28 actions: moving, turning, jumping, all eight
+  hotbar keys, targeting, attack, and every window key. Click a key, then
+  press the new one (Esc cancels). Keys that do two things show in red.
+  Enter, /, Esc, Backspace and Shift stay fixed. The arrow keys still run
+  forward and back too. Also: mouse sensitivity, zoom speed and invert
+  mouse.
+- The controls help (H) and window titles show your own keys.
+- **Graphics**: fullscreen, window size, anti-aliasing (off/2x/4x/8x) and
+  VSync (both after a restart), a frame cap (30/60/120/144) and a
+  frames-per-second counter.
+- **Interface**: hide names over players, monsters, or merchants and
+  quest givers (your target's name always shows), turn off damage and
+  healing numbers, change the chat text size, choose whether the controls
+  help shows when you log in, and put every window back where it started.
+- **Gameplay**: turn down party invites or duel challenges automatically.
+- Settings are saved per computer, in the same `client_settings.txt`. Files
+  from v8.3 to v8.5 load fine.
+- Same protocol as v8.2 (18).
 
 ## v8.5
 
