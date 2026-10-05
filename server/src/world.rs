@@ -417,6 +417,19 @@ fn camps() -> Vec<Camp> {
                 });
             }
         }
+        if let Some(kind) = MobKind::water(zone) {
+            for shore in &zone.layout().shores {
+                camps.push(Camp {
+                    center: zone.to_world(shore.center),
+                    radius: shared::layout::SHORE_RADIUS,
+                    kind,
+                    levels: shared::layout::SHORE_LEVELS,
+                    count: shared::layout::SHORE_COUNT,
+                    group: camps.len(),
+                    instance: None,
+                });
+            }
+        }
     }
     camps
 }
@@ -1536,11 +1549,13 @@ impl World {
             .copied()
             .flatten()
             .ok_or("That slot is empty.")?;
-        let ItemKind::Potion { health, power } = item(item_id).kind else {
-            return Err("You can't use that.");
+        let (health, power) = match item(item_id).kind {
+            ItemKind::Potion { health, power } => (health, power),
+            ItemKind::Food { health } => (health, 0.0),
+            _ => return Err("You can't use that."),
         };
         if p.potion_cooldown > 0.0 {
-            return Err("Potions are not ready yet.");
+            return Err("Potions and food are not ready yet.");
         }
         p.potion_cooldown = POTION_COOLDOWN;
         p.bags[slot] = (count > 1).then_some((item_id, count - 1));
@@ -2685,7 +2700,12 @@ mod tests {
     #[test]
     fn camps_are_on_dry_land() {
         let w = World::new(1);
-        for e in w.entities.values().filter(|e| e.mob().is_some()) {
+        // Water mobs aside: they live in the shallows.
+        let dry = |e: &&Entity| {
+            e.mob()
+                .is_some_and(|m| MobKind::water(Zone::at(e.pos)) != Some(m.kind))
+        };
+        for e in w.entities.values().filter(dry) {
             assert!(
                 e.pos.y > WATER_LEVEL,
                 "{} at {:?} is under water",
@@ -3313,7 +3333,10 @@ mod tests {
                 .filter(|e| e.mob().is_some() && Zone::at(e.pos) == zone)
                 .collect();
             assert!(mobs.len() >= 50, "{zone:?} has {} mobs", mobs.len());
-            assert!(mobs.iter().all(|m| kinds.contains(&m.mob().unwrap().kind)));
+            assert!(mobs.iter().all(|m| {
+                let kind = m.mob().unwrap().kind;
+                kinds.contains(&kind) || MobKind::water(zone) == Some(kind)
+            }));
             let merchant = w
                 .entities
                 .values()
@@ -3846,6 +3869,80 @@ mod tests {
         let pd = w.entities[&p].player().unwrap();
         assert_eq!(count_item(&pd.bags, items::IRON_SWORD), 1);
         assert_eq!(count_item(&pd.bags, items::IRON_SCRAP), 0);
+    }
+
+    #[test]
+    fn water_mobs_live_in_the_shallows() {
+        let w = World::new(3);
+        for zone in Zone::ALL {
+            let water: Vec<_> = w
+                .entities
+                .values()
+                .filter(|e| {
+                    e.mob()
+                        .is_some_and(|m| Some(m.kind) == MobKind::water(zone))
+                })
+                .collect();
+            let lakes = zone.layout().shores.len();
+            assert_eq!(water.len(), lakes * shared::layout::SHORE_COUNT, "{zone:?}");
+            assert_eq!(lakes > 0, MobKind::water(zone).is_some(), "{zone:?}");
+            for e in water {
+                assert!((3..=5).contains(&e.level));
+                assert_eq!(Zone::at(e.pos), zone);
+                assert!(e.pos.y < zone.water_level() + 0.5, "{zone:?} {}", e.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn boars_and_water_mobs_drop_food_to_cook_and_eat() {
+        let mut w = World::new(23);
+        let count = |w: &mut World, kind: MobKind, food: ItemId| {
+            (0..200)
+                .map(|_| {
+                    let loot = w.roll_loot(kind, 4, vec![1]).unwrap();
+                    loot.items.iter().filter(|(i, _)| *i == food).count()
+                })
+                .sum::<usize>()
+        };
+        for boar in [MobKind::Boar, MobKind::PlagueBoar] {
+            assert!(count(&mut w, boar, items::BOAR_MEAT) > 60, "{boar:?}");
+        }
+        assert_eq!(count(&mut w, MobKind::Hyena, items::BOAR_MEAT), 0);
+        for fish in [MobKind::MudsnapCrab, MobKind::BogLurker] {
+            assert!(count(&mut w, fish, items::RAW_FISH) > 80, "{fish:?}");
+        }
+
+        let p = join(&mut w, "Cook", Class::Fighter, 5);
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        add_item(&mut pd.bags, items::RAW_FISH, 2);
+        let (fish, _) = Skill::Cooking
+            .recipes()
+            .find(|(_, r)| r.result == items::COOKED_FISH)
+            .unwrap();
+        w.craft(p, fish).unwrap();
+        w.craft(p, fish).unwrap();
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(count_item(&pd.bags, items::COOKED_FISH), 2);
+
+        // Eating heals three quarters of a potion, and shares its cooldown.
+        let e = w.entities.get_mut(&p).unwrap();
+        e.hp = 1.0;
+        let max = e.max_hp;
+        let slot = e
+            .player()
+            .unwrap()
+            .bags
+            .iter()
+            .position(|s| matches!(s, Some((i, _)) if *i == items::COOKED_FISH))
+            .unwrap();
+        w.use_item(p, slot).unwrap();
+        let healed = w.entities[&p].hp - 1.0;
+        assert!(
+            (healed - max * 0.35 * 0.75).abs() < 1.0,
+            "healed {healed} of {max}"
+        );
+        assert!(w.use_item(p, slot).is_err());
     }
 
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {

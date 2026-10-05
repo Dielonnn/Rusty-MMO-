@@ -5,6 +5,25 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.8
+
+Commit: the one titled "v7.8: water mobs in the lakes".
+
+- **Water mobs**: areas with lakes now have a pack of four aggressive water
+  mobs (levels 3-5) in the shallows of up to three lakes: **Mudsnap Crabs** in Amberfall, **Glimmershell Crabs** in Silverbough
+  and **Bog Lurkers** in Witherwood. They fight like the area's wolves and
+  drop money and sometimes Light Leather. Scorchsand and Frostcog have no
+  lakes, and Grubdeep's one pool is too small for a pack
+- Sandbox mode can summon the area's water mob
+- **Meat and fish**: boars drop **Boar Meat** (50%) and water mobs drop
+  **Raw Fish** (60%)
+- **Cooking**: a new skill. `K` now opens a **Skills** window with a tab per
+  skill: Crafting (as before) and Cooking. Cook Boar Meat into **Roasted
+  Boar** and Raw Fish into **Cooked Fish**. Right-click cooked food to eat
+  it: it restores 26% of your health (three quarters of a Healing Potion)
+  and shares the potion cooldown
+- Old clients can't join a v7.8 server (protocol 11)
+
 ## v7.6
 
 Commit: the one titled "v7.6: Waystones and the Sunken Vault".

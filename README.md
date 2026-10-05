@@ -93,7 +93,7 @@ title and on the login screen.
 | `F1` | Target yourself |
 | `1`-`6`, `E`, or click the action bar | Use an ability |
 | `T` | Start / stop auto attack |
-| `B` / `C` / `K` | Backpack / character / crafting |
+| `B` / `C` / `K` | Backpack / character / skills (crafting and cooking) |
 | `N` | Talents |
 | `L` | Quest log |
 | `M` | World map |
@@ -232,6 +232,7 @@ loot (everyone who fought it may loot it; the first to do so gets it).
 - Boars (and some wolves) drop **Light Leather**
 - Bandits (and the other humanoids) drop **Linen Cloth**
 - Bandits, raiders and the other fighters also drop **Iron Scrap**
+- Boars drop **Boar Meat**, and crabs and other water mobs drop **Raw Fish**
 - Each starting area's elite drops an **Ancient Core**
 - Any mob may drop a piece of **green** gear (rarely; elites usually do):
   helms, chests, gloves, legs and boots, each sturdy (armor and stamina) or
@@ -241,7 +242,13 @@ loot (everyone who fought it may loot it; the first to do so gets it).
   Wolfbite Axe, Ironwood Mace, Shadowfang Dagger, Ashwood Longbow, Emberwand
   and Moonwhisper Staff
 
-Open crafting with `K` to turn materials into gear: a leather cap, vest,
+Press `K` for your skills. Each skill has a tab: **Crafting** turns
+materials into gear, and **Cooking** turns Boar Meat into Roasted Boar and Raw
+Fish into Cooked Fish. Right-click cooked food in your backpack to eat it: it
+restores three quarters of what a Healing Potion does, and shares the potion
+cooldown.
+
+Crafting makes a leather cap, vest,
 gloves, pants and boots; a linen hood, robe, gloves, pants and sandals; an
 Iron Sword, Hunting Bow and Apprentice Staff; and the rare Heartstone
 Chestguard and Heartstone Greatsword. Click gear in your backpack to wear or
@@ -270,7 +277,9 @@ its own town layout, and its own places for fields, camps and the elite's
 ruins. Mob levels rise the further you go from town: hunters and grazers
 (levels 1-8) roam the open, two camps of fighters and casters (4-5 and 6-8) and
 a fighters' camp (8-9) sit further out, and the area's **elite** (10) waits in
-its ruins near the edge.
+its ruins near the edge. Areas with lakes have water mobs (levels 3-5) in the
+shallows: Mudsnap Crabs in Amberfall, Glimmershell
+Crabs in Silverbough and Bog Lurkers in Witherwood.
 
 Press `M` for the world map of your area, inked on parchment: the town, every
 camp and its levels (tents for camps, paw prints for beasts, a skull for the
