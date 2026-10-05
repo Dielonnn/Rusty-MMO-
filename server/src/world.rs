@@ -16,8 +16,11 @@ use crate::character::{Character, add_item, count_item, gear_stats, remove_item}
 use shared::props::{ARRIVAL_SPOT, MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
+mod boss;
 mod instance;
 mod party;
+
+use boss::{BossTimers, Hazard};
 pub use instance::{Instance, Owner};
 pub use party::{Party, PartyId};
 
@@ -122,11 +125,26 @@ pub struct Loot {
     /// A party member whose turn it is: only they may loot until the
     /// seconds run out.
     pub turn: Option<(EntityId, f32)>,
+    /// Gear rolled for each player on their own (in the dungeon): only they
+    /// see and take it.
+    pub personal: Vec<(EntityId, Vec<Stack>)>,
 }
 
 impl Loot {
+    /// Whether this player may take the shared money and items.
+    fn shares_with(&self, id: EntityId) -> bool {
+        (self.money > 0 || !self.items.is_empty())
+            && self.looters.contains(&id)
+            && self.turn.is_none_or(|(t, _)| t == id)
+    }
+
+    /// Whether there's anything here this player may take.
     pub fn allows(&self, id: EntityId) -> bool {
-        self.looters.contains(&id) && self.turn.is_none_or(|(t, _)| t == id)
+        self.shares_with(id) || self.personal.iter().any(|(p, _)| *p == id)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.money == 0 && self.items.is_empty() && self.personal.is_empty()
     }
 }
 
@@ -141,6 +159,8 @@ pub struct MobData {
     wander_to: Option<Vec3>,
     respawn_timer: f32,
     spell_timer: f32,
+    /// Bosses' own mechanics.
+    boss: BossTimers,
     pub loot: Option<Loot>,
     /// Who summoned this mob in sandbox mode; it doesn't come back.
     pub summoner: Option<EntityId>,
@@ -455,6 +475,8 @@ pub struct World {
     pub instances: BTreeMap<u32, Instance>,
     /// Camps of closed vault copies, to reuse.
     free_camps: Vec<usize>,
+    /// Ground marked by bosses, about to be hit.
+    hazards: Vec<Hazard>,
 }
 
 impl World {
@@ -471,6 +493,7 @@ impl World {
             next_party: 1,
             instances: BTreeMap::new(),
             free_camps: Vec::new(),
+            hazards: Vec::new(),
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -569,6 +592,7 @@ impl World {
                 wander_to: None,
                 respawn_timer: 0.0,
                 spell_timer: 0.0,
+                boss: BossTimers::default(),
                 loot: None,
                 summoner: None,
             }),
@@ -595,6 +619,7 @@ impl World {
         m.wander_timer = self.rng.range(2.0, 8.0);
         m.wander_to = None;
         m.spell_timer = self.rng.range(1.0, 3.0);
+        m.boss = BossTimers::default();
         m.loot = None;
         mob.name = t.name.to_string();
         mob.level = level;
@@ -769,6 +794,7 @@ impl World {
         let p = me.player()?;
         Some(Snapshot {
             tick: self.tick,
+            hazards: self.hazards_near(me.pos),
             entities,
             me: SelfView {
                 xp: p.xp,
@@ -1071,39 +1097,58 @@ impl World {
         if c.pos.distance(me.pos) > LOOT_RANGE + 1.0 {
             return Err("You are too far away.");
         }
-        let loot = mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain)
+        let mut loot = mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain)
             .loot
             .take()
             .unwrap();
+        let shared = loot.shares_with(id);
+        let money = if shared {
+            loot.turn = None;
+            std::mem::take(&mut loot.money)
+        } else {
+            0
+        };
+        let shared_items = if shared {
+            std::mem::take(&mut loot.items)
+        } else {
+            Vec::new()
+        };
+        let mine = loot
+            .personal
+            .iter()
+            .position(|(p, _)| *p == id)
+            .map_or(Vec::new(), |i| loot.personal.remove(i).1);
         let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
-        p.money += loot.money;
+        p.money += money;
         let mut got = Vec::new();
-        let mut left = Vec::new();
-        for (item, n) in loot.items {
-            let rest = add_item(&mut p.bags, item, n);
-            if rest < n {
-                got.push((item, n - rest));
+        let mut full = false;
+        // What doesn't fit stays on the corpse, shared or still just yours.
+        let mut take = |stacks: Vec<Stack>, bags: &mut Vec<Option<Stack>>| {
+            let mut left = Vec::new();
+            for (item, n) in stacks {
+                let rest = add_item(bags, item, n);
+                if rest < n {
+                    got.push((item, n - rest));
+                }
+                if rest > 0 {
+                    left.push((item, rest));
+                    full = true;
+                }
             }
-            if rest > 0 {
-                left.push((item, rest));
-            }
+            left
+        };
+        loot.items.extend(take(shared_items, &mut p.bags));
+        let mine_left = take(mine, &mut p.bags);
+        if !mine_left.is_empty() {
+            loot.personal.push((id, mine_left));
         }
-        if !left.is_empty() {
-            mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain).loot = Some(Loot {
-                money: 0,
-                items: left,
-                looters: loot.looters,
-                turn: None,
-            });
+        if !loot.is_empty() {
+            mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain).loot = Some(loot);
+        }
+        if full {
             self.error(id, "Your bags are full.");
         }
-        self.send(
-            Audience::Only(id),
-            GameEvent::Looted {
-                money: loot.money,
-                items: got,
-            },
-        );
+        self.send(Audience::Only(id), GameEvent::Looted { money, items: got });
         Ok(())
     }
 
@@ -2131,19 +2176,22 @@ impl World {
         let money = self.rng.int(lo, hi) * level as u32;
         let mut items = Vec::new();
         for &(item, chance, min, max) in table.items {
-            if self.rng.chance(chance) {
+            if !is_gear(item) && self.rng.chance(chance) {
                 items.push((item, self.rng.int(min as u32, max as u32) as u16));
             }
         }
-        // Now and then, a piece of green gear.
-        let (rare, weapon) = kind.drop_chances();
-        if self.rng.chance(rare) {
-            let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
-            items.push((pick, 1));
-        }
-        if self.rng.chance(weapon) {
-            let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
-            items.push((pick, 1));
+        // The dungeon rolls gear for each player on their own; elsewhere
+        // it's shared like everything else.
+        let mut personal = Vec::new();
+        if MobKind::DUNGEON.contains(&kind) {
+            for &p in &looters {
+                let gear = self.roll_gear(kind);
+                if !gear.is_empty() {
+                    personal.push((p, gear));
+                }
+            }
+        } else {
+            items.extend(self.roll_gear(kind));
         }
         let turn = self.loot_turn(&looters).map(|t| (t, LOOT_TURN_TIME));
         (!looters.is_empty()).then_some(Loot {
@@ -2151,7 +2199,29 @@ impl World {
             items,
             looters,
             turn,
+            personal,
         })
+    }
+
+    /// The gear a mob drops: anything wearable from its loot table, and now
+    /// and then a green piece or weapon.
+    fn roll_gear(&mut self, kind: MobKind) -> Vec<Stack> {
+        let mut gear = Vec::new();
+        for &(item, chance, min, max) in kind.template().loot.items {
+            if is_gear(item) && self.rng.chance(chance) {
+                gear.push((item, self.rng.int(min as u32, max as u32) as u16));
+            }
+        }
+        let (rare, weapon) = kind.drop_chances();
+        if self.rng.chance(rare) {
+            let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
+            gear.push((pick, 1));
+        }
+        if self.rng.chance(weapon) {
+            let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
+            gear.push((pick, 1));
+        }
+        gear
     }
 
     fn kill(&mut self, victim: EntityId, killer: Option<EntityId>) {
@@ -2250,6 +2320,7 @@ impl World {
         self.tick += 1;
         self.tick_parties(dt);
         self.tick_instances(dt);
+        self.tick_hazards(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -2554,6 +2625,7 @@ impl World {
         if m.threat.is_empty() || e.pos.distance(home) > LEASH_RANGE {
             m.state = MobState::Evading;
             m.threat.clear();
+            m.boss = BossTimers::default();
             e.cast = None;
             e.hp = e.max_hp;
             return;
@@ -2577,6 +2649,11 @@ impl World {
         e.yaw = yaw_towards(e.pos, target_pos);
         let dist = e.pos.distance(target_pos);
 
+        if t.boss && self.boss_combat(id, dt) {
+            self.entities.get_mut(&id).unwrap().moving = false;
+            return;
+        }
+        let e = self.entities.get_mut(&id).unwrap();
         if let Some((spell, interval)) = t.spell {
             let a = ability(spell);
             let in_range = match a.targeting {
@@ -2613,6 +2690,13 @@ impl World {
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
         }
     }
+}
+
+fn is_gear(id: ItemId) -> bool {
+    matches!(
+        item(id).kind,
+        ItemKind::Armor { .. } | ItemKind::Weapon { .. }
+    )
 }
 
 fn vec3_on_ground(p: Vec3) -> Vec3 {
@@ -3945,6 +4029,151 @@ mod tests {
         assert!(w.use_item(p, slot).is_err());
     }
 
+    /// A Sunken King summoned next to a player, already fighting them.
+    fn boss_fight(w: &mut World, p: EntityId) -> EntityId {
+        w.sandbox = true;
+        // Out of town, where mobs keep their threat.
+        let e = w.entities.get_mut(&p).unwrap();
+        let zone = Zone::at(e.pos);
+        let c = zone.center();
+        e.pos = ground(c.x + shared::world::TOWN_RADIUS + 12.0, c.y);
+        assert!(!zone.in_town(e.pos));
+        w.handle(
+            p,
+            ClientMsg::Sandbox(SandboxCmd::SpawnMob {
+                kind: MobKind::SunkenKing,
+                level: 10,
+            }),
+        );
+        let boss = w
+            .entities
+            .values()
+            .find(|e| e.mob().is_some_and(|m| m.kind == MobKind::SunkenKing))
+            .unwrap()
+            .id;
+        sturdy(w, boss);
+        w.provoke(p, boss, 100.0);
+        boss
+    }
+
+    #[test]
+    fn the_sunken_king_marks_the_ground_and_it_hurts_to_stand_in() {
+        for dodge in [false, true] {
+            let mut w = World::new(5);
+            let p = join(&mut w, "Tank", Class::Fighter, 10);
+            w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = false;
+            let boss = boss_fight(&mut w, p);
+            // Wait for the first Tidal Crash to be marked.
+            let mut marked = None;
+            for _ in 0..(10.0 / DT) as usize {
+                w.tick(DT);
+                let e = w.entities.get_mut(&p).unwrap();
+                e.hp = e.max_hp;
+                if let Some(h) = w.hazards.first() {
+                    marked = Some(h.pos);
+                    break;
+                }
+            }
+            let at = marked.expect("no Tidal Crash");
+            assert!(at.distance(w.entities[&p].pos) < 0.5);
+            assert!(!w.snapshot_for(p).unwrap().hazards.is_empty());
+            if dodge {
+                let e = w.entities.get_mut(&p).unwrap();
+                e.pos = ground(e.pos.x + 8.0, e.pos.z);
+            }
+            // Keep the boss from swinging, so only the crash can hurt.
+            let hp = w.entities[&p].hp;
+            for _ in 0..(boss::CRASH_WARNING / DT) as usize + 2 {
+                w.entities.get_mut(&boss).unwrap().swing_timer = 10.0;
+                w.entities.get_mut(&boss).unwrap().cast = None;
+                w.tick(DT);
+            }
+            assert!(w.hazards.is_empty());
+            let lost = hp - w.entities[&p].hp;
+            if dodge {
+                assert_eq!(lost, 0.0, "dodged but lost {lost}");
+            } else {
+                assert!(lost > 30.0, "stood in it and lost only {lost}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_sunken_kings_spells_can_be_interrupted() {
+        let mut w = World::new(6);
+        let p = join(&mut w, "Rogue", Class::Rogue, 10);
+        let boss = boss_fight(&mut w, p);
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let mut seen = Vec::new();
+        for _ in 0..(40.0 / DT) as usize {
+            // Hurt him enough that he wants to heal.
+            let b = w.entities.get_mut(&boss).unwrap();
+            b.hp = b.hp.min(b.max_hp * 0.5);
+            w.tick(DT);
+            let Some(cast) = w.entities[&boss].cast.as_ref().map(|c| c.ability) else {
+                continue;
+            };
+            if !seen.contains(&cast) {
+                seen.push(cast);
+            }
+            let me = w.entities.get_mut(&p).unwrap();
+            me.target = Some(boss);
+            me.gcd = 0.0;
+            me.cooldowns.clear();
+            let bpos = w.entities[&boss].pos;
+            let me = w.entities.get_mut(&p).unwrap();
+            me.pos = ground(bpos.x - 2.5, bpos.z);
+            me.yaw = yaw_towards(me.pos, bpos);
+            me.power = me.max_power;
+            w.try_use(p, ids::KICK).unwrap();
+            assert!(
+                w.entities[&boss].cast.is_none(),
+                "{cast:?} wasn't interrupted"
+            );
+        }
+        assert!(seen.contains(&ids::DROWNING_GRASP), "{seen:?}");
+        assert!(seen.contains(&ids::CALL_OF_THE_DEEP), "{seen:?}");
+        assert!(MobKind::SunkenKing.template().boss);
+    }
+
+    #[test]
+    fn dungeon_gear_drops_for_each_player_on_their_own() {
+        let mut w = World::new(8);
+        let a = join(&mut w, "Ann", Class::Fighter, 10);
+        let b = join(&mut w, "Bo", Class::Mage, 10);
+        let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![a, b]).unwrap();
+        // The King always drops green armor, so both get some.
+        assert_eq!(loot.personal.len(), 2);
+        assert!(loot.items.iter().all(|(i, _)| !is_gear(*i)));
+        let bs_gear = loot
+            .personal
+            .iter()
+            .find(|(p, _)| *p == b)
+            .unwrap()
+            .1
+            .clone();
+        // Ann loots the corpse: she gets the shared loot and her own gear.
+        let boss = boss_fight(&mut w, a);
+        let e = w.entities.get_mut(&boss).unwrap();
+        e.dead = true;
+        let bpos = e.pos;
+        mob_of(&mut e.brain).loot = Some(Loot { turn: None, ..loot });
+        for p in [a, b] {
+            w.entities.get_mut(&p).unwrap().pos = ground(bpos.x - 1.0, bpos.z);
+        }
+        w.loot(a, boss).unwrap();
+        let left = w.entities[&boss].mob().unwrap().loot.as_ref().unwrap();
+        assert!(left.allows(b) && !left.allows(a));
+        w.loot(b, boss).unwrap();
+        assert!(w.entities[&boss].mob().unwrap().loot.is_none());
+        for (item, n) in bs_gear {
+            assert!(count_item(&w.entities[&b].player().unwrap().bags, item) >= n as u32);
+        }
+        // Out in the world, gear is still shared.
+        let wolf = w.roll_loot(MobKind::Golem, 10, vec![a, b]).unwrap();
+        assert!(wolf.personal.is_empty());
+    }
+
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {
         let a = join(w, "Ann", Class::Barbarian, 3);
         let b = join(w, "Bo", Class::Cleric, 3);
@@ -4265,9 +4494,11 @@ mod tests {
         let mut crowns = 0;
         for _ in 0..400 {
             let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
-            assert!(loot.items.iter().any(|(i, _)| RARE_DROPS.contains(i)));
+            // Gear is the looter's own.
+            let mine = &loot.personal[0].1;
+            assert!(mine.iter().any(|(i, _)| RARE_DROPS.contains(i)));
             assert!(loot.items.contains(&(items::ANCIENT_CORE, 2)));
-            if loot.items.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)) {
+            if mine.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)) {
                 crowns += 1;
             }
         }

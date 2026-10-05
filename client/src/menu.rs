@@ -289,7 +289,7 @@ impl Login {
         let cx = p.x + p.w / 2.0;
         text_centered("Rusty MMO", cx, p.y + 54.0, 48.0, GOLD);
         text_centered(
-            &format!("Six starting areas  -  {}", shared::VERSION),
+            &format!("Six starting areas  -  {}", shared::version()),
             cx,
             p.y + 82.0,
             18.0,

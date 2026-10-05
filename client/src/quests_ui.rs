@@ -7,6 +7,7 @@ use shared::protocol::Stack;
 use shared::quests::{Goal, Quest, QuestId, QuestLog, quest, zone_quests};
 use shared::world::Zone;
 
+use crate::drag::{self, Win};
 use crate::hud::{
     BORDER, GOLD, PANEL, button, item_icon, panel, quality_color, text, text_centered, text_width,
     wrap,
@@ -103,7 +104,10 @@ pub struct GiverLayout {
 
 pub fn giver_layout(zone: Zone, log: &QuestLog, level: u8, bags: &[Option<Stack>]) -> GiverLayout {
     let (w, h) = (screen_width(), screen_height());
-    let window = Rect::new(16.0, ((h - 560.0) / 2.0).max(110.0), 470.0, 560.0);
+    let window = drag::place(
+        Win::QuestGiver,
+        Rect::new(16.0, ((h - 560.0) / 2.0).max(110.0), 470.0, 560.0),
+    );
     let _ = w;
     let mut rows = Vec::new();
     let mut buttons = Vec::new();
@@ -278,11 +282,14 @@ pub struct LogLayout {
 pub fn log_layout(log: &QuestLog) -> LogLayout {
     let (w, h) = (screen_width(), screen_height());
     let rows = log.active.len().max(1) as f32;
-    let window = Rect::new(
-        (w - 460.0) / 2.0,
-        ((h - 400.0) / 2.0).max(60.0),
-        460.0,
-        60.0 + rows * 92.0,
+    let window = drag::place(
+        Win::QuestLog,
+        Rect::new(
+            (w - 460.0) / 2.0,
+            ((h - 400.0) / 2.0).max(60.0),
+            460.0,
+            60.0 + rows * 92.0,
+        ),
     );
     let buttons = log
         .active

@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -135,7 +135,7 @@ pub enum ServerMsg {
     },
     /// The server refused the connection.
     Rejected(String),
-    Snapshot(Snapshot),
+    Snapshot(Box<Snapshot>),
     Event(GameEvent),
     /// The server moved you (respawn) or refused a move.
     SetPosition {
@@ -182,6 +182,17 @@ pub struct Snapshot {
     pub tick: u64,
     pub entities: Vec<EntityView>,
     pub me: SelfView,
+    /// Marked ground about to be hit nearby: get out of the circle!
+    pub hazards: Vec<HazardView>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct HazardView {
+    pub pos: Vec3,
+    pub radius: f32,
+    /// Seconds until it lands, and how long the warning lasts in all.
+    pub remaining: f32,
+    pub total: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
