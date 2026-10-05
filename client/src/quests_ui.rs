@@ -337,7 +337,8 @@ pub fn draw_log(log: &QuestLog, level: u8, bags: &[Option<Stack>]) {
     );
     text(
         &format!(
-            "Quest Log (L)  -  {}/{}",
+            "Quest Log ({})  -  {}/{}",
+            crate::keys::key_label(crate::keys::Action::QuestLog),
             log.active.len(),
             shared::quests::MAX_ACTIVE
         ),

@@ -14,9 +14,10 @@ use shared::world::*;
 
 use crate::audio::{self, Sfx};
 use crate::hud::{self, Layout};
+use crate::keys::{self, Action};
 use crate::music::{Ambience, Track};
 use crate::render::{self, Batch, Look, Pose, Scene};
-use crate::settings::SettingsWindow;
+use crate::settings::{self, SettingsWindow};
 use macroquad::models::{Mesh, draw_mesh};
 use shared::emote::Emote;
 
@@ -255,7 +256,7 @@ impl Game {
             quest_flash: None,
             vfx: Default::default(),
             windows: Windows::default(),
-            show_help: true,
+            show_help: settings::with(|s| s.show_help),
             menu_open: false,
             settings: None,
             time: 0.0,
@@ -594,9 +595,30 @@ impl Game {
                 if snap.me.hotbar != self.me.hotbar {
                     self.hotbar = snap.me.hotbar;
                 }
-                if (snap.me.invite.is_some() && self.me.invite.is_none())
-                    || (snap.me.duel_invite.is_some() && self.me.duel_invite.is_none())
-                {
+                let (no_invites, no_duels) =
+                    settings::with(|s| (s.decline_invites, s.decline_duels));
+                let mut invited = false;
+                if let (Some(from), None) = (&snap.me.invite, &self.me.invite) {
+                    if no_invites {
+                        self.send(ClientMsg::PartyDecline);
+                        self.system(&format!(
+                            "You turned down {from}'s party invite (Settings > Gameplay)."
+                        ));
+                    } else {
+                        invited = true;
+                    }
+                }
+                if let (Some(from), None) = (&snap.me.duel_invite, &self.me.duel_invite) {
+                    if no_duels {
+                        self.send(ClientMsg::DuelDecline);
+                        self.system(&format!(
+                            "You turned down {from}'s duel challenge (Settings > Gameplay)."
+                        ));
+                    } else {
+                        invited = true;
+                    }
+                }
+                if invited {
                     audio::play(Sfx::Invite);
                 }
                 self.me = snap.me;
@@ -1204,8 +1226,14 @@ impl Game {
         // Holding the right button always locks the cursor, even before it moves.
         self.lock_cursor(dragging || self.rmb.is_some());
         if dragging {
-            self.cam_yaw -= delta.x * MOUSE_SENSITIVITY;
-            self.cam_pitch = (self.cam_pitch + delta.y * MOUSE_SENSITIVITY).clamp(-0.4, 1.35);
+            let (sens, invert) = settings::with(|s| {
+                (
+                    MOUSE_SENSITIVITY * s.mouse_sensitivity as f32 / 100.0,
+                    if s.invert_mouse { -1.0 } else { 1.0 },
+                )
+            });
+            self.cam_yaw -= delta.x * sens;
+            self.cam_pitch = (self.cam_pitch + delta.y * sens * invert).clamp(-0.4, 1.35);
         }
         if is_mouse_button_released(MouseButton::Left)
             && let Some(press) = self.lmb.take()
@@ -1222,7 +1250,8 @@ impl Game {
         }
         let wheel = mouse_wheel().1;
         if wheel != 0.0 && !over_ui {
-            self.cam_dist = (self.cam_dist - wheel.signum() * 1.2).clamp(2.5, 30.0);
+            let step = settings::with(|s| 1.2 * s.zoom_speed as f32 / 100.0);
+            self.cam_dist = (self.cam_dist - wheel.signum() * step).clamp(2.5, 30.0);
         }
 
         if typing {
@@ -1230,30 +1259,18 @@ impl Game {
         }
         // The bottom hotbar, or with Shift the top one.
         let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-        for (slot, key) in [
-            KeyCode::Key1,
-            KeyCode::Key2,
-            KeyCode::Key3,
-            KeyCode::Key4,
-            KeyCode::Key5,
-            KeyCode::Key6,
-            KeyCode::Q,
-            KeyCode::E,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if is_key_pressed(key) {
+        for slot in 0..BAR_SLOTS {
+            if keys::pressed(Action::Slot(slot as u8)) {
                 self.use_slot(if shift { slot + BAR_SLOTS } else { slot });
             }
         }
-        if is_key_pressed(KeyCode::Tab) {
+        if keys::pressed(Action::TargetNext) {
             self.tab_target(&cam);
         }
-        if is_key_pressed(KeyCode::F1) {
+        if keys::pressed(Action::TargetSelf) {
             self.set_target(self.my_id);
         }
-        if is_key_pressed(KeyCode::T) {
+        if keys::pressed(Action::AutoAttack) {
             if self.me.auto_attacking {
                 self.send(ClientMsg::StopAttack);
             } else {
@@ -1261,38 +1278,38 @@ impl Game {
                 self.send(ClientMsg::StartAttack);
             }
         }
-        if is_key_pressed(KeyCode::H) {
+        if keys::pressed(Action::Help) {
             self.show_help = !self.show_help;
         }
-        if is_key_pressed(KeyCode::B) {
+        if keys::pressed(Action::Bags) {
             self.windows.bags = !self.windows.bags;
         }
-        if is_key_pressed(KeyCode::C) {
+        if keys::pressed(Action::Character) {
             self.windows.character = !self.windows.character;
         }
-        if is_key_pressed(KeyCode::K) {
+        if keys::pressed(Action::Skills) {
             self.windows.skills = !self.windows.skills;
         }
-        if is_key_pressed(KeyCode::M) {
+        if keys::pressed(Action::Map) {
             self.windows.map = !self.windows.map;
         }
-        if is_key_pressed(KeyCode::F) {
+        if keys::pressed(Action::Travel) {
             if self.near_waystone() {
                 self.windows.travel = !self.windows.travel;
             } else {
                 self.error("There's no waystone nearby.");
             }
         }
-        if is_key_pressed(KeyCode::L) {
+        if keys::pressed(Action::QuestLog) {
             self.windows.quest_log = !self.windows.quest_log;
         }
-        if is_key_pressed(KeyCode::N) {
+        if keys::pressed(Action::Talents) {
             self.windows.talents = !self.windows.talents;
         }
-        if is_key_pressed(KeyCode::Y) {
+        if keys::pressed(Action::Spellbook) {
             self.windows.spellbook = !self.windows.spellbook;
         }
-        if is_key_pressed(KeyCode::P) {
+        if keys::pressed(Action::Sandbox) {
             if self.me.sandbox {
                 self.windows.sandbox = !self.windows.sandbox;
             } else {
@@ -1484,7 +1501,10 @@ impl Game {
                 } else if matches!(kind, ItemKind::Potion { .. } | ItemKind::Food { .. }) {
                     self.send(ClientMsg::UseItem(i));
                 } else if !left {
-                    self.error("You can't wear that. Use it in your skills (K).");
+                    let k = keys::key_label(Action::Skills);
+                    self.error(&format!(
+                        "You can't wear that. Use it in your skills ({k})."
+                    ));
                 }
             }
         } else if let Some(i) = layout
@@ -1628,7 +1648,8 @@ impl Game {
 
     fn simulate(&mut self, dt: f32) {
         let typing = self.chat_input.is_some() || self.menu_open;
-        let key = |k: KeyCode| !typing && is_key_down(k);
+        let key = |a: Action| !typing && keys::down(a);
+        let arrow = |k: KeyCode| !typing && is_key_down(k);
         let lmb = self.lmb.is_some();
         let rmb = self.rmb.is_some();
         let factor = self.movement_factor();
@@ -1636,32 +1657,32 @@ impl Game {
 
         // Arrow keys turn the camera (and with it, the character).
         if alive {
-            if key(KeyCode::Left) {
+            if key(Action::TurnLeft) {
                 self.cam_yaw += TURN_SPEED * dt;
             }
-            if key(KeyCode::Right) {
+            if key(Action::TurnRight) {
                 self.cam_yaw -= TURN_SPEED * dt;
             }
         }
         let mut fwd = 0.0;
-        if key(KeyCode::W) || key(KeyCode::Up) || (lmb && rmb) {
+        if key(Action::Forward) || arrow(KeyCode::Up) || (lmb && rmb) {
             fwd += 1.0;
         }
-        if key(KeyCode::S) || key(KeyCode::Down) {
+        if key(Action::Back) || arrow(KeyCode::Down) {
             fwd -= 1.0;
         }
         // A and D strafe.
         let mut strafe = 0.0;
-        if key(KeyCode::A) {
+        if key(Action::StrafeLeft) {
             strafe -= 1.0;
         }
-        if key(KeyCode::D) {
+        if key(Action::StrafeRight) {
             strafe += 1.0;
         }
         let wants_move = (fwd != 0.0 || strafe != 0.0) && alive;
         // Moving (or steering with the right button) turns you to face where
         // the camera looks.
-        if alive && (rmb || wants_move || key(KeyCode::Left) || key(KeyCode::Right)) {
+        if alive && (rmb || wants_move || key(Action::TurnLeft) || key(Action::TurnRight)) {
             self.yaw = self.cam_yaw;
         }
         let f = forward(self.yaw);
@@ -1683,7 +1704,7 @@ impl Game {
                 self.colliders.resolve(next, 0.45)
             };
         }
-        if key(KeyCode::Space) && self.grounded && factor > 0.0 {
+        if key(Action::Jump) && self.grounded && factor > 0.0 {
             self.vel_y = JUMP_SPEED;
             self.grounded = false;
         }

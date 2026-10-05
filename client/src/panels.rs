@@ -439,7 +439,11 @@ pub fn draw_talents(game: &Game, level: u8) {
         Color::new(0.25, 0.17, 0.08, 0.9),
     );
     text(
-        &format!("{} Talents (N)", game.class.name()),
+        &format!(
+            "{} Talents ({})",
+            game.class.name(),
+            crate::keys::key_label(crate::keys::Action::Talents)
+        ),
         l.window.x + 10.0,
         l.window.y + 21.0,
         20.0,
@@ -700,7 +704,16 @@ pub fn draw_sandbox(game: &Game, level: u8) {
         26.0,
         Color::new(0.1, 0.25, 0.3, 0.9),
     );
-    text("Sandbox (P)", r.x + 10.0, r.y + 21.0, 20.0, GOLD);
+    text(
+        &format!(
+            "Sandbox ({})",
+            crate::keys::key_label(crate::keys::Action::Sandbox)
+        ),
+        r.x + 10.0,
+        r.y + 21.0,
+        20.0,
+        GOLD,
+    );
     let x = r.x + 12.0;
     let label = |s: &str, y: f32| text(s, x, y, 16.0, Color::new(0.75, 0.85, 0.9, 1.0));
     label("Level", r.y + 52.0);
@@ -896,7 +909,16 @@ pub fn draw_travel(game: &Game) {
     let l = travel_layout(game.place, game.level());
     let r = l.window;
     panel(r);
-    text("Waystone (F)", r.x + 12.0, r.y + 26.0, 22.0, GOLD);
+    text(
+        &format!(
+            "Waystone ({})",
+            crate::keys::key_label(crate::keys::Action::Travel)
+        ),
+        r.x + 12.0,
+        r.y + 26.0,
+        22.0,
+        GOLD,
+    );
     button(l.close, "x");
     for (b, to, ok) in &l.buttons {
         let label = match to {

@@ -1498,7 +1498,13 @@ pub fn item_icon(r: Rect, id: ItemId, count: u16) {
 }
 
 fn bags(game: &Game, layout: &Layout, r: Rect) {
-    window(r, "Backpack (B)");
+    window(
+        r,
+        &format!(
+            "Backpack ({})",
+            crate::keys::key_label(crate::keys::Action::Bags)
+        ),
+    );
     for (i, slot) in layout.bag_slots.iter().enumerate() {
         draw_rectangle(
             slot.x,
@@ -1606,7 +1612,13 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
 const SKILL_LIST_TOP: f32 = 72.0;
 
 fn skills(game: &Game, layout: &Layout, r: Rect) {
-    window(r, "Skills (K)");
+    window(
+        r,
+        &format!(
+            "Skills ({})",
+            crate::keys::key_label(crate::keys::Action::Skills)
+        ),
+    );
     for (skill, tab) in Skill::ALL.iter().zip(&layout.skill_tabs) {
         button(*tab, skill.name());
         if *skill == game.windows.skill {
@@ -1734,9 +1746,20 @@ fn nameplates(game: &Game, cam: &Camera3D) {
     // Far ones first so near ones draw on top.
     plates.sort_by(|a, b| b.0.total_cmp(&a.0));
     let my_level = game.level();
+    let (players, mobs, npcs) =
+        crate::settings::with(|s| (s.names_players, s.names_mobs, s.names_npcs));
     for (dist, p, e) in plates {
         let v = &e.view;
         let targeted = game.target == Some(v.id);
+        // Settings > Interface can hide names; your target always shows.
+        let show_name = targeted
+            || if v.kind.is_player() {
+                players
+            } else if v.kind.is_npc() {
+                npcs
+            } else {
+                mobs
+            };
         let size = if targeted {
             19.0
         } else {
@@ -1757,8 +1780,10 @@ fn nameplates(game: &Game, cam: &Camera3D) {
             } else {
                 "<Merchant>"
             };
-            text_centered(&v.name, p.x, p.y - 8.0, size, color);
-            text_centered(title, p.x, p.y + 8.0, size * 0.85, color);
+            if show_name {
+                text_centered(&v.name, p.x, p.y - 8.0, size, color);
+                text_centered(title, p.x, p.y + 8.0, size * 0.85, color);
+            }
             if matches!(v.kind, EntityKind::QuestGiver(_))
                 && let Some(m) = crate::quests_ui::marker(
                     &game.me.quests,
@@ -1771,7 +1796,9 @@ fn nameplates(game: &Game, cam: &Camera3D) {
             }
             continue;
         }
-        text_centered(&label, p.x, p.y - 8.0, size, color);
+        if show_name {
+            text_centered(&label, p.x, p.y - 8.0, size, color);
+        }
         if !v.kind.is_player() && !v.dead && (targeted || v.hp < v.max_hp || v.in_combat) {
             let w = 70.0;
             let frac = v.hp / v.max_hp.max(1.0);
@@ -1853,6 +1880,9 @@ fn emote_labels(game: &Game, cam: &Camera3D) {
 }
 
 fn floating_text(game: &Game, cam: &Camera3D) {
+    if !crate::settings::with(|s| s.damage_numbers) {
+        return;
+    }
     for f in &game.floats {
         let height = game.entities.get(&f.entity).map_or(2.0, |e| {
             render::model_height(e.view.kind, e.view.appearance)
@@ -1990,7 +2020,8 @@ fn minimap(game: &Game, layout: &Layout) {
 
 fn chat(game: &Game) {
     let x = 16.0;
-    let line_h = 19.0;
+    let size = crate::settings::with(|s| s.chat_size as f32);
+    let line_h = size + 2.0;
     let bottom = screen_height() - 40.0;
     let shown = 9;
     let typing = game.chat_input.is_some();
@@ -2014,7 +2045,7 @@ fn chat(game: &Game) {
             } else {
                 format!("{current} {word}")
             };
-            if text_width(&candidate, 17.0) > w - 10.0 && !current.is_empty() {
+            if text_width(&candidate, size) > w - 10.0 && !current.is_empty() {
                 lines.push((std::mem::take(&mut current), line.color));
                 current = format!("  {word}");
             } else {
@@ -2026,7 +2057,7 @@ fn chat(game: &Game) {
     let start = lines.len().saturating_sub(shown);
     let mut y = bottom - line_h * (lines.len() - start) as f32;
     for (s, color) in &lines[start..] {
-        text(s, x, y, 17.0, *color);
+        text(s, x, y, size, *color);
         y += line_h;
     }
     if let Some(input) = &game.chat_input {
@@ -2046,34 +2077,67 @@ fn chat(game: &Game) {
 }
 
 fn help() {
-    let lines = [
-        ("W S / arrows", "Run forward and back"),
-        ("A D", "Strafe left and right"),
-        ("Left / Right", "Turn"),
-        ("Space", "Jump"),
-        ("Left drag", "Look around"),
-        ("Right drag", "Steer (cursor locks)"),
-        ("Both buttons", "Run forward"),
-        ("Mouse wheel", "Zoom"),
-        ("Tab", "Target the next enemy"),
-        ("Left click", "Target"),
-        ("Right click", "Attack, loot, trade, pick up"),
-        ("Shift + right click", "Drop an item from your bags"),
-        ("1 - 6, Q, E", "Use abilities"),
-        ("Shift + 1 - 6, Q, E", "Use the top hotbar"),
-        ("Y", "Spell book (drag spells to bars)"),
-        ("T  /  F1", "Toggle attack / target self"),
-        ("B  C  K", "Bags, character, skills"),
-        ("N  M", "Talents, world map"),
-        ("F", "Use a waystone (travel)"),
-        ("P", "Sandbox panel (sandbox mode)"),
-        ("Esc", "Close / clear target / menu"),
-        ("Enter", "Chat (/help lists commands)"),
-        ("/invite NAME", "Party up (or target, Invite)"),
-        ("/p MESSAGE", "Talk to your party"),
-        ("/wave /sit /kiss ...", "Emotes (/help lists them)"),
-        ("/duel NAME", "Duel (or target, Duel)"),
-        ("H", "Hide this help"),
+    use crate::keys::{Action, key_label as k};
+    let slots = |top: bool| {
+        let keys: Vec<String> = (0..BAR_SLOTS as u8).map(|i| k(Action::Slot(i))).collect();
+        format!("{}{}", if top { "Shift + " } else { "" }, keys.join(" "))
+    };
+    let lines: Vec<(String, &str)> = vec![
+        (
+            format!("{} {} / arrows", k(Action::Forward), k(Action::Back)),
+            "Run forward and back",
+        ),
+        (
+            format!("{} {}", k(Action::StrafeLeft), k(Action::StrafeRight)),
+            "Strafe left and right",
+        ),
+        (
+            format!("{} / {}", k(Action::TurnLeft), k(Action::TurnRight)),
+            "Turn",
+        ),
+        (k(Action::Jump), "Jump"),
+        ("Left drag".into(), "Look around"),
+        ("Right drag".into(), "Steer (cursor locks)"),
+        ("Both buttons".into(), "Run forward"),
+        ("Mouse wheel".into(), "Zoom"),
+        (k(Action::TargetNext), "Target the next enemy"),
+        ("Left click".into(), "Target"),
+        ("Right click".into(), "Attack, loot, trade, pick up"),
+        ("Shift + right click".into(), "Drop an item from your bags"),
+        (slots(false), "Use abilities"),
+        (slots(true), "Use the top hotbar"),
+        (k(Action::Spellbook), "Spell book (drag spells to bars)"),
+        (
+            format!("{}  /  {}", k(Action::AutoAttack), k(Action::TargetSelf)),
+            "Toggle attack / target self",
+        ),
+        (
+            format!(
+                "{}  {}  {}",
+                k(Action::Bags),
+                k(Action::Character),
+                k(Action::Skills)
+            ),
+            "Bags, character, skills",
+        ),
+        (
+            format!(
+                "{}  {}  {}",
+                k(Action::Talents),
+                k(Action::Map),
+                k(Action::QuestLog)
+            ),
+            "Talents, world map, quests",
+        ),
+        (k(Action::Travel), "Use a waystone (travel)"),
+        (k(Action::Sandbox), "Sandbox panel (sandbox mode)"),
+        ("Esc".into(), "Close / clear target / menu"),
+        ("Enter".into(), "Chat (/help lists commands)"),
+        ("/invite NAME".into(), "Party up (or target, Invite)"),
+        ("/p MESSAGE".into(), "Talk to your party"),
+        ("/wave /sit /kiss ...".into(), "Emotes (/help lists them)"),
+        ("/duel NAME".into(), "Duel (or target, Duel)"),
+        (k(Action::Help), "Hide this help"),
     ];
     let w = 410.0;
     let h = 40.0 + lines.len() as f32 * 20.0;
