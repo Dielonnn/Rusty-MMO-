@@ -275,12 +275,14 @@ impl Game {
             return Outcome::Disconnected(reason);
         }
         let mut layout = Layout::new(&self.windows);
+        let mut draggable = layout.draggable();
         if self.windows.quest_giver.is_some() {
             let level = self.level();
-            layout.quest_window = Some(
+            let giver =
                 crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags)
-                    .window,
-            );
+                    .window;
+            layout.quest_window = Some(giver);
+            draggable.push((crate::drag::Win::QuestGiver, giver));
         }
         if self.windows.quest_log {
             let l = crate::quests_ui::log_layout(&self.me.quests);
@@ -288,9 +290,10 @@ impl Game {
                 Some(r) => r.combine_with(l.window),
                 None => l.window,
             });
+            draggable.push((crate::drag::Win::QuestLog, l.window));
         }
         layout.party = hud::PartyLayout::new(self, layout.target_frame);
-        if let Some(outcome) = self.input(&layout) {
+        if let Some(outcome) = self.input(&layout, &draggable) {
             self.lock_cursor(false);
             return outcome;
         }
@@ -858,7 +861,11 @@ impl Game {
             .map(|(_, id)| id)
     }
 
-    fn input(&mut self, layout: &Layout) -> Option<Outcome> {
+    fn input(
+        &mut self,
+        layout: &Layout,
+        draggable: &[(crate::drag::Win, Rect)],
+    ) -> Option<Outcome> {
         let (mx, my) = mouse_position();
         let mouse = vec2(mx, my);
         let delta = mouse - self.last_mouse;
@@ -923,9 +930,24 @@ impl Game {
             return None;
         }
 
-        // Clicks on the interface.
+        // Clicks on the interface. Grabbing a window's title bar drags it
+        // instead.
         let over_ui = !self.cursor_locked && layout.blocks(mouse, self.target.is_some(), dead);
-        if (left_pressed || right_pressed) && over_ui {
+        let grabbed = left_pressed
+            && over_ui
+            && draggable
+                .iter()
+                .rev()
+                .find(|(_, r)| r.contains(mouse))
+                .is_some_and(|(win, r)| {
+                    let on_bar = crate::drag::title_bar(*r).contains(mouse);
+                    if on_bar {
+                        crate::drag::grab(*win, mouse);
+                    }
+                    on_bar
+                });
+        crate::drag::update(mouse, is_mouse_button_down(MouseButton::Left));
+        if (left_pressed || right_pressed) && over_ui && !grabbed {
             self.click_ui(layout, mouse, left_pressed);
         }
 

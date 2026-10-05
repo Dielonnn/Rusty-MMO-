@@ -8,6 +8,7 @@ use shared::dungeon;
 use shared::protocol::*;
 use shared::world::Zone;
 
+use crate::drag::{self, Win};
 use crate::game::{Game, Windows, wrap_angle};
 use crate::render;
 
@@ -148,11 +149,14 @@ impl Layout {
         let menu_w = 240.0;
         let menu_x = (w - menu_w) / 2.0;
 
-        let bags_rect = Rect::new(
-            w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
-            h - 330.0,
-            5.0 * (SLOT + 4.0) + 20.0,
-            4.0 * (SLOT + 4.0) + 76.0,
+        let bags_rect = drag::place(
+            Win::Bags,
+            Rect::new(
+                w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
+                h - 330.0,
+                5.0 * (SLOT + 4.0) + 20.0,
+                4.0 * (SLOT + 4.0) + 76.0,
+            ),
         );
         let bag_slots = if windows.bags {
             (0..BAG_SLOTS)
@@ -169,7 +173,7 @@ impl Layout {
         } else {
             Vec::new()
         };
-        let char_rect = Rect::new(16.0, 150.0, 280.0, 380.0);
+        let char_rect = drag::place(Win::Character, Rect::new(16.0, 150.0, 280.0, 380.0));
         let gear_slots = if windows.character {
             (0..GEAR_ROWS)
                 .map(|i| {
@@ -186,11 +190,14 @@ impl Layout {
         };
         let craft_x = if windows.character { 312.0 } else { 16.0 };
         let recipes = windows.skill.recipes().count();
-        let craft_rect = Rect::new(
-            craft_x,
-            150.0,
-            400.0,
-            SKILL_LIST_TOP + 8.0 + recipes as f32 * 34.0,
+        let craft_rect = drag::place(
+            Win::Skills,
+            Rect::new(
+                craft_x,
+                150.0,
+                400.0,
+                SKILL_LIST_TOP + 8.0 + recipes as f32 * 34.0,
+            ),
         );
         let tab_w =
             (craft_rect.w - 24.0 - 8.0 * (Skill::ALL.len() - 1) as f32) / Skill::ALL.len() as f32;
@@ -229,11 +236,14 @@ impl Layout {
             } else {
                 0.0
             };
-        let vendor_rect = Rect::new(
-            vendor_x,
-            150.0,
-            340.0,
-            70.0 + MERCHANT_GOODS.len() as f32 * 40.0,
+        let vendor_rect = drag::place(
+            Win::Vendor,
+            Rect::new(
+                vendor_x,
+                150.0,
+                340.0,
+                70.0 + MERCHANT_GOODS.len() as f32 * 40.0,
+            ),
         );
         let vendor_buttons = if windows.vendor.is_some() {
             (0..MERCHANT_GOODS.len())
@@ -281,6 +291,22 @@ impl Layout {
             quest_window: None,
             party: PartyLayout::default(),
         }
+    }
+
+    /// The open windows you can drag (quest windows aside), topmost last.
+    pub fn draggable(&self) -> Vec<(Win, Rect)> {
+        [
+            (Win::Bags, self.bags),
+            (Win::Character, self.character),
+            (Win::Skills, self.skills),
+            (Win::Vendor, self.vendor),
+            (Win::Talents, self.talents),
+            (Win::Sandbox, self.sandbox),
+            (Win::Travel, self.travel),
+        ]
+        .into_iter()
+        .filter_map(|(win, r)| r.map(|r| (win, r)))
+        .collect()
     }
 
     /// Whether the mouse is over an open window.

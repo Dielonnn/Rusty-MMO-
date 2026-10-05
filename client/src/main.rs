@@ -1,6 +1,7 @@
 // Release builds on Windows shouldn't open a console window next to the game.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod drag;
 mod game;
 mod gfx;
 mod hud;
