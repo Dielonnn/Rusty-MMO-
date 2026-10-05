@@ -12,7 +12,7 @@ use shared::net::Connection;
 use shared::protocol::*;
 use shared::world::*;
 
-use crate::audio::{self, Sfx};
+use crate::audio::{self, Cry, Sfx, Surface};
 use crate::hud::{self, Layout};
 use crate::keys::{self, Action};
 use crate::music::{Ambience, Track};
@@ -29,6 +29,8 @@ const JUMP_SPEED: f32 = 8.0;
 const MOUSE_SENSITIVITY: f32 = 0.006;
 /// A dungeon boss fighting within this many yards brings on the boss music.
 const BOSS_MUSIC_RANGE: f32 = 60.0;
+/// Seconds between footsteps at a run.
+const STEP_TIME: f32 = 0.33;
 
 /// Another entity as the client knows it.
 pub struct Ent {
@@ -158,6 +160,9 @@ pub struct Game {
     pub yaw: f32,
     vel_y: f32,
     grounded: bool,
+    /// Time towards the next footstep, and which foot is next.
+    step_timer: f32,
+    left_foot: bool,
     moving: bool,
     send_timer: f32,
     last_sent: (Vec3, f32, bool),
@@ -233,6 +238,8 @@ impl Game {
             yaw: 0.0,
             vel_y: 0.0,
             grounded: true,
+            step_timer: 0.0,
+            left_foot: false,
             moving: false,
             send_timer: 0.0,
             last_sent: (Vec3::ZERO, 0.0, false),
@@ -423,6 +430,23 @@ impl Game {
         Outcome::Continue
     }
 
+    /// What you're walking on, for footsteps.
+    fn surface(&self) -> Surface {
+        if let Place::Dungeon(_) = self.place {
+            return Surface::Stone;
+        }
+        if self.pos.y < WATER_LEVEL {
+            return Surface::Water;
+        }
+        match self.place {
+            Place::Dungeon(_) => Surface::Stone,
+            Place::Zone(Zone::Scorchsand) => Surface::Sand,
+            Place::Zone(Zone::Frostcog) => Surface::Snow,
+            Place::Zone(Zone::Grubdeep) => Surface::Stone,
+            Place::Zone(_) => Surface::Grass,
+        }
+    }
+
     /// The music and ambience for where you are: the area's or dungeon's,
     /// or the boss tune while a dungeon boss nearby is fighting.
     fn soundtrack(&self) -> (Option<Track>, Option<Ambience>) {
@@ -511,6 +535,7 @@ impl Game {
 
     /// Asks to go somewhere from the waystone you're at.
     pub fn travel(&mut self, to: Destination) {
+        audio::play(Sfx::Teleport);
         self.windows.travel = false;
         self.send(ClientMsg::Travel(to));
     }
@@ -549,10 +574,27 @@ impl Game {
                     .my_id
                     .is_some_and(|id| !self.entities.contains_key(&id));
                 let mut seen = std::collections::HashSet::new();
+                // Sounds to play once the snapshot is in: (sound, where).
+                let mut sounds: Vec<(Sfx, Vec3)> = Vec::new();
                 for view in snap.entities {
                     seen.insert(view.id);
                     match self.entities.get_mut(&view.id) {
                         Some(e) => {
+                            if let EntityKind::Mob { kind, .. } = view.kind
+                                && !view.dead
+                            {
+                                // A monster joining a fight cries out; a
+                                // boss starting a spell sounds its horn.
+                                if view.in_combat && !e.view.in_combat {
+                                    sounds.push((Sfx::Mob(audio::voice(kind), Cry::Aggro), e.pos));
+                                }
+                                if kind.template().boss
+                                    && view.cast.is_some()
+                                    && e.view.cast.is_none()
+                                {
+                                    sounds.push((Sfx::BossCast, e.pos));
+                                }
+                            }
                             // Follow the server's emote, but keep our own
                             // smoother clock while they agree.
                             e.emote = view.emote.map(|v| match e.emote {
@@ -584,6 +626,25 @@ impl Game {
                     }
                 }
                 self.entities.retain(|id, _| seen.contains(id));
+                // Marked ground: a warning when it appears, a crash when it
+                // lands.
+                let same = |a: &HazardView, b: &HazardView| a.pos.distance(b.pos) < 0.1;
+                for h in &snap.hazards {
+                    if !self.hazards.iter().any(|o| same(o, h)) {
+                        sounds.push((Sfx::Warning, h.pos));
+                    }
+                }
+                for h in &self.hazards {
+                    if h.remaining < 0.5 && !snap.hazards.iter().any(|n| same(n, h)) {
+                        sounds.push((Sfx::Crash, h.pos));
+                    }
+                }
+                if let (Some(at), None) = (snap.portal, self.portal) {
+                    sounds.push((Sfx::Portal, at));
+                }
+                for (sfx, at) in sounds {
+                    audio::play_at(sfx, at, self.pos);
+                }
                 self.hazards = std::mem::take(&mut snap.hazards);
                 self.portal = snap.portal;
                 self.ground = std::mem::take(&mut snap.ground);
@@ -707,6 +768,13 @@ impl Game {
                     Some(id) => Sfx::Impact(shared::data::ability(id).school),
                 };
                 self.sound_at(sfx, target);
+                if crit
+                    && amount > 0
+                    && let Some(EntityKind::Mob { kind, .. }) =
+                        self.entities.get(&target).map(|e| e.view.kind)
+                {
+                    self.sound_at(Sfx::Mob(audio::voice(kind), Cry::Hurt), target);
+                }
                 if Some(source) == me || Some(target) == me {
                     let color = if Some(target) == me {
                         Color::new(1.0, 0.3, 0.25, 1.0)
@@ -801,6 +869,14 @@ impl Game {
                 );
             }
             GameEvent::Died { id, killer } => {
+                if let Some(EntityKind::Mob { kind, .. }) =
+                    self.entities.get(&id).map(|e| e.view.kind)
+                {
+                    self.sound_at(Sfx::Mob(audio::voice(kind), Cry::Death), id);
+                    if kind.template().boss {
+                        audio::play(Sfx::BossDown);
+                    }
+                }
                 if Some(id) == me {
                     audio::play(Sfx::Death);
                     self.chat.push(ChatLine {
@@ -1703,6 +1779,17 @@ impl Game {
             } else {
                 self.colliders.resolve(next, 0.45)
             };
+        }
+        // Footsteps, about three a second at a run.
+        if self.moving && self.grounded {
+            self.step_timer += dt * speed / RUN_SPEED;
+            if self.step_timer >= STEP_TIME {
+                self.step_timer -= STEP_TIME;
+                self.left_foot = !self.left_foot;
+                audio::play(Sfx::Step(self.surface(), self.left_foot));
+            }
+        } else {
+            self.step_timer = STEP_TIME * 0.8;
         }
         if key(Action::Jump) && self.grounded && factor > 0.0 {
             self.vel_y = JUMP_SPEED;
