@@ -40,7 +40,7 @@ pub struct Layout {
     pub xpbar: Rect,
     pub minimap: (Vec2, f32),
     pub release_button: Rect,
-    pub menu_buttons: [Rect; 3],
+    pub menu_buttons: [Rect; 4],
     pub bags: Option<Rect>,
     pub bag_slots: Vec<Rect>,
     pub character: Option<Rect>,
@@ -1117,9 +1117,9 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         button(decline, "Decline");
     }
     duel_banner(game);
-    if game.menu_open {
+    if game.menu_open && game.settings.is_none() {
         let w = 280.0;
-        let r = Rect::new((screen_width() - w) / 2.0, screen_height() * 0.35, w, 220.0);
+        let r = Rect::new((screen_width() - w) / 2.0, screen_height() * 0.35, w, 272.0);
         draw_rectangle(
             0.0,
             0.0,
@@ -1129,10 +1129,11 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         );
         panel(r);
         text_centered("Game Menu", r.x + r.w / 2.0, r.y + 32.0, 26.0, GOLD);
-        for (b, label) in layout
-            .menu_buttons
-            .iter()
-            .zip(["Return to Game", "Log Out", "Quit Game"])
+        for (b, label) in
+            layout
+                .menu_buttons
+                .iter()
+                .zip(["Return to Game", "Settings", "Log Out", "Quit Game"])
         {
             button(*b, label);
         }
