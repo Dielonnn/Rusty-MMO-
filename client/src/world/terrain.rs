@@ -96,6 +96,30 @@ pub(super) fn ground_colors(zone: Zone) -> Ground {
             road: c(0.3, 0.27, 0.24),
             field: c(0.28, 0.22, 0.18),
         },
+        // Green-gold moorland with purple heather.
+        Zone::Sunfold => Ground {
+            main: c(0.48, 0.55, 0.26),
+            var_a: c(0.62, 0.58, 0.3),
+            var_b: c(0.45, 0.36, 0.42),
+            shore: c(0.62, 0.6, 0.46),
+            rock: c(0.5, 0.5, 0.48),
+            peak: c(0.9, 0.92, 0.95),
+            town: c(0.6, 0.56, 0.5),
+            road: c(0.56, 0.46, 0.32),
+            field: c(0.46, 0.34, 0.2),
+        },
+        // Rust-red cracked earth, sick green growth in the hollows.
+        Zone::Blightscar => Ground {
+            main: c(0.56, 0.32, 0.22),
+            var_a: c(0.46, 0.24, 0.18),
+            var_b: c(0.42, 0.44, 0.22),
+            shore: c(0.4, 0.42, 0.2),
+            rock: c(0.38, 0.26, 0.22),
+            peak: c(0.3, 0.2, 0.18),
+            town: c(0.42, 0.32, 0.28),
+            road: c(0.36, 0.26, 0.2),
+            field: c(0.36, 0.26, 0.18),
+        },
     }
 }
 
@@ -136,6 +160,8 @@ pub fn foliage(zone: Zone) -> Color {
         Zone::Grubdeep => c(0.4, 0.38, 0.45),
         Zone::Frostcog => c(0.16, 0.3, 0.24),
         Zone::Witherwood => c(0.2, 0.17, 0.16),
+        Zone::Sunfold => c(0.3, 0.5, 0.22),
+        Zone::Blightscar => c(0.35, 0.4, 0.16),
     }
 }
 
@@ -166,8 +192,15 @@ pub(super) fn terrain_paint(
     let peak = ((h - 18.0) / 2.0).clamp(0.0, 1.0);
     col = mix(col, g.peak, peak);
     let d = local.length();
-    let road = (1.0 - x.abs().min(z.abs()) / 3.0).clamp(0.0, 1.0)
+    let mut road = (1.0 - x.abs().min(z.abs()) / 3.0).clamp(0.0, 1.0)
         * (1.0 - (d - 70.0) / 20.0).clamp(0.0, 1.0);
+    // The roads through the passes run on to the edge.
+    for pass in zone.passes() {
+        let (along, across) = pass.along_across(local);
+        if along > 0.0 {
+            road = road.max((1.0 - (across - 1.0) / 2.5).clamp(0.0, 1.0));
+        }
+    }
     col = mix(col, g.road, road * 0.85);
     let mut field = 0.0f32;
     for &f in &zone.layout().fields {
@@ -297,7 +330,7 @@ pub(super) fn ground_cover(b: &mut Batch, cards: &mut Batch, zone: Zone) {
                     tuft(cards, &mut rng, base, 0.6, Card::Grass, c(0.7, 0.74, 0.62));
                 }
             }
-            Zone::Scorchsand => {
+            Zone::Scorchsand | Zone::Blightscar => {
                 if kind < 0.3 {
                     let col = mix(c(0.72 + shade_n, 0.64 + shade_n, 0.36), soil, 0.3);
                     tuft(cards, &mut rng, base, 0.75, Card::Grass, col);
@@ -319,6 +352,10 @@ pub(super) fn ground_cover(b: &mut Batch, cards: &mut Batch, zone: Zone) {
                     Zone::Silverbough => (
                         c(0.32 + shade_n, 0.62 + shade_n, 0.34),
                         &[c(0.95, 0.95, 1.0), c(0.7, 0.75, 1.0), c(0.95, 0.85, 0.45)],
+                    ),
+                    Zone::Sunfold => (
+                        c(0.5 + shade_n, 0.6 + shade_n, 0.28),
+                        &[c(0.62, 0.36, 0.62), c(0.75, 0.5, 0.75), c(0.95, 0.85, 0.35)],
                     ),
                     Zone::Witherwood => (
                         c(0.4 + shade_n, 0.38 + shade_n, 0.3),
@@ -378,6 +415,7 @@ pub(super) fn meadows(cards: &mut Batch, zone: Zone) {
         Zone::Amberfall => (c(0.66, 0.56, 0.28), 30_000),
         Zone::Silverbough => (c(0.32, 0.62, 0.34), 30_000),
         Zone::Witherwood => (c(0.4, 0.38, 0.3), 18_000),
+        Zone::Sunfold => (c(0.52, 0.6, 0.28), 30_000),
         _ => return,
     };
     let mut rng = Scatter(0x6A55 + zone.index() as u32);

@@ -1,4 +1,4 @@
-//! The scenery of all six starting areas: terrain, sky, weather, water,
+//! The scenery of every zone: terrain, sky, weather, water,
 //! trees, buildings and props, and each zone's colors and light.
 
 mod buildings;
@@ -59,7 +59,7 @@ struct Flag {
 /// Static scenery for every zone (built the first time it's seen), the copy
 /// of the Sunken Vault you're in, and the shader that lights and fogs it.
 pub struct Scene {
-    zones: [OnceCell<ZoneScene>; 6],
+    zones: [OnceCell<ZoneScene>; Zone::ALL.len()],
     dungeon: RefCell<Option<dungeon::DungeonScene>>,
     shading: Shading,
     /// The cut-out cards trees, bushes and grass are made of.

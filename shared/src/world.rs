@@ -1,9 +1,12 @@
-//! The shape of the world: six zones (one starting area per race), their
-//! terrain, bounds and a few geometry helpers.
+//! The shape of the world: six starting areas (one per race), two
+//! connecting zones between them, their terrain, bounds and a few geometry
+//! helpers.
 //!
-//! The zones sit side by side along X, `ZONE_SPACING` apart, and nobody can
-//! walk between them: the waystones in each town carry players across (see
-//! `dungeon`, which also places the Sunken Vault's copies far from them all). Each zone has its own layout (see `layout`), and is
+//! The zones sit side by side along X, `ZONE_SPACING` apart. The waystones in
+//! each town carry players between towns (see `dungeon`, which also places
+//! the dungeons' copies far from them all), and mountain passes at the edges
+//! of the map lead from three starting areas into the connecting zone
+//! between them (see `Pass`). Each zone has its own layout (see `layout`), and is
 //! also turned and mirrored differently. "Local" coordinates are in that shared layout, with the town at the
 //! origin; "world" coordinates are where things really are.
 //!
@@ -47,17 +50,46 @@ pub enum Zone {
     Frostcog,
     /// Undead: a dying forest.
     Witherwood,
+    /// Level 13-20 highlands joining Amberfall, Silverbough and Frostcog.
+    Sunfold,
+    /// Level 13-20 badlands joining Witherwood, Scorchsand and Grubdeep.
+    Blightscar,
 }
 
 impl Zone {
-    pub const ALL: [Zone; 6] = [
+    pub const ALL: [Zone; 8] = [
         Zone::Amberfall,
         Zone::Scorchsand,
         Zone::Silverbough,
         Zone::Grubdeep,
         Zone::Frostcog,
         Zone::Witherwood,
+        Zone::Sunfold,
+        Zone::Blightscar,
     ];
+
+    /// The zones between starting areas.
+    pub const CONNECTING: [Zone; 2] = [Zone::Sunfold, Zone::Blightscar];
+
+    /// Whether this is a zone between starting areas, not a race's own.
+    pub fn connecting(self) -> bool {
+        Self::CONNECTING.contains(&self)
+    }
+
+    /// The starting area whose scenery (trees, houses, rocks) this zone
+    /// borrows. Starting areas are their own.
+    pub fn style(self) -> Zone {
+        match self {
+            Zone::Sunfold => Zone::Amberfall,
+            Zone::Blightscar => Zone::Scorchsand,
+            z => z,
+        }
+    }
+
+    /// The levels of the zone's mobs.
+    pub fn levels(self) -> (u8, u8) {
+        if self.connecting() { (13, 20) } else { (1, 10) }
+    }
 
     pub fn index(self) -> usize {
         self as usize
@@ -71,6 +103,8 @@ impl Zone {
             Zone::Grubdeep => "Grubdeep Caverns",
             Zone::Frostcog => "Frostcog Peaks",
             Zone::Witherwood => "Witherwood",
+            Zone::Sunfold => "Sunfold Highlands",
+            Zone::Blightscar => "Blightscar Badlands",
         }
     }
 
@@ -82,12 +116,17 @@ impl Zone {
             Zone::Grubdeep => "Rustpocket",
             Zone::Frostcog => "Gearhaven",
             Zone::Witherwood => "Gravenhold",
+            Zone::Sunfold => "Three Banners",
+            Zone::Blightscar => "Bonecross",
         }
     }
 
-    /// Whose starting area this is.
+    /// Whose starting area this is. A connecting zone counts as its
+    /// first neighbour's.
     pub fn race(self) -> Race {
         match self {
+            Zone::Sunfold => Race::Human,
+            Zone::Blightscar => Race::Undead,
             Zone::Amberfall => Race::Human,
             Zone::Scorchsand => Race::Orc,
             Zone::Silverbough => Race::Elf,
@@ -106,11 +145,17 @@ impl Zone {
             Zone::Grubdeep => "Migwick",
             Zone::Frostcog => "Nimble Cogsworth",
             Zone::Witherwood => "Mortimer Graves",
+            Zone::Sunfold => "Quartermaster Hollis",
+            Zone::Blightscar => "Grizzle Rotfang",
         }
     }
 
     pub fn subtitle(self) -> String {
-        format!("{} starting area", self.race().name())
+        match self {
+            Zone::Sunfold => "Human, Elf and Gnome lands, level 13-20".into(),
+            Zone::Blightscar => "Undead, Orc and Goblin lands, level 13-20".into(),
+            _ => format!("{} starting area", self.race().name()),
+        }
     }
 
     pub fn center(self) -> Vec2 {
@@ -119,7 +164,9 @@ impl Zone {
 
     /// The zone a world position is in (or nearest to).
     pub fn at(p: Vec3) -> Zone {
-        let i = (p.x / ZONE_SPACING).round().clamp(0.0, 5.0) as usize;
+        let i = (p.x / ZONE_SPACING)
+            .round()
+            .clamp(0.0, (Zone::ALL.len() - 1) as f32) as usize;
         Zone::ALL[i]
     }
 
@@ -133,6 +180,8 @@ impl Zone {
             Zone::Grubdeep => (3, false),
             Zone::Frostcog => (0, true),
             Zone::Witherwood => (2, true),
+            Zone::Sunfold => (1, true),
+            Zone::Blightscar => (3, true),
         }
     }
 
@@ -180,7 +229,7 @@ impl Zone {
     pub fn water_level(self) -> f32 {
         match self {
             // Only a few oases in the desert.
-            Zone::Scorchsand => -5.8,
+            Zone::Scorchsand | Zone::Blightscar => -5.8,
             _ => WATER_LEVEL,
         }
     }
@@ -203,6 +252,108 @@ impl Race {
             Race::Undead => Zone::Witherwood,
         }
     }
+}
+
+/// A mountain pass at the edge of a zone, at the end of one of the roads
+/// out of town: walk to its far end and you come out of the matching pass
+/// in the zone it leads to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pass {
+    pub zone: Zone,
+    /// Which way the road runs from town, in local coordinates.
+    pub dir: Vec2,
+    pub to: Zone,
+}
+
+/// Half the width of a pass's road. The valley around it is wider.
+pub const PASS_HALF_WIDTH: f32 = 6.0;
+/// How far from town (along the road) the pass's gate stands.
+pub const PASS_GATE: f32 = 192.0;
+/// Walk this far down the pass and you cross into the next zone.
+pub const PASS_END: f32 = 204.0;
+/// Where travelers coming the other way arrive, facing into the zone.
+pub const PASS_ARRIVAL: f32 = 182.0;
+
+const fn pass(zone: Zone, x: f32, z: f32, to: Zone) -> Pass {
+    Pass {
+        zone,
+        dir: Vec2::new(x, z),
+        to,
+    }
+}
+
+/// Every pass: one in each starting area it joins, three in each
+/// connecting zone (one per neighbour).
+pub const PASSES: [Pass; 12] = [
+    pass(Zone::Amberfall, 0.0, 1.0, Zone::Sunfold),
+    pass(Zone::Silverbough, 0.0, -1.0, Zone::Sunfold),
+    pass(Zone::Frostcog, -1.0, 0.0, Zone::Sunfold),
+    pass(Zone::Sunfold, 0.0, -1.0, Zone::Amberfall),
+    pass(Zone::Sunfold, 1.0, 0.0, Zone::Silverbough),
+    pass(Zone::Sunfold, -1.0, 0.0, Zone::Frostcog),
+    pass(Zone::Witherwood, 1.0, 0.0, Zone::Blightscar),
+    pass(Zone::Scorchsand, 0.0, 1.0, Zone::Blightscar),
+    pass(Zone::Grubdeep, -1.0, 0.0, Zone::Blightscar),
+    pass(Zone::Blightscar, 0.0, 1.0, Zone::Witherwood),
+    pass(Zone::Blightscar, 1.0, 0.0, Zone::Scorchsand),
+    pass(Zone::Blightscar, -1.0, 0.0, Zone::Grubdeep),
+];
+
+impl Zone {
+    /// The passes out of this zone.
+    pub fn passes(self) -> impl Iterator<Item = &'static Pass> {
+        PASSES.iter().filter(move |p| p.zone == self)
+    }
+}
+
+impl Pass {
+    /// How far along the road out of town, and how far to the side of it,
+    /// a local position is.
+    pub fn along_across(&self, local: Vec2) -> (f32, f32) {
+        (local.dot(self.dir), local.perp_dot(self.dir).abs())
+    }
+
+    /// How much of the pass's valley a local position is in: 1 on its
+    /// road, 0 away from it.
+    pub fn valley(&self, local: Vec2) -> f32 {
+        let (along, across) = self.along_across(local);
+        smoothstep(PASS_HALF_WIDTH + 12.0, PASS_HALF_WIDTH + 2.0, across)
+            * smoothstep(60.0, 140.0, along)
+    }
+
+    /// A local position on the pass's road, `along` from town.
+    pub fn spot(&self, along: f32) -> Vec2 {
+        self.dir * along
+    }
+
+    /// The pass on the other side, that leads back here.
+    pub fn other_end(&self) -> &'static Pass {
+        self.to
+            .passes()
+            .find(|p| p.to == self.zone)
+            .expect("every pass has a way back")
+    }
+
+    /// Where someone crossing this pass comes out, and which way they face.
+    pub fn exit(&self) -> (Vec3, f32) {
+        let other = self.other_end();
+        let pos = other.zone.ground_local(other.spot(PASS_ARRIVAL));
+        let toward = other.zone.ground_local(other.spot(PASS_ARRIVAL - 10.0));
+        (pos, yaw_towards(pos, toward))
+    }
+}
+
+/// The pass whose far end a world position has walked into, if any.
+pub fn pass_at(p: Vec3) -> Option<&'static Pass> {
+    if dungeon::instance_at(p).is_some() {
+        return None;
+    }
+    let zone = Zone::at(p);
+    let local = zone.to_local(vec2(p.x, p.z));
+    zone.passes().find(|pass| {
+        let (along, across) = pass.along_across(local);
+        along >= PASS_END && across < PASS_HALF_WIDTH + 4.0
+    })
 }
 
 /// Whether a position is in any town.
@@ -439,5 +590,63 @@ mod tests {
             Place::at(Zone::Frostcog.graveyard()),
             Place::Zone(Zone::Frostcog)
         );
+    }
+
+    #[test]
+    fn passes_are_open_roads_both_ways() {
+        for zone in Zone::ALL {
+            let n = zone.passes().count();
+            assert_eq!(n, if zone.connecting() { 3 } else { 1 }, "{zone:?}");
+            // `layout` hands each zone a slice of its own passes.
+            assert_eq!(crate::layout::terrain(zone).passes.len(), n);
+            assert!(
+                crate::layout::terrain(zone)
+                    .passes
+                    .iter()
+                    .all(|p| p.zone == zone)
+            );
+        }
+        let colliders: Vec<_> = Zone::ALL
+            .iter()
+            .map(|z| crate::props::Colliders::for_zone(*z))
+            .collect();
+        for pass in &PASSES {
+            assert_eq!(pass.other_end().other_end(), pass);
+            assert!(pass.to.connecting() != pass.zone.connecting());
+            // From the edge of town to the end, the road is dry, and once
+            // it's out in the wilds it's open and never too steep.
+            let mut last = pass.zone.ground_local(pass.spot(TOWN_RADIUS));
+            let mut along = TOWN_RADIUS + 2.0;
+            while along <= PASS_END + 2.0 {
+                for side in [-PASS_HALF_WIDTH + 1.0, 0.0, PASS_HALF_WIDTH - 1.0] {
+                    let local = pass.spot(along) + pass.dir.perp() * side;
+                    let p = pass.zone.ground_local(local);
+                    assert!(
+                        p.y > pass.zone.water_level() + 0.3,
+                        "{pass:?} wet at {along}"
+                    );
+                    // (Near town it's the old road, which can wind past a
+                    // camp.)
+                    assert!(
+                        along < 90.0 || !colliders[pass.zone.index()].blocked(p, 0.4),
+                        "{pass:?} blocked at {along} {side}"
+                    );
+                }
+                let p = pass.zone.ground_local(pass.spot(along));
+                assert!(
+                    along < 90.0 || (p.y - last.y).abs() < 1.2,
+                    "{pass:?} too steep at {along}: {} to {}",
+                    last.y,
+                    p.y
+                );
+                last = p;
+                along += 2.0;
+            }
+            // Walls of mountains on both sides near the end.
+            let wall = pass
+                .zone
+                .ground_local(pass.spot(PASS_END) + pass.dir.perp() * 30.0);
+            assert!(wall.y > last.y + 8.0, "{pass:?} has no walls");
+        }
     }
 }

@@ -106,8 +106,40 @@ pub fn quest(id: QuestId) -> &'static Quest {
 
 /// A zone's three quests, in the order they're offered.
 pub fn zone_quests(zone: Zone) -> &'static [Quest] {
-    let i = zone.index() * 3;
+    let i = QUESTS
+        .iter()
+        .position(|q| q.zone == zone && q.dungeon.is_none())
+        .expect("every zone has quests");
     &QUESTS[i..i + 3]
+}
+
+/// A quest in a connecting zone: kill some of its mobs. Its rewards are
+/// placeholders.
+#[allow(clippy::too_many_arguments)]
+const fn wilds(
+    id: u16,
+    zone: Zone,
+    name: &'static str,
+    kind: MobKind,
+    count: u16,
+    min_level: u8,
+    (xp, money): (u32, u32),
+    text: &'static str,
+    done_text: &'static str,
+) -> Quest {
+    Quest {
+        id: QuestId(id),
+        zone,
+        name,
+        text,
+        done_text,
+        goal: Goal::Kill { kind, count },
+        min_level,
+        xp,
+        money,
+        reward: None,
+        dungeon: None,
+    }
 }
 
 /// The quest the giver at a dungeon's entrance offers.
@@ -149,6 +181,8 @@ pub fn quest_giver_name(zone: Zone) -> &'static str {
         Zone::Grubdeep => "Issagoblin",
         Zone::Frostcog => "Tinker Pip Gearwhistle",
         Zone::Witherwood => "Deathguard Morrow",
+        Zone::Sunfold => "Captain Brenna Ashby",
+        Zone::Blightscar => "Overseer Varkash",
     }
 }
 
@@ -228,7 +262,7 @@ const fn elite(
 
 use items::*;
 
-pub static QUESTS: [Quest; 21] = [
+pub static QUESTS: [Quest; 27] = [
     // Amberfall Vale
     hunt(
         0,
@@ -454,6 +488,74 @@ pub static QUESTS: [Quest; 21] = [
         reward: Some(HRIMFANG_GLAIVE),
         dungeon: Some(DungeonId::Frosthowl),
     },
+    // Sunfold Highlands
+    wilds(
+        21,
+        Zone::Sunfold,
+        "Prowlers on the Moor",
+        MobKind::HighlandProwler,
+        10,
+        13,
+        (1500, 1500),
+        "Highland prowlers hunt the roads between the passes. Travelers from Hearthmere, Aelthas and Gearhaven all come through here, and not all of them make it. Kill ten.",
+        "The roads are safer already. Three Banners thanks you, and so do all three of our kingdoms.",
+    ),
+    wilds(
+        22,
+        Zone::Sunfold,
+        "The Thornhelm Band",
+        MobKind::ThornhelmBrigand,
+        10,
+        15,
+        (2000, 2500),
+        "The Thornhelm brigands camp in the hills and rob every caravan that crosses the highlands. Break their band: ten of their fighters should do it.",
+        "Without their fighters, the hexers won't last long out there. Well done.",
+    ),
+    wilds(
+        23,
+        Zone::Sunfold,
+        "The Moorland Ancient",
+        MobKind::MoorlandAncient,
+        1,
+        18,
+        (3000, 5000),
+        "In the old ruins on the moor, an ancient tree has woken in a rage, and it tears up anything that walks by. Gather some friends and put it back to sleep.",
+        "The moor is quiet again. Few could have done that.",
+    ),
+    // Blightscar Badlands
+    wilds(
+        24,
+        Zone::Blightscar,
+        "Scorpids in the Gullies",
+        MobKind::BlightfangScorpid,
+        10,
+        13,
+        (1500, 1500),
+        "Blightfang scorpids nest in every gully between the passes, and their venom drops an orc in a dozen steps. Kill ten of them.",
+        "Good. Our runners can cross between Gravenhold, Kragmaw Hold and Rustpocket again.",
+    ),
+    wilds(
+        25,
+        Zone::Blightscar,
+        "Reavers of the Scar",
+        MobKind::BlightscarReaver,
+        10,
+        15,
+        (2000, 2500),
+        "The Blightscar reavers answer to no warchief. They raid our camps and take what they please. Ten of them, dead. Go.",
+        "Ha! They'll think twice before raiding Bonecross again.",
+    ),
+    wilds(
+        26,
+        Zone::Blightscar,
+        "The Scourge Colossus",
+        MobKind::ScourgeColossus,
+        1,
+        18,
+        (3000, 5000),
+        "The plaguecallers have stitched a colossus together out of every carcass in the badlands, and it walks the ruins at the far end of the Scar. Bring friends, and bring it down.",
+        "It's done? Then the plaguecallers have lost their greatest weapon. Bonecross owes you.",
+    ),
 ];
 
 #[cfg(test)]
@@ -470,6 +572,19 @@ mod tests {
             let qs = zone_quests(zone);
             let mobs = MobKind::for_zone(zone);
             assert!(qs.iter().all(|q| q.zone == zone));
+            if zone.connecting() {
+                // Beasts, the fighters and the elite.
+                let kinds: Vec<_> = qs
+                    .iter()
+                    .map(|q| match q.goal {
+                        Goal::Kill { kind, .. } => kind,
+                        Goal::TurnIn { .. } => panic!("{zone:?} has a crafting quest"),
+                    })
+                    .collect();
+                assert_eq!(kinds, [mobs[0], mobs[2], mobs[4]]);
+                assert!(qs.iter().all(|q| q.min_level >= zone.levels().0));
+                continue;
+            }
             assert!(
                 matches!(qs[0].goal, Goal::Kill { kind, count } if kind == mobs[0] && count > 1)
             );

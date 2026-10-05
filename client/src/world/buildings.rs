@@ -20,7 +20,7 @@ pub(super) fn house(
     let r = vec3(-f.z, 0.0, f.x);
     let lamp = lamp_color(zone);
     match zone {
-        Zone::Scorchsand => {
+        Zone::Scorchsand | Zone::Blightscar => {
             // A round clay hut with a hide roof, bone spikes and a banner.
             let clay = [c(0.72, 0.45, 0.3), c(0.66, 0.4, 0.28), c(0.76, 0.5, 0.34)][v as usize % 3];
             b.cone_ref(center, Vec3::Y * 2.8, f, 2.8, 2.6, 12, clay);
@@ -253,7 +253,7 @@ pub(super) fn house(
                 color: lamp,
             });
         }
-        Zone::Amberfall => {
+        Zone::Amberfall | Zone::Sunfold => {
             let walls = [c(0.9, 0.84, 0.7), c(0.86, 0.78, 0.66), c(0.93, 0.88, 0.78)];
             let roofs = [c(0.62, 0.22, 0.15), c(0.3, 0.33, 0.45), c(0.48, 0.3, 0.18)];
             let i = v as usize % 3;
@@ -376,7 +376,7 @@ pub(super) fn centerpiece(
     lamps: &mut Vec<Glow>,
 ) {
     match zone {
-        Zone::Amberfall => {
+        Zone::Amberfall | Zone::Sunfold => {
             // A fountain.
             let stone = c(0.62, 0.6, 0.57);
             b.cylinder(p, Vec3::Y * 0.7, 3.0, 20, stone);
@@ -398,7 +398,7 @@ pub(super) fn centerpiece(
             b.cylinder(p + Vec3::Y * 2.2, Vec3::Y * 0.25, 1.0, 14, stone);
             b.sphere(p + Vec3::Y * 2.75, 0.35, c(0.55, 0.7, 0.9));
         }
-        Zone::Scorchsand => {
+        Zone::Scorchsand | Zone::Blightscar => {
             // A great fire pit ringed with stones, beside a tusked totem.
             for k in 0..14 {
                 let a = k as f32 * 0.449;

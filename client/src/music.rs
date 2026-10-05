@@ -36,6 +36,7 @@ const DORIAN: [i32; 7] = [0, 2, 3, 5, 7, 9, 10];
 const PHRYGIAN: [i32; 7] = [0, 1, 3, 5, 7, 8, 10];
 const LYDIAN: [i32; 7] = [0, 2, 4, 6, 7, 9, 11];
 const HARMONIC: [i32; 7] = [0, 2, 3, 5, 7, 8, 11];
+const MIXOLYDIAN: [i32; 7] = [0, 2, 4, 5, 7, 9, 10];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Lead {
@@ -187,6 +188,34 @@ fn style(track: Track) -> Style {
                 Drums::None,
                 0.3,
                 7,
+            ),
+            // Open highlands: a broad, hopeful road song.
+            Zone::Sunfold => s(
+                -3,
+                MIXOLYDIAN,
+                80.0,
+                [0, 6, 3, 4],
+                Triangle,
+                1400.0,
+                Flute,
+                Some(Pluck),
+                Drums::Soft,
+                0.5,
+                40,
+            ),
+            // Badlands: grim and driving.
+            Zone::Blightscar => s(
+                -8,
+                PHRYGIAN,
+                88.0,
+                [0, 1, 5, 4],
+                Saw,
+                650.0,
+                Reed,
+                Some(Pluck),
+                Drums::Soft,
+                0.55,
+                41,
             ),
         },
         Track::Dungeon(d) => match d {
@@ -527,6 +556,12 @@ pub fn ambience(amb: Ambience) -> Wave {
                 wind(len, 900.0, 0.9, 29).mix(0.0, wind(len, 1600.0, 0.7, 30).gain(0.3))
             }
             Zone::Witherwood => wind(len, 250.0, 0.6, 31).gain(0.7).mix(0.0, creaks(ev, 32)),
+            Zone::Sunfold => wind(len, 500.0, 0.6, 140)
+                .gain(0.6)
+                .mix(0.0, birds(ev, 8, 141)),
+            Zone::Blightscar => wind(len, 600.0, 0.8, 142)
+                .gain(0.8)
+                .mix(0.0, creaks(ev, 143).gain(0.5)),
         },
         Ambience::Dungeon(d) => match d {
             DungeonId::SunkenVault => waves(len, 33).mix(0.0, drips(ev, 18, 34)),

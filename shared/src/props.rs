@@ -166,6 +166,7 @@ pub fn near_landmark(zone: Zone, x: f32, z: f32) -> bool {
             SiteKind::Beasts => false,
         })
         || l.fields.iter().any(|f| f.distance(p) < 15.0)
+        || l.terrain.in_pass(p) > 0.0
 }
 
 struct Builder {
@@ -324,6 +325,29 @@ pub fn props(zone: Zone) -> Vec<Prop> {
         b.add(RuneTile, ruins + vec2(a.cos(), a.sin()) * 5.0, a, 1.0, 0);
     }
 
+    // Each pass: a road out of town lined with lamps, and a gate of two
+    // pillars with banners where it crosses into the next zone.
+    for pass in zone.passes() {
+        let side = pass.dir.perp() * (PASS_HALF_WIDTH + 1.5);
+        let gate = pass.spot(PASS_GATE);
+        let face = (-pass.dir.x).atan2(-pass.dir.y);
+        for (k, s) in [side, -side].into_iter().enumerate() {
+            b.add(Pillar, gate + s, face, 7.0, k as u8);
+            b.add(Banner, gate + s * 0.8 - pass.dir * 1.5, 0.0, 1.0, k as u8);
+        }
+        b.add(Signpost, gate - pass.dir * 6.0 + side * 1.05, face, 1.0, 0);
+        let mut along = 100.0;
+        while along < PASS_GATE - 10.0 {
+            let s = if (along as i32 / 30) % 2 == 0 {
+                side
+            } else {
+                -side
+            };
+            b.add(Lamp, pass.spot(along) + s * 0.85, 0.0, 1.0, 0);
+            along += 30.0;
+        }
+    }
+
     // The wilds: each zone has its own mix.
     let mix: &[(PropKind, f32)] = match zone {
         Zone::Amberfall => &[
@@ -374,6 +398,23 @@ pub fn props(zone: Zone) -> Vec<Prop> {
             (Shrub, 0.1),
             (Mushrooms, 0.1),
             (Bones, 0.1),
+        ],
+        // Open moorland: scattered pines and oaks, heather and boulders.
+        Zone::Sunfold => &[
+            (Conifer, 0.3),
+            (Tree, 0.25),
+            (Rock, 0.22),
+            (Shrub, 0.1),
+            (Flowers, 0.08),
+            (Log, 0.05),
+        ],
+        Zone::Blightscar => &[
+            (DeadTree, 0.3),
+            (Rock, 0.3),
+            (Mesa, 0.06),
+            (Bones, 0.16),
+            (Mushrooms, 0.06),
+            (Shrub, 0.12),
         ],
     };
     let attempts = if zone == Zone::Silverbough {

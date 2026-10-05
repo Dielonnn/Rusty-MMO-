@@ -23,6 +23,9 @@ pub struct Terrain {
     pub edge: f32,
     /// Extra sharp ridges (snowy peaks, cave walls).
     pub ridges: f32,
+    /// The zone's mountain passes, which cut valleys through the hills to
+    /// the edge of the map.
+    pub passes: &'static [Pass],
 }
 
 /// Who lives at a camp site.
@@ -162,6 +165,14 @@ impl Zone {
 }
 
 pub fn terrain(zone: Zone) -> Terrain {
+    let mut t = base_terrain(zone);
+    let i = PASSES.iter().position(|p| p.zone == zone).unwrap_or(0);
+    let n = zone.passes().count();
+    t.passes = &PASSES[i..i + n];
+    t
+}
+
+fn base_terrain(zone: Zone) -> Terrain {
     match zone {
         // The original map.
         Zone::Amberfall => Terrain {
@@ -171,6 +182,7 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.45,
             edge: 22.0,
             ridges: 0.0,
+            passes: &[],
         },
         // Long, low dunes.
         Zone::Scorchsand => Terrain {
@@ -180,6 +192,7 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.3,
             edge: 18.0,
             ridges: 0.0,
+            passes: &[],
         },
         // Gentle glades and wide lakes.
         Zone::Silverbough => Terrain {
@@ -189,6 +202,7 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.6,
             edge: 26.0,
             ridges: 0.0,
+            passes: &[],
         },
         // Rugged cave floors, walled in.
         Zone::Grubdeep => Terrain {
@@ -198,6 +212,7 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.5,
             edge: 32.0,
             ridges: 3.0,
+            passes: &[],
         },
         // Tall, sharp peaks.
         Zone::Frostcog => Terrain {
@@ -207,6 +222,7 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.35,
             edge: 30.0,
             ridges: 4.0,
+            passes: &[],
         },
         // Low, boggy ground with many pools.
         Zone::Witherwood => Terrain {
@@ -216,6 +232,27 @@ pub fn terrain(zone: Zone) -> Terrain {
             valleys: 0.8,
             edge: 20.0,
             ridges: 0.0,
+            passes: &[],
+        },
+        // Broad, rolling moors with a few tarns.
+        Zone::Sunfold => Terrain {
+            freqs: [0.019, 0.023, 0.055, 0.01],
+            amps: [4.2, 3.6, 1.2, 6.5],
+            phase: vec2(61.0, -18.0),
+            valleys: 0.4,
+            edge: 26.0,
+            ridges: 1.5,
+            passes: &[],
+        },
+        // Cracked red badlands, cut with gullies and crags.
+        Zone::Blightscar => Terrain {
+            freqs: [0.033, 0.029, 0.08, 0.014],
+            amps: [3.4, 3.2, 1.5, 5.5],
+            phase: vec2(-48.0, 92.0),
+            valleys: 0.35,
+            edge: 24.0,
+            ridges: 2.5,
+            passes: &[],
         },
     }
 }
@@ -247,7 +284,34 @@ impl Terrain {
             WORLD_HALF_SIZE,
             x.abs().max(z.abs()),
         );
-        hills * outside_town + edge * self.edge
+        let mut h = hills * outside_town + edge * self.edge;
+        // A pass is a road climbing towards a saddle at the edge (so you
+        // see sky over the top, not the end of the world), between cliffs
+        // that close in on it near the end.
+        let p = vec2(x, z);
+        let mut best = 0.0f32;
+        let mut road = 0.0;
+        for pass in self.passes {
+            let (along, across) = pass.along_across(p);
+            if along > 0.0 {
+                h += smoothstep(PASS_HALF_WIDTH + 4.0, PASS_HALF_WIDTH + 18.0, across)
+                    * smoothstep(70.0, 40.0, across)
+                    * smoothstep(100.0, 170.0, along)
+                    * 18.0;
+            }
+            let k = pass.valley(p);
+            if k > best {
+                best = k;
+                let along = pass.along_across(p).0;
+                road = 0.6 + smoothstep(110.0, PASS_END + 8.0, along) * 12.0 + hills * 0.12;
+            }
+        }
+        h + (road - h) * best
+    }
+
+    /// How much of a pass's valley a local position is in (0 to 1).
+    pub fn in_pass(&self, p: Vec2) -> f32 {
+        self.passes.iter().map(|s| s.valley(p)).fold(0.0, f32::max)
     }
 }
 
@@ -328,7 +392,27 @@ fn houses(zone: Zone) -> Vec<HouseSpot> {
             h.extend(ring(23.0, &[60.0, 120.0]));
             h
         }
+        // An outpost: a few buildings, each between two of the roads.
+        Zone::Sunfold => ring(20.5, &[45.0, 135.0, 225.0, 315.0, 62.0, 118.0]),
+        Zone::Blightscar => scattered(&[
+            (40.0, 20.0, 0.2),
+            (140.0, 21.5, -0.3),
+            (225.0, 19.5, 0.35),
+            (318.0, 22.0, -0.2),
+            (250.0, 23.0, 0.1),
+            (290.0, 20.0, -0.4),
+        ]),
     }
+}
+
+/// Starting areas' levels (1 to 10) moved into a zone's own range.
+fn shift_levels(zone: Zone, (lo, hi): (u8, u8)) -> (u8, u8) {
+    let (min, max) = zone.levels();
+    let f = |l: u8| {
+        let t = (l.max(1) - 1) as f32 / 9.0;
+        (min as f32 + t * (max - min) as f32).round() as u8
+    };
+    (f(lo), f(hi))
 }
 
 /// The base camp sites, in the order levels rise.
@@ -401,7 +485,7 @@ fn usable(t: &Terrain, water: f32, p: Vec2, radius: f32) -> bool {
         lo = lo.min(h);
         hi = hi.max(h);
     }
-    lo > water + 0.6 && hi < 13.0 && hi - lo < radius * 0.8
+    lo > water + 0.6 && hi < 13.0 && hi - lo < radius * 0.8 && t.in_pass(p) == 0.0
 }
 
 /// Finds a usable spot near `want`, turning around the town and then
@@ -437,6 +521,9 @@ fn build(zone: Zone) -> Layout {
     let mut taken: Vec<Vec2> = Vec::new();
     let mut sites = base_sites();
     for site in &mut sites {
+        for spawn in &mut site.spawns {
+            spawn.levels = shift_levels(zone, spawn.levels);
+        }
         let a = site.center.y.atan2(site.center.x) + spin + rng.range(-0.25, 0.25);
         let d = site.center.length() * rng.range(0.92, 1.08);
         let want = if zone == Zone::Amberfall {
@@ -471,6 +558,8 @@ fn build(zone: Zone) -> Layout {
         Zone::Grubdeep => vec2(-7.0, 9.5),
         Zone::Frostcog => vec2(8.0, -7.0),
         Zone::Witherwood => vec2(7.0, -4.0),
+        Zone::Sunfold => vec2(-7.5, -3.0),
+        Zone::Blightscar => vec2(6.5, 8.5),
     };
     let shores = if crate::data::MobKind::water(zone).is_some() {
         shores(&t, water, &sites)
