@@ -81,6 +81,8 @@ pub struct Windows {
     /// The merchant whose wares are shown.
     pub vendor: Option<EntityId>,
     pub talents: bool,
+    /// The spell book (Y).
+    pub spellbook: bool,
     pub sandbox: bool,
     /// The world map covers the screen.
     pub map: bool,
@@ -98,6 +100,7 @@ impl Windows {
             || self.skills
             || self.vendor.is_some()
             || self.talents
+            || self.spellbook
             || self.sandbox
             || self.map
             || self.quest_giver.is_some()
@@ -113,6 +116,11 @@ pub struct Game {
     pub entities: HashMap<EntityId, Ent>,
     pub me: SelfView,
     pub target: Option<EntityId>,
+    /// What's on the hotbars. Changes show here at once and are sent to
+    /// the server, which saves them.
+    pub hotbar: Hotbar,
+    /// A spell being dragged from the spell book or a hotbar slot.
+    pub dragging: Option<crate::spellbook::SpellDrag>,
 
     // Our own movement; the server trusts it within reason.
     pub pos: Vec3,
@@ -184,6 +192,8 @@ impl Game {
             entities: HashMap::new(),
             me: SelfView::default(),
             target: None,
+            hotbar: class.default_hotbar(),
+            dragging: None,
             pos: Zone::Amberfall.graveyard(),
             yaw: 0.0,
             vel_y: 0.0,
@@ -453,6 +463,11 @@ impl Game {
                 self.portal = snap.portal;
                 if snap.me.talents != self.me.talents {
                     self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
+                }
+                // Take the server's hotbars when they change there (on
+                // entering the world, or a spell learned onto them).
+                if snap.me.hotbar != self.me.hotbar {
+                    self.hotbar = snap.me.hotbar;
                 }
                 self.me = snap.me;
                 if !self.me.sandbox {
@@ -796,16 +811,21 @@ impl Game {
     }
 
     pub fn use_slot(&mut self, slot: usize) {
-        let ability = self.class.abilities()[slot];
+        if let Some(ability) = self.hotbar[slot] {
+            self.use_ability(ability);
+        }
+    }
+
+    pub fn use_ability(&mut self, ability: AbilityId) {
         if self.my_view().is_some_and(|v| v.dead) {
             self.error("You are dead.");
             return;
         }
-        if UNLOCK_LEVELS[slot] > self.level() {
+        let learned_at = self.class.unlock_level(ability).unwrap_or(1);
+        if learned_at > self.level() {
             self.error(&format!(
-                "You learn {} at level {}.",
+                "You learn {} at level {learned_at}.",
                 shared::data::ability(ability).name,
-                UNLOCK_LEVELS[slot]
             ));
             return;
         }
@@ -960,6 +980,7 @@ impl Game {
         if (left_pressed || right_pressed) && over_ui && !grabbed {
             self.click_ui(layout, mouse, left_pressed);
         }
+        self.drag_spell(layout, mouse);
 
         // Mouse buttons in the world: drag to look around (the cursor locks
         // while dragging), click to target.
@@ -1008,6 +1029,8 @@ impl Game {
         if typing {
             return None;
         }
+        // The bottom hotbar, or with Shift the top one.
+        let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         for (slot, key) in [
             KeyCode::Key1,
             KeyCode::Key2,
@@ -1015,13 +1038,14 @@ impl Game {
             KeyCode::Key4,
             KeyCode::Key5,
             KeyCode::Key6,
+            KeyCode::Q,
             KeyCode::E,
         ]
         .into_iter()
         .enumerate()
         {
             if is_key_pressed(key) {
-                self.use_slot(slot);
+                self.use_slot(if shift { slot + BAR_SLOTS } else { slot });
             }
         }
         if is_key_pressed(KeyCode::Tab) {
@@ -1029,9 +1053,6 @@ impl Game {
         }
         if is_key_pressed(KeyCode::F1) {
             self.set_target(self.my_id);
-        }
-        if is_key_pressed(KeyCode::Q) {
-            self.error("Q no longer strafes: use A and D. E is your seventh ability.");
         }
         if is_key_pressed(KeyCode::T) {
             if self.me.auto_attacking {
@@ -1068,6 +1089,9 @@ impl Game {
         }
         if is_key_pressed(KeyCode::N) {
             self.windows.talents = !self.windows.talents;
+        }
+        if is_key_pressed(KeyCode::Y) {
+            self.windows.spellbook = !self.windows.spellbook;
         }
         if is_key_pressed(KeyCode::P) {
             if self.me.sandbox {
@@ -1185,8 +1209,31 @@ impl Game {
             }
             return;
         }
+        if left && self.windows.spellbook && layout.spellbook.is_some_and(|r| r.contains(mouse)) {
+            // Pick a spell up from the book.
+            if let Some((ability, _)) = crate::spellbook::entry_at(self, mouse) {
+                self.dragging = Some(crate::spellbook::SpellDrag {
+                    ability,
+                    from: None,
+                    start: mouse,
+                    moved: false,
+                });
+            }
+            return;
+        }
         if let Some(slot) = layout.hotbar.iter().position(|r| r.contains(mouse)) {
-            self.use_slot(slot);
+            match self.hotbar[slot] {
+                // With the spell book open, slots can be dragged around.
+                Some(ability) if left && self.windows.spellbook => {
+                    self.dragging = Some(crate::spellbook::SpellDrag {
+                        ability,
+                        from: Some(slot),
+                        start: mouse,
+                        moved: false,
+                    });
+                }
+                _ => self.use_slot(slot),
+            }
         } else if left && layout.player_frame.contains(mouse) {
             self.set_target(self.my_id);
         } else if left
@@ -1248,6 +1295,30 @@ impl Game {
                 merchant,
                 item: MERCHANT_GOODS[i],
             });
+        }
+    }
+
+    /// Carries a picked-up spell with the mouse and drops it where the
+    /// button is let go. A click that never moved uses the spell instead.
+    fn drag_spell(&mut self, layout: &Layout, mouse: Vec2) {
+        let Some(mut d) = self.dragging else { return };
+        if d.start.distance(mouse) > 6.0 {
+            d.moved = true;
+        }
+        if is_mouse_button_down(MouseButton::Left) {
+            self.dragging = Some(d);
+            return;
+        }
+        self.dragging = None;
+        if !d.moved {
+            self.use_ability(d.ability);
+            return;
+        }
+        let to = layout.hotbar.iter().position(|r| r.contains(mouse));
+        let bar = crate::spellbook::drop(&self.hotbar, d, to);
+        if bar != self.hotbar {
+            self.hotbar = bar;
+            self.send(ClientMsg::SetHotbar(bar));
         }
     }
 

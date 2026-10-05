@@ -10,13 +10,13 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
-use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Race, Slot};
+use crate::data::{AbilityId, Appearance, Class, Hotbar, ItemId, MobKind, Race, Slot};
 use crate::quests::{QuestId, QuestLog};
 use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -56,6 +56,8 @@ pub enum ClientMsg {
     },
     StartAttack,
     StopAttack,
+    /// Rearranged hotbars, saved with the character.
+    SetHotbar(Hotbar),
     Chat(String),
     /// Come back to life at the graveyard.
     ReleaseSpirit,
@@ -305,6 +307,8 @@ pub struct SelfView {
     pub party: Option<PartyView>,
     /// Who has invited you to a party, if anyone.
     pub invite: Option<String>,
+    /// What's on your two hotbars.
+    pub hotbar: Hotbar,
 }
 
 /// The party you're in, yourself included.
