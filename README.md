@@ -336,19 +336,20 @@ client/   The macroquad client: login, character select and creation,
   glowing rune circle, and auras show on whoever has them: shield bubbles,
   stun stars, roots, frost, flames, poison, bleeding and more.
 - **Models and animation.** Players, townsfolk and humanoid mobs are rigged,
-  skinned models with skeletal animation, from the free (CC0) KayKit
-  Adventurers and Skeletons packs (`client/assets/characters/`). All bodies
-  share one skeleton and one set of animation clips; the `.glb` loader
-  (`client/src/gfx/model_file.rs`) reads skeletons, skins and clips, and
-  `client/src/models/rigged.rs` reshapes the packs' cartoon bodies toward
-  heroic proportions (longer limbs and torso, smaller head, hands and feet,
-  with the meshes stretched to fit), picks a body and props for each class or mob,
-  repaints its texture for race, class and armor colors, and blends clips from
-  what someone is doing: running, idling, casting, attacking (with the upper
-  body only while running), flinching, jumping and dying. Every class fights
-  in its own way: barbarians chop with a great axe, fighters slash behind a
-  shield, monks punch and kick, rogues stab with two knives, rangers and
-  artificers shoot crossbows, and casters channel and hurl spells. Creatures
+  skinned models with skeletal animation (`client/assets/characters/`):
+  Quaternius' Universal Base Characters and Universal Animation Library 1
+  and 2, with KayKit weapons, hats, skeletons and a few moves carried over
+  (all CC0). Every body shares one skeleton and one set of animation clips;
+  the `.glb` loader (`client/src/gfx/model_file.rs`) reads skeletons, skins
+  and clips, and `client/src/models/rigged.rs` picks a body, hair and props
+  for each class or mob, paints its gear onto the skin texture for race,
+  class and armor colors, adds shoulder pads, robes, ears and tusks, and
+  blends clips from what someone is doing: running, idling, casting,
+  attacking (with the upper body only while running), flinching, jumping
+  and dying. Every class fights in its own way: barbarians chop with a great
+  axe, fighters slash behind a shield, monks punch and kick, rogues stab
+  with two knives, rangers and artificers shoot crossbows, and casters
+  channel and hurl spells. Creatures
   and giants are still built from shapes and posed in code: wolves sniff about
   and snap their jaws, boars root around, spiders rear up and scorpions sway
   their tails.

@@ -18,5 +18,5 @@ pub mod texture;
 pub use batch::{Batch, basis};
 pub use color::{c, dark, mix, rgb};
 pub use frame::Frame;
-pub use model_file::{ModelFile, ModelPart, Picture, Transform};
+pub use model_file::{ModelFile, Picture, Transform};
 pub use shader::{Fog, GroundPaint, Light, Shading};

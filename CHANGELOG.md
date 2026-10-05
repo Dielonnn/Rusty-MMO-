@@ -7,33 +7,36 @@ built from that commit.
 
 ## v8.0
 
-Commit: the one titled "v8.0: Heroic proportions for the character models".
+Commit: the one titled "v8.0: Quaternius characters".
 
 - **Real character models**: players, townsfolk and humanoid mobs are now
-  rigged 3D models with bending limbs, painted textures and skeletal
-  animation, instead of stacks of boxes. They come from the free KayKit
-  Adventurers and Skeletons packs (CC0), reshaped from the packs' cartoon
-  look toward heroic proportions: smaller heads, hands and feet, and longer,
-  slimmer legs, arms and bodies
-- **Classes look the part**: fighters and paladins in plate with sword and
-  shield or greatsword, barbarians and monks in fur and leather, rogues,
-  rangers, artificers and bards in leather with knives, crossbows or a
-  songbook, and casters in robes with staves, wands and spellbooks. Each class
-  keeps its colors, and worn armor recolors the chest, legs and gloves
+  rigged 3D models with bending limbs, skin, faces and skeletal animation,
+  instead of stacks of boxes. The bodies are realistic male and female
+  figures from Quaternius' free Universal Base Characters (CC0), and your
+  character's build picks which one
+- **Classes look the part**: their gear is painted onto the body. Fighters
+  and paladins wear plate with shoulder pads and a tabard, barbarians and
+  monks fur and leather, rogues, rangers, artificers and bards leather, and
+  casters long robes. They carry KayKit weapons (CC0): swords and shields,
+  great axes, knives, crossbows, staves, wands and spellbooks. Each class
+  keeps its colors, and worn armor recolors the chest, legs, gloves and boots
 - **Races**: each race has its own skin colors, size and build; elves and
-  goblins have long ears, orcs tusks, gnomes and goblins bigger heads
-- **Hairstyles** are real heads now: bald with a beard, short, long, a
-  ponytail, or a mohawk. Hair takes the color you picked. Wearing something
-  on your head shows your class's helmet, hat or hood
-- **Animations**: idle, running, jumping, casting, hit reactions and dying,
-  and attacks for every fighting style: two-handed chops, sword slashes,
-  punches and kicks, twin knife stabs, crossbow shots and thrown spells.
-  Attacking while running swings with the upper body while the legs keep
-  running
+  goblins have long ears, orcs tusks, gnomes and goblins bigger heads, and
+  gnome men beards
+- **Hairstyles**: short, parted, long, buns, a beard, or a mohawk, in the
+  color you picked. Wearing something on your head shows your class's
+  helmet, hat or hood
+- **Animations** from Quaternius' Universal Animation Library 1 and 2
+  (CC0), plus KayKit moves carried over to the new skeleton: idle, running,
+  jumping, casting, hit reactions and dying, and attacks for every fighting
+  style: sword combos, two-handed chops, punches and kicks, twin knife
+  stabs, shield bashes, crossbow shots and thrown spells. Attacking while
+  running swings with the upper body while the legs keep running
 - **Mobs**: bandits, raiders, mystics, shamans, satyrs, troggs and trolls
   wear the same bodies in their own colors; skeletons and necromancers are
-  real skeleton models, warriors, rogues and minions with their own gear.
-  Beasts and giants are still built from shapes until v9.0
+  KayKit skeletons rebuilt on the same skeleton, as warriors, rogues, mages
+  and minions with their own gear. Beasts and giants are still built from
+  shapes until v9.0
 
 ## v7.2
 

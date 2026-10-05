@@ -1,8 +1,8 @@
 //! Character and creature models, and how they move.
 //!
 //! People (players, townsfolk and humanoid mobs) are rigged, animated models
-//! (`rigged`): a body per class or mob type on a shared skeleton, repainted
-//! for race, class and armor, and animated by how they fight: a barbarian
+//! (`rigged`): a male or female body (or a skeleton) on a shared skeleton,
+//! with class gear painted on for race, class and armor, and animated by how they fight: a barbarian
 //! chops with a great axe, a monk throws punches and kicks, a rogue stabs
 //! with two knives, casters channel and throw spells, and so on.
 //!
