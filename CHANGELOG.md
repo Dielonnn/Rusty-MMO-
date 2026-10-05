@@ -5,6 +5,32 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.6
+
+Commit: the one titled "v7.6: Waystones and the Sunken Vault".
+
+- **Waystones**: every town has a rune stone beside its square. Stand next to
+  it and press `F` to travel to any other starting area's town, so all six
+  areas are now linked. Travel is free, but not while you're in combat
+- **The Sunken Vault**, the first dungeon, for level 8 and up: flooded stone
+  halls with Vault Hounds, Vault Crawlers, Drowned Enforcers and Drowned
+  Adepts (levels 9 and 10), the Stone Warden halfway through, and Morvane the
+  Sunken King at the end. Enter from any town's waystone
+- **Your own copy**: your party shares one copy of the vault, and everyone else
+  (another party, or a player on their own) gets their own. Mobs you kill stay
+  dead, and the copy resets once nobody has been inside for 5 minutes.
+  Leaving the party sends you back out of its vault; when a party breaks up,
+  whoever's left keeps it
+- Dying in the vault brings you back at its entrance, whose waystone takes you
+  back to the town you came from. Logging out inside puts you by that town's
+  waystone next time
+- **Crown of the Sunken King**: a new blue helm (14 armor, +6 stamina, +5
+  power) that Morvane drops a quarter of the time
+- **Loot**: Morvane also always drops a green armor piece and 2 Ancient Cores,
+  and half the time a green weapon. The Stone Warden drops like other elites
+- The minimap and the world map (`M`) show the vault's halls and room names
+- Older games can't join a v7.6 server (protocol 10)
+
 ## v7.5
 
 Commit: the one titled "v7.5: Textured spell effects".
