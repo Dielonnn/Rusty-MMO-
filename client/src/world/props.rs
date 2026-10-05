@@ -74,7 +74,7 @@ pub(super) fn draw_prop(
     match p.kind {
         PropKind::House => house(b, zone, pos, yaw, v, chimneys, lamps),
         PropKind::Waystone => super::dungeon::waystone(b, pos, yaw, lamps),
-        PropKind::VaultWall => super::dungeon::wall(b, pos, yaw, s),
+        PropKind::VaultWall => super::dungeon::wall(b, zone, pos, yaw, s),
         PropKind::Stall => market_stall(b, zone, pos, yaw, v),
         PropKind::Centerpiece => centerpiece(b, zone, pos, fires, lamps),
         PropKind::Grave => {

@@ -1,43 +1,121 @@
-//! Dungeon boss mechanics. Morvane the Sunken King marks the ground under
-//! everyone fighting him with Tidal Crash (get out before it lands, then
-//! again, since it comes twice in a row), and
-//! casts two spells worth interrupting: Drowning Grasp, a heavy hit on his
-//! target, and Call of the Deep, which heals him.
+//! Dungeon boss mechanics. Every boss marks the ground under everyone
+//! fighting it (get out before it lands), and casts two spells worth
+//! interrupting. Some have a trick of their own at low health.
+//!
+//! - Morvane the Sunken King: Tidal Crash comes down twice in a row, the
+//!   second where you stand when the first lands. Drowning Grasp is a heavy
+//!   hit on his target; Call of the Deep heals him.
+//! - Warlord Gorrak Ashfist: Magma Rain, wide circles that land once.
+//!   Molten Blast hits his target hard; Flame Wave burns everyone. Below 30%
+//!   health he flies into a Bloodrage and hits half again as hard.
+//! - Hrimja the Frostmother: Avalanche lands three times in a row, chasing
+//!   you. Frozen Tomb hits and roots her target; Glacial Howl hits and slows
+//!   everyone. At half health she calls three snow wolves to her side.
 
 use super::*;
+
+/// Marked ground: how often, how much warning, how many times in a row,
+/// how wide and how hard (before scaling with the boss's level).
+pub struct HazardKit {
+    pub interval: f32,
+    pub warning: f32,
+    pub times: u8,
+    pub radius: f32,
+    pub damage: f32,
+}
+
+/// Everything a boss does on its own.
+pub struct Kit {
+    pub hazard: HazardKit,
+    /// An interruptible spell at its target, and how often.
+    pub hit: (AbilityId, f32),
+    /// Its other interruptible spell, how often, and the health (fraction)
+    /// below which it starts casting it.
+    pub other: (AbilityId, f32, f32),
+    /// A spell it casts once, when its health first drops below this.
+    pub enrage: Option<(f32, AbilityId)>,
+    /// Help it calls once, when its health first drops below this: what
+    /// kind, and how many.
+    pub pack: Option<(f32, MobKind, usize)>,
+}
 
 /// How much faster Tidal Crash comes than it first did (12 seconds apart
 /// with 2.5 seconds' warning).
 const CRASH_SPEED: f32 = 1.15;
-/// Seconds between Tidal Crashes, how long the warning lasts, how many land
-/// in a row, how wide each circle is, and what it hits for (before scaling
-/// with the boss's level).
-pub const CRASH_INTERVAL: f32 = 12.0 / CRASH_SPEED;
-pub const CRASH_WARNING: f32 = 2.5 / CRASH_SPEED;
-pub const CRASH_TIMES: u8 = 2;
-pub const CRASH_RADIUS: f32 = 4.0;
-pub const CRASH_DAMAGE: f32 = 30.0;
-/// Seconds between Drowning Grasps, and between Calls of the Deep (which
-/// he only casts once hurt).
-pub const GRASP_INTERVAL: f32 = 14.0;
-pub const DEEP_INTERVAL: f32 = 25.0;
-const DEEP_BELOW_HEALTH: f32 = 0.9;
+
+const SUNKEN_KING: Kit = Kit {
+    hazard: HazardKit {
+        // Tidal Crash
+        interval: 12.0 / CRASH_SPEED,
+        warning: 2.5 / CRASH_SPEED,
+        times: 2,
+        radius: 4.0,
+        damage: 30.0,
+    },
+    hit: (ids::DROWNING_GRASP, 14.0),
+    other: (ids::CALL_OF_THE_DEEP, 25.0, 0.9),
+    enrage: None,
+    pack: None,
+};
+
+const GORRAK: Kit = Kit {
+    hazard: HazardKit {
+        // Magma Rain
+        interval: 11.0,
+        warning: 2.2,
+        times: 1,
+        radius: 5.0,
+        damage: 35.0,
+    },
+    hit: (ids::MOLTEN_BLAST, 14.0),
+    other: (ids::FLAME_WAVE, 22.0, 1.0),
+    enrage: Some((0.3, ids::BLOODRAGE)),
+    pack: None,
+};
+
+const HRIMJA: Kit = Kit {
+    hazard: HazardKit {
+        // Avalanche
+        interval: 13.0,
+        warning: 2.0,
+        times: 3,
+        radius: 3.5,
+        damage: 32.0,
+    },
+    hit: (ids::FROZEN_TOMB, 15.0),
+    other: (ids::GLACIAL_HOWL, 24.0, 1.0),
+    enrage: None,
+    pack: Some((0.5, MobKind::FrostfangWolf, 3)),
+};
+
+/// A boss's mechanics.
+pub fn kit(kind: MobKind) -> &'static Kit {
+    match kind {
+        MobKind::GorrakAshfist => &GORRAK,
+        MobKind::Hrimja => &HRIMJA,
+        _ => &SUNKEN_KING,
+    }
+}
 
 /// A boss's own timers, started when the fight starts.
 #[derive(Clone, Copy, Debug)]
 pub struct BossTimers {
-    crash: f32,
-    grasp: f32,
-    deep: f32,
+    hazard: f32,
+    hit: f32,
+    other: f32,
+    enraged: bool,
+    called: bool,
 }
 
 impl Default for BossTimers {
     fn default() -> Self {
-        // The first crash comes quickly, so the fight opens with a dodge.
+        // The first hazard comes quickly, so the fight opens with a dodge.
         BossTimers {
-            crash: 5.0,
-            grasp: 8.0,
-            deep: 15.0,
+            hazard: 5.0,
+            hit: 8.0,
+            other: 15.0,
+            enraged: false,
+            called: false,
         }
     }
 }
@@ -63,49 +141,132 @@ impl World {
     pub(super) fn boss_combat(&mut self, id: EntityId, dt: f32) -> bool {
         let e = self.entities.get_mut(&id).unwrap();
         let level = e.level;
-        let hurt = e.hp < e.max_hp * DEEP_BELOW_HEALTH;
+        let health = e.hp / e.max_hp;
         let m = mob_of(&mut e.brain);
+        let kit = kit(m.kind);
+        let camp = m.camp;
         let fighting: Vec<EntityId> = m.threat.iter().map(|(t, _)| *t).collect();
         let timers = &mut m.boss;
-        timers.crash -= dt;
-        timers.grasp -= dt;
-        timers.deep -= dt;
-        let crash = timers.crash <= 0.0;
-        if crash {
-            timers.crash = CRASH_INTERVAL;
+        timers.hazard -= dt;
+        timers.hit -= dt;
+        timers.other -= dt;
+        let hazard = timers.hazard <= 0.0;
+        if hazard {
+            timers.hazard = kit.hazard.interval;
         }
-        let deep = hurt && timers.deep <= 0.0;
-        if deep {
-            timers.deep = DEEP_INTERVAL;
+        let other = health < kit.other.2 && timers.other <= 0.0;
+        if other {
+            timers.other = kit.other.1;
         }
-        let grasp = !deep && timers.grasp <= 0.0;
-        if grasp {
-            timers.grasp = GRASP_INTERVAL;
+        let hit = !other && timers.hit <= 0.0;
+        if hit {
+            timers.hit = kit.hit.1;
         }
-        if crash {
-            let damage = CRASH_DAMAGE * level_scale(level);
-            for t in fighting {
-                self.mark(id, t, damage, CRASH_TIMES - 1);
+        // Tried every tick until it works (it can't while on cooldown).
+        let enrage = kit
+            .enrage
+            .filter(|&(below, _)| health < below && !timers.enraged);
+        let pack = kit
+            .pack
+            .filter(|&(below, _, _)| health < below && !timers.called);
+        if pack.is_some() {
+            timers.called = true;
+        }
+        if hazard {
+            let damage = kit.hazard.damage * level_scale(level);
+            for &t in &fighting {
+                self.mark(id, t, damage, kit.hazard.times - 1);
             }
         }
-        if deep && self.try_use(id, ids::CALL_OF_THE_DEEP).is_ok() {
+        if let Some((_, spell)) = enrage
+            && self.try_use(id, spell).is_ok()
+        {
+            let e = self.entities.get_mut(&id).unwrap();
+            mob_of(&mut e.brain).boss.enraged = true;
+            let name = e.name.clone();
+            self.send(
+                Audience::Near(self.pos_of(id)),
+                GameEvent::System(format!("{name} flies into a rage!")),
+            );
+        }
+        if let Some((_, kind, count)) = pack {
+            self.call_pack(id, camp, kind, level, count, &fighting);
+        }
+        if other && self.try_use(id, kit.other.0).is_ok() {
             return true;
         }
-        grasp && self.try_use(id, ids::DROWNING_GRASP).is_ok()
+        hit && self.try_use(id, kit.hit.0).is_ok()
     }
 
-    /// Marks the ground under `target` for a Tidal Crash, if it's near
+    /// A boss calls for help: `count` `kind`s run into the middle of its
+    /// room and join the fight against everyone fighting it.
+    fn call_pack(
+        &mut self,
+        boss: EntityId,
+        camp: usize,
+        kind: MobKind,
+        level: u8,
+        count: usize,
+        fighting: &[EntityId],
+    ) {
+        let at = self.pos_of(boss);
+        let Some(index) = shared::dungeon::instance_at(at) else {
+            return;
+        };
+        let room = shared::dungeon::of(index).halls.last().unwrap().center;
+        let spot = shared::dungeon::to_world(index, room);
+        let group = self.camps[camp].group;
+        let summoned = self.summon_into_instance(spot, kind, level, count, group);
+        for mob in summoned {
+            let m = self.entities.get_mut(&mob).unwrap().mob_mut().unwrap();
+            m.summoner = Some(boss);
+            m.state = MobState::Combat;
+            for &t in fighting {
+                add_threat(m, t, 1.0);
+            }
+        }
+        let name = self.entities[&boss].name.clone();
+        self.send(
+            Audience::Near(at),
+            GameEvent::System(format!("{name} calls for help!")),
+        );
+    }
+
+    /// A boss gave up its fight: whatever it called goes away.
+    pub(super) fn dismiss_pack(&mut self, boss: EntityId) {
+        let gone: Vec<EntityId> = self
+            .entities
+            .values()
+            .filter(|e| e.mob().is_some_and(|m| m.summoner == Some(boss)))
+            .map(|e| e.id)
+            .collect();
+        for id in gone {
+            self.entities.remove(&id);
+            self.forget(id);
+        }
+    }
+
+    /// Marks the ground under `target` for its boss's hazard, if it's near
     /// enough to the boss.
     fn mark(&mut self, boss: EntityId, target: EntityId, damage: f32, again: u8) {
         let Some(t) = self.entities.get(&target).filter(|t| !t.dead) else {
             return;
         };
+        let Some(kind) = self
+            .entities
+            .get(&boss)
+            .and_then(|b| b.mob())
+            .map(|m| m.kind)
+        else {
+            return;
+        };
+        let h = &kit(kind).hazard;
         if t.pos.distance(self.pos_of(boss)) < 60.0 {
             self.hazards.push(Hazard {
                 pos: t.pos,
-                radius: CRASH_RADIUS,
-                remaining: CRASH_WARNING,
-                total: CRASH_WARNING,
+                radius: h.radius,
+                remaining: h.warning,
+                total: h.warning,
                 damage,
                 source: boss,
                 aimed_at: target,

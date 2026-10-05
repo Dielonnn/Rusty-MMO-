@@ -96,9 +96,9 @@ impl Scene {
         );
     }
 
-    /// Like `begin_3d`, for the Sunken Vault.
-    pub fn begin_dungeon(&self) {
-        let t = dungeon_theme();
+    /// Like `begin_3d`, for copy `index` of a dungeon.
+    pub fn begin_dungeon(&self, index: u32) {
+        let t = dungeon_theme(index);
         self.shading.begin(
             &t.light,
             Fog {
@@ -110,7 +110,7 @@ impl Scene {
         );
     }
 
-    /// Draws copy `index` of the Sunken Vault (building it if it's new).
+    /// Draws copy `index` of a dungeon (building it if it's new).
     pub fn draw_dungeon(&self, index: u32) {
         let mut d = self.dungeon.borrow_mut();
         if d.as_ref().is_none_or(|d| d.index != index) {
@@ -121,7 +121,7 @@ impl Scene {
         }
     }
 
-    /// The vault's flickering torches and glowing waystone.
+    /// The dungeon's flickering torches and glowing waystone.
     pub fn draw_dungeon_effects(&self, b: &mut Batch, time: f32) {
         if let Some(d) = self.dungeon.borrow().as_ref() {
             glows(b, &d.lamps, &d.fires, time);

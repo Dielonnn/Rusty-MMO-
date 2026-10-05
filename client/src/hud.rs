@@ -1714,15 +1714,17 @@ fn minimap(game: &Game, layout: &Layout) {
         zone.to_local(vec2(game.pos.x, game.pos.z))
     };
     let place = if dungeon {
-        dungeon::room_at(local).unwrap_or(dungeon::NAME)
+        dungeon::at(game.pos)
+            .map(|d| d.room_at(local).unwrap_or(d.name))
+            .unwrap_or_default()
     } else if zone.in_town(game.pos) {
         zone.town_name()
     } else {
         zone.name()
     };
     text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
-    let t = if dungeon {
-        render::dungeon_theme()
+    let t = if let Some(index) = game.dungeon() {
+        render::dungeon_theme(index)
     } else {
         render::theme(zone)
     };
