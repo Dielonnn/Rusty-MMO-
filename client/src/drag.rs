@@ -41,6 +41,11 @@ pub fn place(win: Win, default: Rect) -> Rect {
     Rect::new(x, y, default.w, default.h)
 }
 
+/// Puts every window back where it opens by default.
+pub fn reset() {
+    OFFSETS.with(|o| o.borrow_mut().clear());
+}
+
 /// The grabbable part of a window's title bar: all but the right end, where
 /// close buttons sit.
 pub fn title_bar(r: Rect) -> Rect {

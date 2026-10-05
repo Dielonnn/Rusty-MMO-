@@ -5,6 +5,31 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.6
+
+Commit: the one titled "v8.6: controls, graphics, interface and gameplay settings".
+
+- **Every Settings tab works now.** "Reset This Tab" puts just the tab
+  you're on back to its defaults.
+- **Controls**: rebind 28 actions: moving, turning, jumping, all eight
+  hotbar keys, targeting, attack, and every window key. Click a key, then
+  press the new one (Esc cancels). Keys that do two things show in red.
+  Enter, /, Esc, Backspace and Shift stay fixed. The arrow keys still run
+  forward and back too. Also: mouse sensitivity, zoom speed and invert
+  mouse.
+- The controls help (H) and window titles show your own keys.
+- **Graphics**: fullscreen, window size, anti-aliasing (off/2x/4x/8x) and
+  VSync (both after a restart), a frame cap (30/60/120/144) and a
+  frames-per-second counter.
+- **Interface**: hide names over players, monsters, or merchants and
+  quest givers (your target's name always shows), turn off damage and
+  healing numbers, change the chat text size, choose whether the controls
+  help shows when you log in, and put every window back where it started.
+- **Gameplay**: turn down party invites or duel challenges automatically.
+- Settings are saved per computer, in the same `client_settings.txt`. Files
+  from v8.3 to v8.5 load fine.
+- Same protocol as v8.2 (18).
+
 ## v8.5
 
 Commit: the one titled "v8.5: music and ambience".

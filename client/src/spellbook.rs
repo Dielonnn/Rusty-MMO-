@@ -74,7 +74,14 @@ pub fn entry_at(game: &Game, mouse: Vec2) -> Option<(AbilityId, u8)> {
 
 pub fn draw(game: &Game, level: u8) {
     let l = layout();
-    hud::window(l.window, &format!("{} Spell Book (Y)", game.class.name()));
+    hud::window(
+        l.window,
+        &format!(
+            "{} Spell Book ({})",
+            game.class.name(),
+            crate::keys::key_label(crate::keys::Action::Spellbook)
+        ),
+    );
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let mut tooltip = None;
     for (r, (id, learned_at)) in l.icons.iter().zip(game.class.spellbook()) {
