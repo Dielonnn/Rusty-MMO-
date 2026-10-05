@@ -75,10 +75,14 @@ struct Press {
 pub struct Windows {
     pub bags: bool,
     pub character: bool,
-    pub crafting: bool,
+    /// The skills window (K), and which skill's tab is showing.
+    pub skills: bool,
+    pub skill: Skill,
     /// The merchant whose wares are shown.
     pub vendor: Option<EntityId>,
     pub talents: bool,
+    /// The spell book (Y).
+    pub spellbook: bool,
     pub sandbox: bool,
     /// The world map covers the screen.
     pub map: bool,
@@ -93,9 +97,10 @@ impl Windows {
     pub fn any(&self) -> bool {
         self.bags
             || self.character
-            || self.crafting
+            || self.skills
             || self.vendor.is_some()
             || self.talents
+            || self.spellbook
             || self.sandbox
             || self.map
             || self.quest_giver.is_some()
@@ -111,6 +116,11 @@ pub struct Game {
     pub entities: HashMap<EntityId, Ent>,
     pub me: SelfView,
     pub target: Option<EntityId>,
+    /// What's on the hotbars. Changes show here at once and are sent to
+    /// the server, which saves them.
+    pub hotbar: Hotbar,
+    /// A spell being dragged from the spell book or a hotbar slot.
+    pub dragging: Option<crate::spellbook::SpellDrag>,
 
     // Our own movement; the server trusts it within reason.
     pub pos: Vec3,
@@ -133,6 +143,10 @@ pub struct Game {
     pub chat: Vec<ChatLine>,
     pub chat_input: Option<String>,
     pub errors: Vec<(String, f32)>,
+    /// Ground a boss has marked, about to be hit.
+    hazards: Vec<HazardView>,
+    /// The vault's teleporter out, once its boss is dead.
+    portal: Option<Vec3>,
     pub floats: Vec<FloatText>,
     pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
@@ -178,6 +192,8 @@ impl Game {
             entities: HashMap::new(),
             me: SelfView::default(),
             target: None,
+            hotbar: class.default_hotbar(),
+            dragging: None,
             pos: Zone::Amberfall.graveyard(),
             yaw: 0.0,
             vel_y: 0.0,
@@ -196,6 +212,8 @@ impl Game {
             chat: Vec::new(),
             chat_input: None,
             errors: Vec::new(),
+            hazards: Vec::new(),
+            portal: None,
             floats: Vec::new(),
             banner: None,
             cast_flash: None,
@@ -273,12 +291,14 @@ impl Game {
             return Outcome::Disconnected(reason);
         }
         let mut layout = Layout::new(&self.windows);
+        let mut draggable = layout.draggable();
         if self.windows.quest_giver.is_some() {
             let level = self.level();
-            layout.quest_window = Some(
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags)
-                    .window,
-            );
+            let giver =
+                crate::quests_ui::giver_layout(self.place, &self.me.quests, level, &self.me.bags)
+                    .window;
+            layout.quest_window = Some(giver);
+            draggable.push((crate::drag::Win::QuestGiver, giver));
         }
         if self.windows.quest_log {
             let l = crate::quests_ui::log_layout(&self.me.quests);
@@ -286,9 +306,10 @@ impl Game {
                 Some(r) => r.combine_with(l.window),
                 None => l.window,
             });
+            draggable.push((crate::drag::Win::QuestLog, l.window));
         }
         layout.party = hud::PartyLayout::new(self, layout.target_frame);
-        if let Some(outcome) = self.input(&layout) {
+        if let Some(outcome) = self.input(&layout, &draggable) {
             self.lock_cursor(false);
             return outcome;
         }
@@ -307,14 +328,14 @@ impl Game {
             self.map_texture = Some((self.zone, crate::panels::map_texture(self.zone)));
         }
         let cam = self.camera();
-        if self.in_dungeon() {
-            clear_background(render::dungeon_theme().fog);
+        if let Some(index) = self.dungeon() {
+            clear_background(render::dungeon_theme(index).fog);
         } else {
             render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
         }
         set_camera(&cam);
-        if self.in_dungeon() {
-            scene.begin_dungeon();
+        if let Some(index) = self.dungeon() {
+            scene.begin_dungeon(index);
         } else {
             scene.begin_3d(self.zone);
         }
@@ -335,10 +356,11 @@ impl Game {
         let arrived = place != self.place;
         self.place = place;
         match place {
-            Place::Dungeon(_) => {
+            Place::Dungeon(index) => {
                 if arrived || self.banner_due {
                     self.banner_due = false;
-                    self.banner = Some((dungeon::NAME.into(), "Dungeon".into(), 0.0));
+                    let name = dungeon::of(index).name;
+                    self.banner = Some((name.into(), "Dungeon".into(), 0.0));
                 }
             }
             Place::Zone(zone) => {
@@ -362,6 +384,14 @@ impl Game {
         matches!(self.place, Place::Dungeon(_))
     }
 
+    /// The dungeon instance you're in, if any.
+    pub fn dungeon(&self) -> Option<u32> {
+        match self.place {
+            Place::Dungeon(i) => Some(i),
+            Place::Zone(_) => None,
+        }
+    }
+
     /// The waystone where you are: in your town, or by the vault's entrance.
     pub fn waystone(&self) -> Vec3 {
         match self.place {
@@ -370,8 +400,10 @@ impl Game {
         }
     }
 
+    /// Next to the waystone, or the vault's teleporter once it's open.
     pub fn near_waystone(&self) -> bool {
-        flat_distance(self.pos, self.waystone()) <= WAYSTONE_RANGE
+        let near = |at: Vec3| flat_distance(self.pos, at) <= WAYSTONE_RANGE;
+        near(self.waystone()) || self.portal.is_some_and(near)
     }
 
     /// Asks to go somewhere from the waystone you're at.
@@ -409,7 +441,7 @@ impl Game {
                 self.yaw = yaw;
                 self.vel_y = 0.0;
             }
-            ServerMsg::Snapshot(snap) => {
+            ServerMsg::Snapshot(mut snap) => {
                 let first = self
                     .my_id
                     .is_some_and(|id| !self.entities.contains_key(&id));
@@ -436,8 +468,15 @@ impl Game {
                     }
                 }
                 self.entities.retain(|id, _| seen.contains(id));
+                self.hazards = std::mem::take(&mut snap.hazards);
+                self.portal = snap.portal;
                 if snap.me.talents != self.me.talents {
                     self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
+                }
+                // Take the server's hotbars when they change there (on
+                // entering the world, or a spell learned onto them).
+                if snap.me.hotbar != self.me.hotbar {
+                    self.hotbar = snap.me.hotbar;
                 }
                 self.me = snap.me;
                 if !self.me.sandbox {
@@ -781,16 +820,21 @@ impl Game {
     }
 
     pub fn use_slot(&mut self, slot: usize) {
-        let ability = self.class.abilities()[slot];
+        if let Some(ability) = self.hotbar[slot] {
+            self.use_ability(ability);
+        }
+    }
+
+    pub fn use_ability(&mut self, ability: AbilityId) {
         if self.my_view().is_some_and(|v| v.dead) {
             self.error("You are dead.");
             return;
         }
-        if UNLOCK_LEVELS[slot] > self.level() {
+        let learned_at = self.class.unlock_level(ability).unwrap_or(1);
+        if learned_at > self.level() {
             self.error(&format!(
-                "You learn {} at level {}.",
+                "You learn {} at level {learned_at}.",
                 shared::data::ability(ability).name,
-                UNLOCK_LEVELS[slot]
             ));
             return;
         }
@@ -856,7 +900,11 @@ impl Game {
             .map(|(_, id)| id)
     }
 
-    fn input(&mut self, layout: &Layout) -> Option<Outcome> {
+    fn input(
+        &mut self,
+        layout: &Layout,
+        draggable: &[(crate::drag::Win, Rect)],
+    ) -> Option<Outcome> {
         let (mx, my) = mouse_position();
         let mouse = vec2(mx, my);
         let delta = mouse - self.last_mouse;
@@ -921,11 +969,27 @@ impl Game {
             return None;
         }
 
-        // Clicks on the interface.
+        // Clicks on the interface. Grabbing a window's title bar drags it
+        // instead.
         let over_ui = !self.cursor_locked && layout.blocks(mouse, self.target.is_some(), dead);
-        if (left_pressed || right_pressed) && over_ui {
+        let grabbed = left_pressed
+            && over_ui
+            && draggable
+                .iter()
+                .rev()
+                .find(|(_, r)| r.contains(mouse))
+                .is_some_and(|(win, r)| {
+                    let on_bar = crate::drag::title_bar(*r).contains(mouse);
+                    if on_bar {
+                        crate::drag::grab(*win, mouse);
+                    }
+                    on_bar
+                });
+        crate::drag::update(mouse, is_mouse_button_down(MouseButton::Left));
+        if (left_pressed || right_pressed) && over_ui && !grabbed {
             self.click_ui(layout, mouse, left_pressed);
         }
+        self.drag_spell(layout, mouse);
 
         // Mouse buttons in the world: drag to look around (the cursor locks
         // while dragging), click to target.
@@ -974,6 +1038,8 @@ impl Game {
         if typing {
             return None;
         }
+        // The bottom hotbar, or with Shift the top one.
+        let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
         for (slot, key) in [
             KeyCode::Key1,
             KeyCode::Key2,
@@ -981,13 +1047,14 @@ impl Game {
             KeyCode::Key4,
             KeyCode::Key5,
             KeyCode::Key6,
+            KeyCode::Q,
             KeyCode::E,
         ]
         .into_iter()
         .enumerate()
         {
             if is_key_pressed(key) {
-                self.use_slot(slot);
+                self.use_slot(if shift { slot + BAR_SLOTS } else { slot });
             }
         }
         if is_key_pressed(KeyCode::Tab) {
@@ -995,9 +1062,6 @@ impl Game {
         }
         if is_key_pressed(KeyCode::F1) {
             self.set_target(self.my_id);
-        }
-        if is_key_pressed(KeyCode::Q) {
-            self.error("Q no longer strafes: use A and D. E is your seventh ability.");
         }
         if is_key_pressed(KeyCode::T) {
             if self.me.auto_attacking {
@@ -1017,7 +1081,7 @@ impl Game {
             self.windows.character = !self.windows.character;
         }
         if is_key_pressed(KeyCode::K) {
-            self.windows.crafting = !self.windows.crafting;
+            self.windows.skills = !self.windows.skills;
         }
         if is_key_pressed(KeyCode::M) {
             self.windows.map = !self.windows.map;
@@ -1034,6 +1098,9 @@ impl Game {
         }
         if is_key_pressed(KeyCode::N) {
             self.windows.talents = !self.windows.talents;
+        }
+        if is_key_pressed(KeyCode::Y) {
+            self.windows.spellbook = !self.windows.spellbook;
         }
         if is_key_pressed(KeyCode::P) {
             if self.me.sandbox {
@@ -1099,7 +1166,7 @@ impl Game {
             && left
         {
             let l =
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags);
+                crate::quests_ui::giver_layout(self.place, &self.me.quests, level, &self.me.bags);
             if l.close.contains(mouse) {
                 self.windows.quest_giver = None;
                 return;
@@ -1151,8 +1218,31 @@ impl Game {
             }
             return;
         }
+        if left && self.windows.spellbook && layout.spellbook.is_some_and(|r| r.contains(mouse)) {
+            // Pick a spell up from the book.
+            if let Some((ability, _)) = crate::spellbook::entry_at(self, mouse) {
+                self.dragging = Some(crate::spellbook::SpellDrag {
+                    ability,
+                    from: None,
+                    start: mouse,
+                    moved: false,
+                });
+            }
+            return;
+        }
         if let Some(slot) = layout.hotbar.iter().position(|r| r.contains(mouse)) {
-            self.use_slot(slot);
+            match self.hotbar[slot] {
+                // With the spell book open, slots can be dragged around.
+                Some(ability) if left && self.windows.spellbook => {
+                    self.dragging = Some(crate::spellbook::SpellDrag {
+                        ability,
+                        from: Some(slot),
+                        start: mouse,
+                        moved: false,
+                    });
+                }
+                _ => self.use_slot(slot),
+            }
         } else if left && layout.player_frame.contains(mouse) {
             self.set_target(self.my_id);
         } else if left
@@ -1173,10 +1263,10 @@ impl Game {
                     self.send(ClientMsg::Sell { merchant, slot: i });
                 } else if matches!(kind, ItemKind::Armor { .. } | ItemKind::Weapon { .. }) {
                     self.send(ClientMsg::Equip(i));
-                } else if matches!(kind, ItemKind::Potion { .. }) {
+                } else if matches!(kind, ItemKind::Potion { .. } | ItemKind::Food { .. }) {
                     self.send(ClientMsg::UseItem(i));
                 } else if !left {
-                    self.error("You can't wear that. Use it for crafting (K).");
+                    self.error("You can't wear that. Use it in your skills (K).");
                 }
             }
         } else if let Some(i) = layout
@@ -1194,12 +1284,19 @@ impl Game {
                 });
             }
         } else if let Some(i) = layout
+            .skill_tabs
+            .iter()
+            .position(|r| self.windows.skills && r.contains(mouse))
+        {
+            self.windows.skill = Skill::ALL[i];
+        } else if let Some(i) = layout
             .craft_buttons
             .iter()
-            .position(|r| self.windows.crafting && r.contains(mouse))
+            .position(|r| self.windows.skills && r.contains(mouse))
             && left
+            && let Some((recipe, _)) = self.windows.skill.recipes().nth(i)
         {
-            self.send(ClientMsg::Craft(i));
+            self.send(ClientMsg::Craft(recipe));
         } else if let Some(merchant) = self.windows.vendor
             && let Some(i) = layout.vendor_buttons.iter().position(|r| r.contains(mouse))
         {
@@ -1207,6 +1304,30 @@ impl Game {
                 merchant,
                 item: MERCHANT_GOODS[i],
             });
+        }
+    }
+
+    /// Carries a picked-up spell with the mouse and drops it where the
+    /// button is let go. A click that never moved uses the spell instead.
+    fn drag_spell(&mut self, layout: &Layout, mouse: Vec2) {
+        let Some(mut d) = self.dragging else { return };
+        if d.start.distance(mouse) > 6.0 {
+            d.moved = true;
+        }
+        if is_mouse_button_down(MouseButton::Left) {
+            self.dragging = Some(d);
+            return;
+        }
+        self.dragging = None;
+        if !d.moved {
+            self.use_ability(d.ability);
+            return;
+        }
+        let to = layout.hotbar.iter().position(|r| r.contains(mouse));
+        let bar = crate::spellbook::drop(&self.hotbar, d, to);
+        if bar != self.hotbar {
+            self.hotbar = bar;
+            self.send(ClientMsg::SetHotbar(bar));
         }
     }
 
@@ -1480,6 +1601,32 @@ impl Game {
         if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
             let color = hud::reaction_color(&t.view, self.class);
             b.ground_ring(t.pos, render::model_radius(t.view.kind), 0.14, color);
+        }
+        // Marked ground: a red circle, filling in from the middle until it
+        // lands.
+        for h in &self.hazards {
+            let pulse = 0.75 + 0.25 * (self.time * 8.0).sin();
+            let edge = Color::new(1.0, 0.15, 0.1, 0.9 * pulse);
+            b.ground_ring(h.pos, h.radius, 0.3, edge);
+            let filled = (1.0 - h.remaining / h.total.max(0.01)).clamp(0.0, 1.0);
+            let fill = Color::new(1.0, 0.3, 0.1, 0.55);
+            let mut r = 0.35;
+            while r < h.radius * filled {
+                b.ground_ring(h.pos, r, 0.35, fill);
+                r += 0.7;
+            }
+        }
+        // The teleporter: a glowing blue swirl over a ring on the floor.
+        if let Some(at) = self.portal {
+            let blue = Color::new(0.35, 0.7, 1.0, 0.9);
+            b.ground_ring(at, 1.6, 0.25, blue);
+            for i in 0..6 {
+                let k = (self.time * 0.6 + i as f32 / 6.0).fract();
+                let ring = Color::new(0.45, 0.8, 1.0, 0.8 * (1.0 - k));
+                b.air_ring(at + Vec3::Y * (0.2 + k * 3.0), 1.4 - k * 0.6, 0.12, ring);
+            }
+            let bob = 1.6 + 0.15 * (self.time * 2.0).sin();
+            b.glow_sphere(at + Vec3::Y * bob, 0.35, Color::new(0.7, 0.9, 1.0, 1.0));
         }
         for e in self.entities.values() {
             let mine = Some(e.view.id) == self.my_id;

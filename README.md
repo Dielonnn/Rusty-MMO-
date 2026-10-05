@@ -91,15 +91,18 @@ title and on the login screen.
 | Left click | Target |
 | Right click | Attack an enemy, loot a sparkling corpse, trade with a merchant, or talk to a quest giver |
 | `F1` | Target yourself |
-| `1`-`6`, `E`, or click the action bar | Use an ability |
+| `1`-`6`, `Q`, `E`, or click the bottom hotbar | Use an ability |
+| `Shift` + `1`-`6`, `Q`, `E`, or click the top hotbar | Use an ability on the top hotbar |
+| `Y` | Spell book: drag spells onto the hotbars |
 | `T` | Start / stop auto attack |
-| `B` / `C` / `K` | Backpack / character / crafting |
+| `B` / `C` / `K` | Backpack / character / skills (crafting and cooking) |
 | `N` | Talents |
 | `L` | Quest log |
 | `M` | World map |
-| `F` | Use a waystone (travel to another town or the Sunken Vault) |
+| `F` | Use a waystone (travel to another town or a dungeon) |
 | `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
+| Drag a window's title bar | Move the window |
 | `Enter` | Chat (`/help` lists the chat commands, `/who` lists who's online) |
 | `H` | Show / hide the controls |
 
@@ -116,17 +119,38 @@ full experience for their level and quest credit, and members take turns
 looting (10 seconds each, then it's open to the party). `/p MESSAGE` is party
 chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 
-### Waystones and the Sunken Vault
+### Waystones and dungeons
 
 Every town has a waystone beside its square. Stand next to it and press `F`
 to travel to any other starting area's town, or, from level 8, into the
 Sunken Vault: a dungeon of flooded halls, packs of hounds, crawlers and
 drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King,
 who sometimes drops the Crown of the Sunken King, a blue helm.
+The King is a boss: he marks red circles under the players fighting him, twice
+in a row (step out before each one fills), and casts Drowning Grasp and, when hurt, Call of the
+Deep, which a kick or other interrupt stops. Every enemy in the vault rolls
+gear for each player separately, so only you can loot your own gear.
+Once he's dead, a teleporter opens in the throne room that works like the
+waystone at the entrance.
+Dungeon Master Joe, by the vault's entrance, has a quest (from level 8) to
+kill him, which rewards the Tidebreaker Trident, a blue weapon.
 Your party shares one copy of the vault; anyone else gets their own. Mobs you
 kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
 inside and you come back at the vault's entrance; the waystone there takes you
 back to town. Leaving your party sends you out of its vault.
+
+Two more dungeons work the same way, each with Dungeon Master Joe and his
+quest at the entrance:
+
+- **The Cinderforge** (level 15+): an orc war camp in a volcano. Its boss,
+  Warlord Gorrak Ashfist, rains magma on everyone fighting him, casts Molten
+  Blast and Flame Wave (interrupt them), and rages below 30% health.
+- **Frosthowl Cavern** (level 20+): snow wolves and yetis in an ice cave. Its
+  boss, Hrimja the Frostmother, brings an Avalanche down three times in a
+  row, casts Frozen Tomb and Glacial Howl (interrupt them), and calls three
+  snow wolves at half health.
+
+A party can have a copy of each dungeon open at once.
 
 ### Combat
 
@@ -171,7 +195,8 @@ has its own look, buildings, creatures and lighting.
 
 Every class starts with one ability and learns the rest at levels 2, 4, 6, 8
 and 10. The seventh ability, on `E`, is learned at level 3 and is usually a
-way to move: Charge, Blink, Disengage and so on.
+way to move: Charge, Blink, Disengage and so on. Five more spells come at
+levels 12, 14, 16, 18 and 20 (see below).
 
 | Class | Resource | Abilities (keys 1-6, then E) |
 | --- | --- | --- |
@@ -194,6 +219,36 @@ back quickly. Mana regenerates quickly once you haven't spent any for 5
 seconds. Health regenerates out of combat. Rogues and Monks build combo points
 and spend them on Eviscerate or Blackout Kick. Backstab only works from behind.
 The Warrior is now the Barbarian; old Warrior characters load as Barbarians.
+
+### Spell book and hotbars
+
+There are two hotbars: the bottom one on `1`-`6`, `Q` and `E`, and one above
+it on the same keys with `Shift`. Press `Y` to open your spell book, which
+lists every ability your class learns and the level it comes at. With the
+book open, drag a spell onto any hotbar slot, drag slots onto each other to
+swap them, or drag one off the bars to take it off. Clicking a spell in the
+book uses it. Your layout is saved with your character on the server.
+
+Out of the box, the core abilities sit where they always were (`1`-`6` and
+`E`), the level 12 spell is on `Q` and the level 14-20 spells are on
+`Shift`+`1`-`4`. If you've rearranged your bars, a newly learned spell goes
+into the first empty slot.
+
+| Class | Spells at levels 12, 14, 16, 18, 20 |
+| --- | --- |
+| Barbarian | Bloodthirst, Cleave, Berserker Rage, Execute, Bladestorm |
+| Fighter | Revenge, Challenging Shout, Shockwave, Unbreakable, Avatar |
+| Paladin | Flash of Light, Divine Storm, Avenger's Shield, Blessing of Protection, Avenging Wrath |
+| Monk | Flurry of Blows, Paralysis, Expel Harm, Whirling Dragon Punch, Strike of the Windlord |
+| Rogue | Hemorrhage, Fan of Knives, Shadow Dash, Kidney Shot, Marked for Death |
+| Ranger | Arcane Shot, Aimed Shot, Freezing Trap, Explosive Shot, Barrage |
+| Artificer | Flamethrower, Mending Drone, Lightning Coil, Force Field, Doomsday Cannon |
+| Bard | Shattering Note, Cure Wounds, Dissonant Chord, Heroism, Power Word: Heal |
+| Cleric | Mind Blast, Greater Heal, Psychic Scream, Guardian Spirit, Divine Hymn |
+| Druid | Regrowth, Insect Swarm, Hurricane, Barkskin, Force of Nature |
+| Mage | Cone of Cold, Polymorph, Pyroblast, Ice Block, Flamestrike |
+| Sorcerer | Scorching Ray, Witch Bolt, Counterspell, Globe of Invulnerability, Chain Lightning |
+| Warlock | Immolate, Fear, Death Coil, Rain of Fire, Summon Infernal |
 
 ### Quests
 
@@ -232,7 +287,9 @@ loot (everyone who fought it may loot it; the first to do so gets it).
 - Boars (and some wolves) drop **Light Leather**
 - Bandits (and the other humanoids) drop **Linen Cloth**
 - Bandits, raiders and the other fighters also drop **Iron Scrap**
-- Each starting area's elite drops an **Ancient Core**
+- Boars drop **Boar Meat**, and crabs and other water mobs drop **Raw Fish**
+- Mystics, shamans and the other casters sometimes drop a **Healing Potion**
+- Each starting area's elite drops an **Ancient Core** and 5 **Iron Scrap**
 - Any mob may drop a piece of **green** gear (rarely; elites usually do):
   helms, chests, gloves, legs and boots, each sturdy (armor and stamina) or
   arcane (power). Greens are better than crafted leather and linen, but not
@@ -241,7 +298,13 @@ loot (everyone who fought it may loot it; the first to do so gets it).
   Wolfbite Axe, Ironwood Mace, Shadowfang Dagger, Ashwood Longbow, Emberwand
   and Moonwhisper Staff
 
-Open crafting with `K` to turn materials into gear: a leather cap, vest,
+Press `K` for your skills. Each skill has a tab: **Crafting** turns
+materials into gear, and **Cooking** turns Boar Meat into Roasted Boar and Raw
+Fish into Cooked Fish. Right-click cooked food in your backpack to eat it: it
+restores three quarters of what a Healing Potion does, and shares the potion
+cooldown.
+
+Crafting makes a leather cap, vest,
 gloves, pants and boots; a linen hood, robe, gloves, pants and sandals; an
 Iron Sword, Hunting Bow and Apprentice Staff; and the rare Heartstone
 Chestguard and Heartstone Greatsword. Click gear in your backpack to wear or
@@ -270,7 +333,9 @@ its own town layout, and its own places for fields, camps and the elite's
 ruins. Mob levels rise the further you go from town: hunters and grazers
 (levels 1-8) roam the open, two camps of fighters and casters (4-5 and 6-8) and
 a fighters' camp (8-9) sit further out, and the area's **elite** (10) waits in
-its ruins near the edge.
+its ruins near the edge. Areas with lakes have water mobs (levels 3-5) in the
+shallows: Mudsnap Crabs in Amberfall, Glimmershell
+Crabs in Silverbough and Bog Lurkers in Witherwood.
 
 Press `M` for the world map of your area, inked on parchment: the town, every
 camp and its levels (tents for camps, paw prints for beasts, a skull for the
@@ -280,7 +345,7 @@ the corner turns with your camera and shows N, E, S and W around its edge. Your
 coordinates (relative to the town) are shown under the minimap.
 
 Killing a mob gives experience. Mobs far below your level give none, and
-everyone who fought a mob shares the kill. The level cap is 10. Mob level
+everyone who fought a mob shares the kill. The level cap is 20. Mob level
 numbers are colored by difficulty: grey (trivial), green, yellow, orange and
 red (deadly). Bandits call nearby friends for help; animals fight alone.
 

@@ -37,6 +37,137 @@ Commit: the one titled "v8.0: Relaxed idle stances".
   KayKit skeletons rebuilt on the same skeleton, as warriors, rogues, mages
   and minions with their own gear. Beasts and giants are still built from
   shapes until v9.0
+
+## v7.14
+
+Commit: the one titled "v7.14: the Cinderforge and Frosthowl Cavern dungeons".
+
+- **Two new dungeons**, built like the Sunken Vault: a copy of your own for
+  you or your party, Dungeon Master Joe at the entrance, an elite partway
+  through, a boss at the end, gear rolled for each player, and a teleporter
+  out once the boss is dead. The waystone lists all three dungeons.
+- **The Cinderforge (level 15+)**: an orc war camp inside a volcano, all
+  black basalt and glowing lava cracks. Cinderforge Grunts, Firecallers and
+  Ash Hounds (levels 15-16), and a Molten Colossus in the forge.
+  - **Boss: Warlord Gorrak Ashfist (level 16).** Magma Rain marks a wide
+    circle under every player; Molten Blast is a heavy hit on his target and
+    Flame Wave burns the whole party (interrupt both); below 30% health he
+    flies into a Bloodrage and hits half again as hard.
+  - Drops the **Ashfist Gauntlets** (blue gloves, 25%). Joe's quest **The
+    Molten Warlord** rewards the **Emberfall Greataxe** (blue), 2400
+    experience and 1 gold.
+- **Frosthowl Cavern (level 20+)**: an ice cave of snow and blue crystals.
+  Packs of Frostfang Snow Wolves and Cavern Yetis (levels 20-21), and an
+  Elder Yeti in the hollow.
+  - **Boss: Hrimja the Frostmother (level 21).** Avalanche lands three times
+    in a row, each one where you're standing when the last hits; Frozen Tomb
+    hits and roots her target for 4 seconds and Glacial Howl hits and slows
+    the whole party (interrupt both); at half health she calls three snow
+    wolves to her side.
+  - Drops the **Rimeheart Chestguard** (blue chest, 25%). Joe's quest **The
+    Frostmother** rewards the **Hrimfang Glaive** (blue), 4000 experience
+    and 2 gold.
+- Every number above is a placeholder until it's been played.
+- Protocol version 15 (an older client can't join a v7.14 server).
+## v7.13
+
+Commit: the one titled "v7.13: level 20, spell book, two hotbars".
+
+- **Level cap 20**: characters now level up to 20. Levels 10-19 take more
+  experience: 1000 to reach 11, then 200 more each level (2800 to reach 20).
+  These are placeholder numbers.
+- **Five new spells per class**, learned at levels 12, 14, 16, 18 and 20. Every
+  class gets its own (Bloodthirst and Bladestorm for the Barbarian, Polymorph
+  and Flamestrike for the Mage, Fear and Summon Infernal for the Warlock, and
+  so on; the README lists them all). Damage, healing and cooldowns are
+  placeholders.
+- **Spell book (`Y`)**: lists every ability your class learns, the level it
+  comes at, and whether it's on your hotbars. Hover a spell for its details;
+  click one to use it.
+- **Two hotbars**: the bottom bar now has `Q` as well as `1`-`6` and `E`, and a
+  second bar above it uses the same keys with `Shift`.
+- **Drag and drop**: with the spell book open, drag spells from the book onto
+  any hotbar slot, drag slots onto each other to swap them, or drag one off
+  the bars to take it off. Your layout is saved with your character. Old
+  characters start with the usual layout (`1`-`6` and `E` as before, the new
+  spells on `Q` and `Shift`+`1`-`4`).
+
+## v7.11
+
+Commit: the one titled "v7.11: boss teleporter, spells hit on impact, tougher Sunken Vault, Dungeon Master Joe".
+
+- **Teleporter after the boss**: when the Sunken King dies, a teleporter opens
+  in the throne room. Stand on it and press `F` to travel to any town, just
+  like the waystone at the entrance.
+- **Spells hit when they land**: bolts, arrows and other missiles now do their
+  damage (and healing, and debuffs) when they reach the target, not the
+  moment they're cast.
+- **Tougher Sunken Vault**: every enemy in the vault is one level higher
+  (hounds 10, crawlers and the first cultists 10-11, the Stone Warden, the
+  chapel and the Sunken King 11), with health and damage to match.
+- **Tidal Crash comes twice**: the Sunken King's red circles now land twice in
+  a row, the second one wherever you're standing when the first hits, and the
+  whole mechanic is 15% faster (about every 10.4 seconds, with 2.2 seconds to
+  step out).
+- **New quest, The Sunken King**: Dungeon Master Joe, a human quest giver,
+  now stands at the entrance of every Sunken Vault. From level 8 he sends you
+  to kill Morvane. The reward is the **Tidebreaker Trident**, a new blue
+  weapon (8 damage, 7 stamina, 4 power), plus 1200 experience and 50 silver.
+  Finished quests now shrink to one line in a quest giver's window.
+- The goblin quest giver in Grubdeep is now called Issagoblin.
+- Protocol version 13 (an older client can't join a v7.11 server).
+
+## v7.10
+
+Commit: the one titled "v7.10: casters drop potions, elites and the Sunken King drop materials".
+
+- **Casters drop potions**: mystics, shamans, tricksters, necromancers and
+  the Drowned Adept drop a Healing Potion 35% of the time
+- **Elites drop Iron Scrap**: every zone elite and the Stone Warden always
+  drop 5 Iron Scrap, on top of their Ancient Core and Linen Cloth
+- **The Sunken King drops materials**: Morvane always drops 3 to 5 Iron
+  Scrap and 3 to 5 Light Leather, on top of the rest of his loot
+
+## v7.9.5
+
+Commit: the one titled "v7.9.5: movable windows, the Sunken King boss fight, personal dungeon loot".
+
+- **Movable windows**: drag the Backpack, Character, Skills, Talents, Sandbox,
+  Travel, vendor and quest windows around by their title bars. They stay where
+  you leave them until you close the game.
+- **The Sunken King is a Boss**: his nameplate says "Boss" instead of "Elite",
+  and he has a fight of his own:
+  - **Tidal Crash**: every 12 seconds a red circle marks the ground under each
+    player fighting him and fills up over 2.5 seconds. Step out before it's
+    full or take a heavy hit.
+  - **Drowning Grasp**: a 2.5-second cast that hits his target for 28-34.
+  - **Call of the Deep**: when he's below 90% health, a 3-second cast that heals
+    him for 140-145.
+  - Both spells can be interrupted.
+- **Personal dungeon loot**: in the Sunken Vault, every enemy rolls gear for
+  each player in the group separately. Only you can loot your own gear;
+  materials and coins are still shared as before.
+- Protocol version 12 (an older client can't join a v7.9.5 server).
+
+## v7.8
+
+Commit: the one titled "v7.8: water mobs in the lakes".
+
+- **Water mobs**: areas with lakes now have a pack of four aggressive water
+  mobs (levels 3-5) in the shallows of up to three lakes: **Mudsnap Crabs** in Amberfall, **Glimmershell Crabs** in Silverbough
+  and **Bog Lurkers** in Witherwood. They fight like the area's wolves and
+  drop money and sometimes Light Leather. Scorchsand and Frostcog have no
+  lakes, and Grubdeep's one pool is too small for a pack
+- Sandbox mode can summon the area's water mob
+- **Meat and fish**: boars drop **Boar Meat** (50%) and water mobs drop
+  **Raw Fish** (60%)
+- **Cooking**: a new skill. `K` now opens a **Skills** window with a tab per
+  skill: Crafting (as before) and Cooking. Cook Boar Meat into **Roasted
+  Boar** and Raw Fish into **Cooked Fish**. Right-click cooked food to eat
+  it: it restores 26% of your health (three quarters of a Healing Potion)
+  and shares the potion cooldown
+- Old clients can't join a v7.8 server (protocol 11)
+
 ## v7.6
 
 Commit: the one titled "v7.6: Waystones and the Sunken Vault".

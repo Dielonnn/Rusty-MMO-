@@ -1,6 +1,7 @@
 // Release builds on Windows shouldn't open a console window next to the game.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod drag;
 mod game;
 mod gfx;
 mod hud;
@@ -9,6 +10,7 @@ mod models;
 mod panels;
 mod quests_ui;
 mod render;
+mod spellbook;
 mod vfx;
 mod world;
 
@@ -21,7 +23,7 @@ use render::Scene;
 fn window_conf() -> macroquad::conf::Conf {
     macroquad::conf::Conf {
         miniquad_conf: miniquad::conf::Conf {
-            window_title: format!("Rusty MMO {}", shared::VERSION),
+            window_title: format!("Rusty MMO {}", shared::version()),
             window_width: 1440,
             window_height: 900,
             sample_count: 4,

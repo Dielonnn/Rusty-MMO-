@@ -26,6 +26,10 @@ pub struct Character {
     pub talents: Ranks,
     #[serde(default)]
     pub quests: QuestLog,
+    /// Rearranged hotbars; `None` (and every save from before v7.13) means
+    /// the class's default layout.
+    #[serde(default)]
+    pub hotbar: Option<Hotbar>,
 }
 
 impl Character {
@@ -47,6 +51,7 @@ impl Character {
             weapon: None,
             talents: [0; TALENTS],
             quests: QuestLog::default(),
+            hotbar: None,
         }
     }
 
@@ -65,6 +70,7 @@ impl Character {
     pub fn sanitize(&mut self) {
         self.level = self.level.clamp(1, MAX_LEVEL);
         self.talents = talents::sanitize(&self.talents, self.level);
+        self.hotbar = self.hotbar.map(|bar| self.class.sanitize_hotbar(&bar));
         self.quests.sanitize();
         self.appearance = self.appearance.clamped();
         self.bags.resize(BAG_SLOTS, None);

@@ -3,9 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spells;
 use crate::world::Zone;
 
-pub const MAX_LEVEL: u8 = 10;
+pub const MAX_LEVEL: u8 = 20;
 /// The global cooldown every ability triggers.
 pub const GCD: f32 = 1.5;
 pub const MELEE_RANGE: f32 = 4.0;
@@ -20,12 +21,23 @@ pub const MANA_REGEN_DELAY: f32 = 5.0;
 /// Energy comes back this fast, in or out of combat.
 pub const ENERGY_PER_SECOND: f32 = 10.0;
 pub const MAX_COMBO_POINTS: u8 = 5;
-/// Abilities per class: keys 1-6 and E.
-pub const ACTION_BAR_SLOTS: usize = 7;
-/// The action bar slot bound to the E key.
-pub const E_SLOT: usize = 6;
-/// The level each action bar slot's ability is learned at (the last is E).
-pub const UNLOCK_LEVELS: [u8; ACTION_BAR_SLOTS] = [1, 2, 4, 6, 8, 10, 3];
+/// Each class's first abilities, learned by level 10 (originally keys 1-6
+/// and E).
+pub const CORE_ABILITIES: usize = 7;
+/// The level each core ability is learned at (the last was on E).
+pub const UNLOCK_LEVELS: [u8; CORE_ABILITIES] = [1, 2, 4, 6, 8, 10, 3];
+/// Everything in a class's spell book: the core abilities, then the spells
+/// learned at levels 12-20.
+pub const SPELLBOOK_SIZE: usize = CORE_ABILITIES + spells::PER_CLASS;
+/// Slots on one hotbar: keys 1-6, Q and E.
+pub const BAR_SLOTS: usize = 8;
+/// Both hotbars: the bottom one (1-6, Q, E), then the top one (the same keys
+/// with Shift).
+pub const HOTBAR_SLOTS: usize = 2 * BAR_SLOTS;
+/// What's on each hotbar slot.
+pub type Hotbar = [Option<AbilityId>; HOTBAR_SLOTS];
+/// The key each slot of a hotbar is bound to.
+pub const BAR_KEYS: [&str; BAR_SLOTS] = ["1", "2", "3", "4", "5", "6", "Q", "E"];
 pub const BAG_SLOTS: usize = 20;
 /// How close you have to be to loot a corpse.
 pub const LOOT_RANGE: f32 = 6.0;
@@ -311,9 +323,9 @@ impl Class {
         self.auto_attack().range <= MELEE_RANGE
     }
 
-    /// The class's action bar: keys 1-6, then E. Slot `i` is learned at
-    /// `UNLOCK_LEVELS[i]`.
-    pub fn abilities(self) -> [AbilityId; ACTION_BAR_SLOTS] {
+    /// The class's core abilities: originally keys 1-6, then E. Ability `i`
+    /// is learned at `UNLOCK_LEVELS[i]`.
+    pub fn abilities(self) -> [AbilityId; CORE_ABILITIES] {
         use ids::*;
         match self {
             Class::Barbarian => [
@@ -436,21 +448,95 @@ impl Class {
         }
     }
 
+    /// Where this class's block of level 12-20 spells sits in
+    /// `spells::SPELLS`. Never reorder: the ids are saved on hotbars.
+    fn spell_block(self) -> u16 {
+        match self {
+            Class::Barbarian => 0,
+            Class::Fighter => 1,
+            Class::Paladin => 2,
+            Class::Monk => 3,
+            Class::Rogue => 4,
+            Class::Ranger => 5,
+            Class::Artificer => 6,
+            Class::Bard => 7,
+            Class::Cleric => 8,
+            Class::Druid => 9,
+            Class::Mage => 10,
+            Class::Sorcerer => 11,
+            Class::Warlock => 12,
+        }
+    }
+
+    /// The spells learned at `spells::LEVELS` (12, 14, 16, 18 and 20).
+    pub fn spells(self) -> [AbilityId; spells::PER_CLASS] {
+        let first = FIRST_SPELL + self.spell_block() * spells::PER_CLASS as u16;
+        std::array::from_fn(|i| AbilityId(first + i as u16))
+    }
+
+    /// Every ability the class ever learns and the level it's learned at,
+    /// lowest level first: the spell book.
+    pub fn spellbook(self) -> [(AbilityId, u8); SPELLBOOK_SIZE] {
+        let mut book = [(AbilityId(0), 0); SPELLBOOK_SIZE];
+        let all = self
+            .abilities()
+            .into_iter()
+            .zip(UNLOCK_LEVELS)
+            .chain(self.spells().into_iter().zip(spells::LEVELS));
+        for (slot, entry) in book.iter_mut().zip(all) {
+            *slot = entry;
+        }
+        book.sort_by_key(|(_, level)| *level);
+        book
+    }
+
     /// The level this class learns an ability at, if it ever does.
     pub fn unlock_level(self, ability: AbilityId) -> Option<u8> {
-        self.abilities()
-            .iter()
-            .position(|a| *a == ability)
-            .map(|i| UNLOCK_LEVELS[i])
+        self.spellbook()
+            .into_iter()
+            .find(|(a, _)| *a == ability)
+            .map(|(_, l)| l)
     }
 
     /// Abilities known at a level.
     pub fn known(self, level: u8) -> impl Iterator<Item = AbilityId> {
-        self.abilities()
+        self.spellbook()
             .into_iter()
-            .zip(UNLOCK_LEVELS)
             .filter(move |(_, l)| *l <= level)
             .map(|(a, _)| a)
+    }
+
+    /// The hotbars of a character who hasn't rearranged them: the core
+    /// abilities where they always were (1-6 and E), the level 12 spell on
+    /// Q and the later ones on Shift+1-4.
+    pub fn default_hotbar(self) -> Hotbar {
+        let core = self.abilities();
+        let new = self.spells();
+        let mut bar = [None; HOTBAR_SLOTS];
+        for (slot, id) in bar.iter_mut().zip(&core[..6]) {
+            *slot = Some(*id);
+        }
+        bar[6] = Some(new[0]);
+        bar[7] = Some(core[6]);
+        for (slot, id) in bar[BAR_SLOTS..].iter_mut().zip(&new[1..]) {
+            *slot = Some(*id);
+        }
+        bar
+    }
+
+    /// A hotbar with anything that isn't this class's, and any ability that
+    /// appears twice, taken off.
+    pub fn sanitize_hotbar(self, bar: &Hotbar) -> Hotbar {
+        let mut out = [None; HOTBAR_SLOTS];
+        for (i, id) in bar.iter().enumerate() {
+            if let Some(id) = *id
+                && self.unlock_level(id).is_some()
+                && !out.contains(&Some(id))
+            {
+                out[i] = Some(id);
+            }
+        }
+        out
     }
 
     /// Rogues and monks build points to spend on finishers.
@@ -467,11 +553,14 @@ pub fn level_scale(level: u8) -> f32 {
 }
 
 /// Experience needed to go from `level` to the next one. Zero at the cap.
+/// From level 10 on it climbs faster (placeholder numbers).
 pub fn xp_to_next(level: u8) -> u32 {
     if level >= MAX_LEVEL {
         0
-    } else {
+    } else if level < 10 {
         100 + 85 * (level as u32 - 1)
+    } else {
+        1000 + 200 * (level as u32 - 10)
     }
 }
 
@@ -640,7 +729,23 @@ pub struct Ability {
     pub from_behind: bool,
 }
 
+/// How fast a spell's missile flies, in yards per second.
+pub const MISSILE_SPEED: f32 = 32.0;
+
 impl Ability {
+    /// How fast this ability's missile flies when `class` (`None` for a mob)
+    /// uses it. Arrows and bullets are quicker than spells; its damage lands
+    /// when the missile does.
+    pub fn missile_speed(&self, class: Option<Class>) -> f32 {
+        let fast = self.school == School::Physical
+            && matches!(class, Some(Class::Ranger | Class::Artificer) | None);
+        if fast {
+            MISSILE_SPEED * 1.6
+        } else {
+            MISSILE_SPEED
+        }
+    }
+
     pub fn needs_combo_points(&self) -> bool {
         self.effects
             .iter()
@@ -655,8 +760,23 @@ impl Ability {
     }
 }
 
+/// The id of the first level 12-20 spell; the original abilities come
+/// before it.
+pub const FIRST_SPELL: u16 = 98;
+
 pub fn ability(id: AbilityId) -> &'static Ability {
-    &ABILITIES[id.0 as usize]
+    try_ability(id).expect("unknown ability")
+}
+
+/// An ability, if the id is one.
+pub fn try_ability(id: AbilityId) -> Option<&'static Ability> {
+    if let Some(i) = id.0.checked_sub(FIRST_BOSS_SPELL) {
+        return BOSS_SPELLS.get(i as usize);
+    }
+    match id.0.checked_sub(FIRST_SPELL) {
+        None => ABILITIES.get(id.0 as usize),
+        Some(i) => spells::SPELLS.get(i as usize),
+    }
 }
 
 pub mod ids {
@@ -773,10 +893,19 @@ pub mod ids {
     pub const VENOM_STING: AbilityId = AbilityId(93);
     pub const WEB: AbilityId = AbilityId(94);
     pub const LIGHTNING_BOLT: AbilityId = AbilityId(95);
+    // The Sunken King's spells. Interrupt them!
+    pub const DROWNING_GRASP: AbilityId = AbilityId(96);
+    pub const CALL_OF_THE_DEEP: AbilityId = AbilityId(97);
+    // The newer dungeon bosses' spells, after the class spells.
+    pub const MOLTEN_BLAST: AbilityId = AbilityId(super::FIRST_BOSS_SPELL);
+    pub const FLAME_WAVE: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 1);
+    pub const BLOODRAGE: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 2);
+    pub const FROZEN_TOMB: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 3);
+    pub const GLACIAL_HOWL: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 4);
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn ab(
+pub(crate) const fn ab(
     name: &'static str,
     description: &'static str,
     school: School,
@@ -805,17 +934,17 @@ const fn ab(
     }
 }
 
-const fn threat(mut a: Ability, threat: f32) -> Ability {
+pub(crate) const fn threat(mut a: Ability, threat: f32) -> Ability {
     a.threat = threat;
     a
 }
 
-const fn projectile(mut a: Ability) -> Ability {
+pub(crate) const fn projectile(mut a: Ability) -> Ability {
     a.projectile = true;
     a
 }
 
-const fn stacks(mut a: Ability, max: u8) -> Ability {
+pub(crate) const fn stacks(mut a: Ability, max: u8) -> Ability {
     a.max_stacks = max;
     a
 }
@@ -825,7 +954,7 @@ const fn behind(mut a: Ability) -> Ability {
     a
 }
 
-const fn min_range(mut a: Ability, min: f32) -> Ability {
+pub(crate) const fn min_range(mut a: Ability, min: f32) -> Ability {
     a.min_range = min;
     a
 }
@@ -2347,6 +2476,127 @@ pub static ABILITIES: &[Ability] = &[
             max: 15.0,
         }],
     )),
+    // 96-97: The Sunken King's interruptible spells
+    projectile(ab(
+        "Drowning Grasp",
+        "Floods the target's lungs with black water.",
+        S::Shadow,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 28.0,
+            max: 34.0,
+        }],
+    )),
+    ab(
+        "Call of the Deep",
+        "Calls on the deep to mend the caster's wounds.",
+        S::Holy,
+        T::Caster,
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[E::Heal {
+            min: 140.0,
+            max: 145.0,
+        }],
+    ),
+];
+
+/// The id of the first dungeon boss spell, after every class's level 12-20
+/// spells.
+pub const FIRST_BOSS_SPELL: u16 = FIRST_SPELL + (Class::ALL.len() * spells::PER_CLASS) as u16;
+
+/// The dungeon bosses' own spells, from `FIRST_BOSS_SPELL` on.
+pub static BOSS_SPELLS: &[Ability] = &[
+    // Warlord Gorrak Ashfist's
+    projectile(ab(
+        "Molten Blast",
+        "Hurls a ball of molten rock at the target.",
+        S::Fire,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 30.0,
+            max: 36.0,
+        }],
+    )),
+    ab(
+        "Flame Wave",
+        "A wave of fire rolls out over everyone nearby.",
+        S::Fire,
+        T::AroundCaster(40.0),
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 14.0,
+            max: 18.0,
+        }],
+    ),
+    ab(
+        "Bloodrage",
+        "The caster flies into a rage, hitting much harder.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.5),
+            duration: 600.0,
+        }],
+    ),
+    // Hrimja the Frostmother's
+    projectile(ab(
+        "Frozen Tomb",
+        "Encases the target in ice, freezing them in place for 4 sec.",
+        S::Frost,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[
+            E::Damage {
+                min: 24.0,
+                max: 28.0,
+            },
+            E::Aura {
+                kind: A::Root,
+                duration: 4.0,
+            },
+        ],
+    )),
+    ab(
+        "Glacial Howl",
+        "A howl of freezing wind that hits and slows everyone nearby.",
+        S::Frost,
+        T::AroundCaster(40.0),
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[
+            E::Damage {
+                min: 14.0,
+                max: 18.0,
+            },
+            E::Aura {
+                kind: A::Slow(0.5),
+                duration: 6.0,
+            },
+        ],
+    ),
 ];
 
 // ---- Items ----
@@ -2401,6 +2651,8 @@ pub enum ItemKind {
     },
     /// Used up to restore this fraction of health and power.
     Potion { health: f32, power: f32 },
+    /// Eaten to restore this fraction of health. Shares the potion cooldown.
+    Food { health: f32 },
     /// Held in the weapon slot. Any class can use any weapon.
     Weapon {
         /// Added to every auto attack, before scaling with level.
@@ -2479,6 +2731,19 @@ pub mod items {
     pub const MOONWHISPER_STAFF: ItemId = ItemId(36);
     // The Sunken Vault.
     pub const CROWN_OF_THE_SUNKEN_KING: ItemId = ItemId(37);
+    // Cooking.
+    pub const RAW_FISH: ItemId = ItemId(38);
+    pub const BOAR_MEAT: ItemId = ItemId(39);
+    pub const COOKED_FISH: ItemId = ItemId(40);
+    pub const ROASTED_BOAR: ItemId = ItemId(41);
+    // The Sunken Vault quest.
+    pub const TIDEBREAKER_TRIDENT: ItemId = ItemId(42);
+    // The Cinderforge and Frosthowl Cavern: their bosses' drops and quest
+    // rewards.
+    pub const ASHFIST_GAUNTLETS: ItemId = ItemId(43);
+    pub const EMBERFALL_GREATAXE: ItemId = ItemId(44);
+    pub const RIMEHEART_CHESTGUARD: ItemId = ItemId(45);
+    pub const HRIMFANG_GLAIVE: ItemId = ItemId(46);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2519,7 +2784,7 @@ pub const WEAPON_DROPS: [ItemId; 6] = {
 pub const WEAPON_DROP_CHANCE: f32 = 0.03;
 /// Chance an elite does.
 pub const ELITE_WEAPON_DROP_CHANCE: f32 = 0.3;
-/// The Sunken Vault's last boss always drops green armor, and often a weapon.
+/// Dungeon bosses always drop green armor, and often a weapon.
 pub const SUNKEN_KING_RARE_DROP_CHANCE: f32 = 1.0;
 pub const SUNKEN_KING_WEAPON_DROP_CHANCE: f32 = 0.5;
 
@@ -2594,6 +2859,23 @@ const fn weapon(
     }
 }
 
+const fn food(
+    name: &'static str,
+    description: &'static str,
+    health: f32,
+    color: (f32, f32, f32),
+) -> Item {
+    Item {
+        name,
+        description,
+        kind: ItemKind::Food { health },
+        quality: Quality::Common,
+        max_stack: 20,
+        color,
+        price: 30,
+    }
+}
+
 const fn potion(
     name: &'static str,
     description: &'static str,
@@ -2616,7 +2898,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 38] = [
+pub static ITEMS: [Item; 47] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2731,7 +3013,7 @@ pub static ITEMS: [Item; 38] = [
     potion(
         "Healing Potion",
         "Restores 35% of your health. 30 sec shared cooldown.",
-        0.35,
+        HEALING_POTION_HEALTH,
         0.0,
         (0.85, 0.15, 0.15),
     ),
@@ -2984,7 +3266,93 @@ pub static ITEMS: [Item; 38] = [
             4000,
         )
     },
+    material(
+        "Raw Fish",
+        "Slippery and fresh from the shallows. Cook it to eat it.",
+        Quality::Common,
+        (0.55, 0.68, 0.75),
+        10,
+    ),
+    material(
+        "Boar Meat",
+        "A tough cut of boar. Cook it to eat it.",
+        Quality::Common,
+        (0.75, 0.32, 0.3),
+        10,
+    ),
+    food(
+        "Cooked Fish",
+        "Flaky and warm.",
+        FOOD_HEALTH,
+        (0.85, 0.62, 0.38),
+    ),
+    food(
+        "Roasted Boar",
+        "Charred on the outside, juicy within.",
+        FOOD_HEALTH,
+        (0.55, 0.3, 0.18),
+    ),
+    weapon(
+        "Tidebreaker Trident",
+        "Taken from the Sunken King's throne. Seawater still drips from its tines.",
+        8.0,
+        7.0,
+        4.0,
+        Quality::Rare,
+        (0.2, 0.7, 0.75),
+        4500,
+    ),
+    Item {
+        description: "Warlord Gorrak's fists, still glowing from the forge.",
+        ..armor(
+            "Ashfist Gauntlets",
+            Slot::Hands,
+            16.0,
+            9.0,
+            7.0,
+            Quality::Rare,
+            (0.85, 0.35, 0.15),
+            6000,
+        )
+    },
+    weapon(
+        "Emberfall Greataxe",
+        "Forged in the caldera's heart. The edge never quite cools.",
+        12.0,
+        10.0,
+        6.0,
+        Quality::Rare,
+        (0.95, 0.42, 0.12),
+        6500,
+    ),
+    Item {
+        description: "Cut from the Frostmother's hide. Snow never settles on it.",
+        ..armor(
+            "Rimeheart Chestguard",
+            Slot::Chest,
+            30.0,
+            13.0,
+            10.0,
+            Quality::Rare,
+            (0.6, 0.85, 1.0),
+            9000,
+        )
+    },
+    weapon(
+        "Hrimfang Glaive",
+        "Carved from one of Hrimja's fangs. It hums in the cold.",
+        16.0,
+        13.0,
+        8.0,
+        Quality::Rare,
+        (0.55, 0.85, 1.0),
+        9500,
+    ),
 ];
+
+/// Cooked food heals three quarters of what a Healing Potion does.
+pub const FOOD_HEALTH: f32 = HEALING_POTION_HEALTH * 0.75;
+const HEALING_POTION_HEALTH: f32 = 0.35;
 
 /// What every merchant sells.
 pub const MERCHANT_GOODS: [ItemId; 4] = [
@@ -2994,75 +3362,129 @@ pub const MERCHANT_GOODS: [ItemId; 4] = [
     items::LINEN_CLOTH,
 ];
 
+/// A trade you make things with. Each has its own tab in the skills
+/// window (K).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Skill {
+    #[default]
+    Crafting,
+    Cooking,
+}
+
+impl Skill {
+    pub const ALL: [Skill; 2] = [Skill::Crafting, Skill::Cooking];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Skill::Crafting => "Crafting",
+            Skill::Cooking => "Cooking",
+        }
+    }
+
+    /// This skill's recipes, with their index in `RECIPES`.
+    pub fn recipes(self) -> impl Iterator<Item = (usize, &'static Recipe)> {
+        RECIPES
+            .iter()
+            .enumerate()
+            .filter(move |(_, r)| r.skill == self)
+    }
+}
+
 /// Something you can make from materials.
 #[derive(Debug)]
 pub struct Recipe {
+    pub skill: Skill,
     pub result: ItemId,
     pub materials: &'static [(ItemId, u16)],
 }
 
-pub static RECIPES: [Recipe; 15] = {
+pub static RECIPES: [Recipe; 17] = {
     use items::*;
     [
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_CAP,
             materials: &[(LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_VEST,
             materials: &[(LIGHT_LEATHER, 6)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_GLOVES,
             materials: &[(LIGHT_LEATHER, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_PANTS,
             materials: &[(LIGHT_LEATHER, 5)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_BOOTS,
             materials: &[(LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_HOOD,
             materials: &[(LINEN_CLOTH, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_ROBE,
             materials: &[(LINEN_CLOTH, 6)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_PANTS,
             materials: &[(LINEN_CLOTH, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_GLOVES,
             materials: &[(LINEN_CLOTH, 2)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_SANDALS,
             materials: &[(LINEN_CLOTH, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HEARTSTONE_CHESTGUARD,
             materials: &[(ANCIENT_CORE, 1), (LIGHT_LEATHER, 8)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: IRON_SWORD,
             materials: &[(IRON_SCRAP, 5), (LIGHT_LEATHER, 2)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HUNTING_BOW,
             materials: &[(IRON_SCRAP, 2), (LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: APPRENTICE_STAFF,
             materials: &[(IRON_SCRAP, 2), (LINEN_CLOTH, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HEARTSTONE_GREATSWORD,
             materials: &[(ANCIENT_CORE, 1), (IRON_SCRAP, 8)],
+        },
+        Recipe {
+            skill: Skill::Cooking,
+            result: COOKED_FISH,
+            materials: &[(RAW_FISH, 1)],
+        },
+        Recipe {
+            skill: Skill::Cooking,
+            result: ROASTED_BOAR,
+            materials: &[(BOAR_MEAT, 1)],
         },
     ]
 };
@@ -3116,6 +3538,21 @@ pub enum MobKind {
     DrownedAdept,
     StoneWarden,
     SunkenKing,
+    // The Cinderforge (dungeon)
+    AshHound,
+    CinderGrunt,
+    CinderFirecaller,
+    MoltenColossus,
+    GorrakAshfist,
+    // Frosthowl Cavern (dungeon)
+    FrostfangWolf,
+    CavernYeti,
+    ElderYeti,
+    Hrimja,
+    // Water mobs, in the shallows of zones with lakes.
+    MudsnapCrab,
+    GlimmershellCrab,
+    BogLurker,
 }
 
 /// What a mob is built from when drawn.
@@ -3177,6 +3614,8 @@ pub struct MobTemplate {
     /// Attacks players that come close. Otherwise only fights back.
     pub aggressive: bool,
     pub elite: bool,
+    /// A dungeon boss: an elite with its own mechanics, shown as "Boss".
+    pub boss: bool,
     /// Calls nearby mobs from its camp for help when attacked.
     pub social: bool,
     /// Rough radius, used for melee reach and drawing.
@@ -3198,6 +3637,20 @@ const HIDE_LOOT: LootTable = LootTable {
     copper_per_level: (1, 3),
     items: &[(items::LIGHT_LEATHER, 0.85, 1, 2)],
 };
+const BOAR_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 3),
+    items: &[
+        (items::LIGHT_LEATHER, 0.85, 1, 2),
+        (items::BOAR_MEAT, 0.5, 1, 1),
+    ],
+};
+const WATER_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 4),
+    items: &[
+        (items::LIGHT_LEATHER, 0.4, 1, 1),
+        (items::RAW_FISH, 0.6, 1, 1),
+    ],
+};
 const FIGHTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
     items: &[
@@ -3207,7 +3660,10 @@ const FIGHTER_LOOT: LootTable = LootTable {
 };
 const CASTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
-    items: &[(items::LINEN_CLOTH, 0.75, 1, 3)],
+    items: &[
+        (items::LINEN_CLOTH, 0.75, 1, 3),
+        (items::HEALING_POTION, 0.35, 1, 1),
+    ],
 };
 const BOSS_LOOT: LootTable = LootTable {
     copper_per_level: (40, 80),
@@ -3215,6 +3671,28 @@ const BOSS_LOOT: LootTable = LootTable {
         (items::CROWN_OF_THE_SUNKEN_KING, 0.25, 1, 1),
         (items::ANCIENT_CORE, 1.0, 2, 2),
         (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
+    ],
+};
+const GORRAK_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::ASHFIST_GAUNTLETS, 0.25, 1, 1),
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
+    ],
+};
+const HRIMJA_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::RIMEHEART_CHESTGUARD, 0.25, 1, 1),
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
     ],
 };
 const ELITE_LOOT: LootTable = LootTable {
@@ -3222,6 +3700,7 @@ const ELITE_LOOT: LootTable = LootTable {
     items: &[
         (items::ANCIENT_CORE, 1.0, 1, 1),
         (items::LINEN_CLOTH, 1.0, 2, 4),
+        (items::IRON_SCRAP, 1.0, 5, 5),
     ],
 };
 
@@ -3240,6 +3719,7 @@ const fn hunter(
         speed: 7.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: false,
         size: 0.9,
         spell: Some((spell, 10.0)),
@@ -3247,6 +3727,27 @@ const fn hunter(
         loot: BEAST_LOOT,
         model,
         colors,
+    }
+}
+
+/// A grazer that also drops boar meat.
+const fn boar(name: &'static str, model: MobModel, colors: [(f32, f32, f32); 3]) -> MobTemplate {
+    MobTemplate {
+        loot: BOAR_LOOT,
+        ..grazer(name, model, colors)
+    }
+}
+
+/// A hunter from the shallows, that drops fish.
+const fn water_hunter(
+    name: &'static str,
+    model: MobModel,
+    spell: AbilityId,
+    colors: [(f32, f32, f32); 3],
+) -> MobTemplate {
+    MobTemplate {
+        loot: WATER_LOOT,
+        ..hunter(name, model, spell, colors)
     }
 }
 
@@ -3260,6 +3761,7 @@ const fn grazer(name: &'static str, model: MobModel, colors: [(f32, f32, f32); 3
         speed: 6.5,
         aggressive: false,
         elite: false,
+        boss: false,
         social: false,
         size: 0.9,
         spell: None,
@@ -3283,6 +3785,7 @@ const fn fighter(
         speed: 6.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: true,
         size: 0.8,
         spell: None,
@@ -3307,6 +3810,7 @@ const fn caster(
         speed: 6.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: true,
         size: 0.8,
         spell: Some((spell, 5.0)),
@@ -3326,6 +3830,7 @@ const fn elite(name: &'static str, style: GiantStyle, colors: [(f32, f32, f32); 
         speed: 5.5,
         aggressive: true,
         elite: true,
+        boss: false,
         social: false,
         size: 2.2,
         spell: Some((ids::GROUND_SLAM, 12.0)),
@@ -3345,7 +3850,7 @@ const WOLF: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.5, 0.48, 0.47), (0.33, 0.31, 0.31), (1.0, 0.82, 0.25)],
 );
-const BOAR: MobTemplate = grazer(
+const BOAR: MobTemplate = boar(
     "Wild Boar",
     Mm::Boar,
     [(0.43, 0.29, 0.19), (0.27, 0.18, 0.12), (0.96, 0.93, 0.83)],
@@ -3401,7 +3906,7 @@ const SHADOWFANG: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.28, 0.26, 0.36), (0.16, 0.15, 0.22), (0.7, 0.4, 1.0)],
 );
-const THORNBACK: MobTemplate = grazer(
+const THORNBACK: MobTemplate = boar(
     "Thornback Boar",
     Mm::Boar,
     [(0.35, 0.4, 0.25), (0.22, 0.3, 0.14), (0.9, 0.9, 0.75)],
@@ -3429,7 +3934,7 @@ const CAVE_SPIDER: MobTemplate = hunter(
     ids::WEB,
     [(0.25, 0.22, 0.28), (0.14, 0.12, 0.16), (0.9, 0.2, 0.2)],
 );
-const STONEHIDE: MobTemplate = grazer(
+const STONEHIDE: MobTemplate = boar(
     "Stonehide Boar",
     Mm::Boar,
     [(0.4, 0.42, 0.46), (0.26, 0.27, 0.3), (0.85, 0.85, 0.9)],
@@ -3457,7 +3962,7 @@ const SNOW_WOLF: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.9, 0.92, 0.95), (0.7, 0.74, 0.8), (0.4, 0.75, 1.0)],
 );
-const FROST_BOAR: MobTemplate = grazer(
+const FROST_BOAR: MobTemplate = boar(
     "Frost Boar",
     Mm::Boar,
     [(0.55, 0.6, 0.68), (0.4, 0.44, 0.52), (0.95, 0.97, 1.0)],
@@ -3485,7 +3990,7 @@ const GHOUL_HOUND: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.42, 0.46, 0.36), (0.3, 0.26, 0.24), (0.6, 1.0, 0.3)],
 );
-const PLAGUE_BOAR: MobTemplate = grazer(
+const PLAGUE_BOAR: MobTemplate = boar(
     "Plague Boar",
     Mm::Boar,
     [(0.45, 0.42, 0.32), (0.3, 0.33, 0.2), (0.75, 0.85, 0.5)],
@@ -3569,12 +4074,154 @@ const SUNKEN_KING: MobTemplate = MobTemplate {
     size: 2.6,
     respawn: 0.0,
     loot: BOSS_LOOT,
+    boss: true,
+    // The boss's own mechanics (server/src/world/boss.rs) replace the
+    // elite's Ground Slam.
+    spell: None,
     ..elite(
         "Morvane the Sunken King",
         GiantStyle::Bone,
         [(0.55, 0.62, 0.6), (0.3, 0.36, 0.36), (0.25, 1.0, 0.85)],
     )
 };
+
+// The Cinderforge: orcs of the war camp, their hounds, and the warlord.
+
+const ASH_HOUND: MobTemplate = MobTemplate {
+    hp: 130.0,
+    damage: (7.0, 10.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Ash Hound",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.2, 0.17, 0.16), (0.11, 0.09, 0.09), (1.0, 0.45, 0.1)],
+    )
+};
+const CINDER_GRUNT: MobTemplate = MobTemplate {
+    hp: 160.0,
+    damage: (9.0, 13.0),
+    respawn: 0.0,
+    ..fighter(
+        "Cinderforge Grunt",
+        H::Troll,
+        [(0.36, 0.52, 0.24), (0.24, 0.16, 0.12), (0.95, 0.4, 0.1)],
+    )
+};
+const CINDER_FIRECALLER: MobTemplate = MobTemplate {
+    hp: 125.0,
+    damage: (4.0, 7.0),
+    respawn: 0.0,
+    ..caster(
+        "Cinderforge Firecaller",
+        H::TrollShaman,
+        ids::FIREBALL,
+        [(0.34, 0.5, 0.24), (0.45, 0.12, 0.08), (1.0, 0.55, 0.15)],
+    )
+};
+const MOLTEN_COLOSSUS: MobTemplate = MobTemplate {
+    hp: 560.0,
+    respawn: 0.0,
+    ..elite(
+        "Molten Colossus",
+        GiantStyle::Sandstone,
+        [(0.24, 0.2, 0.18), (0.14, 0.11, 0.1), (1.0, 0.45, 0.1)],
+    )
+};
+const GORRAK_ASHFIST: MobTemplate = MobTemplate {
+    hp: 950.0,
+    damage: (18.0, 24.0),
+    size: 2.6,
+    respawn: 0.0,
+    loot: GORRAK_LOOT,
+    boss: true,
+    // His mechanics are in server/src/world/boss.rs.
+    spell: None,
+    ..elite(
+        "Warlord Gorrak Ashfist",
+        GiantStyle::Stone,
+        [(0.3, 0.26, 0.24), (0.34, 0.5, 0.22), (1.0, 0.4, 0.1)],
+    )
+};
+
+// Frosthowl Cavern: snow wolves, yetis, and the Frostmother.
+
+const FROSTFANG_WOLF: MobTemplate = MobTemplate {
+    hp: 140.0,
+    damage: (8.0, 11.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Frostfang Snow Wolf",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.88, 0.91, 0.96), (0.62, 0.68, 0.78), (0.35, 0.7, 1.0)],
+    )
+};
+/// A yeti that isn't an elite: as big as one, but no tougher than a
+/// couple of wolves.
+const CAVERN_YETI: MobTemplate = MobTemplate {
+    hp: 300.0,
+    damage: (12.0, 16.0),
+    attack_interval: 2.8,
+    speed: 6.0,
+    elite: false,
+    social: true,
+    size: 2.0,
+    spell: Some((ids::GROUND_SLAM, 14.0)),
+    loot: HIDE_LOOT,
+    respawn: 0.0,
+    ..elite(
+        "Cavern Yeti",
+        GiantStyle::Yeti,
+        [(0.86, 0.88, 0.92), (0.55, 0.58, 0.66), (0.4, 0.75, 1.0)],
+    )
+};
+const ELDER_YETI: MobTemplate = MobTemplate {
+    hp: 640.0,
+    respawn: 0.0,
+    ..elite(
+        "Elder Yeti",
+        GiantStyle::Yeti,
+        [(0.75, 0.77, 0.8), (0.45, 0.47, 0.52), (0.3, 0.9, 1.0)],
+    )
+};
+const HRIMJA: MobTemplate = MobTemplate {
+    hp: 1100.0,
+    damage: (20.0, 27.0),
+    size: 2.8,
+    respawn: 0.0,
+    loot: HRIMJA_LOOT,
+    boss: true,
+    // Her mechanics are in server/src/world/boss.rs.
+    spell: None,
+    ..elite(
+        "Hrimja the Frostmother",
+        GiantStyle::Yeti,
+        [(0.8, 0.9, 1.0), (0.55, 0.7, 0.86), (0.3, 0.8, 1.0)],
+    )
+};
+
+// Water mobs hunt like the zone's aggressive beasts, from the shallows.
+const MUDSNAP_CRAB: MobTemplate = water_hunter(
+    "Mudsnap Crab",
+    Mm::Scorpion,
+    ids::SAVAGE_BITE,
+    [(0.45, 0.33, 0.2), (0.3, 0.24, 0.14), (0.55, 0.6, 0.3)],
+);
+const GLIMMERSHELL_CRAB: MobTemplate = water_hunter(
+    "Glimmershell Crab",
+    Mm::Scorpion,
+    ids::SAVAGE_BITE,
+    [(0.3, 0.62, 0.62), (0.7, 0.75, 0.8), (0.85, 0.95, 1.0)],
+);
+const BOG_LURKER: MobTemplate = water_hunter(
+    "Bog Lurker",
+    Mm::Spider,
+    ids::VENOM_STING,
+    [(0.3, 0.38, 0.2), (0.12, 0.14, 0.1), (0.6, 0.85, 0.25)],
+);
 
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
@@ -3616,6 +4263,18 @@ impl MobKind {
             DrownedAdept => &DROWNED_ADEPT,
             StoneWarden => &STONE_WARDEN,
             SunkenKing => &SUNKEN_KING,
+            AshHound => &ASH_HOUND,
+            CinderGrunt => &CINDER_GRUNT,
+            CinderFirecaller => &CINDER_FIRECALLER,
+            MoltenColossus => &MOLTEN_COLOSSUS,
+            GorrakAshfist => &GORRAK_ASHFIST,
+            FrostfangWolf => &FROSTFANG_WOLF,
+            CavernYeti => &CAVERN_YETI,
+            ElderYeti => &ELDER_YETI,
+            Hrimja => &HRIMJA,
+            MudsnapCrab => &MUDSNAP_CRAB,
+            GlimmershellCrab => &GLIMMERSHELL_CRAB,
+            BogLurker => &BOG_LURKER,
         }
     }
 
@@ -3623,25 +4282,48 @@ impl MobKind {
         self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
     }
 
-    /// The Sunken Vault's mobs, bosses last.
-    pub const DUNGEON: [MobKind; 6] = [
-        MobKind::VaultHound,
-        MobKind::VaultCrawler,
-        MobKind::DrownedEnforcer,
-        MobKind::DrownedAdept,
-        MobKind::StoneWarden,
-        MobKind::SunkenKing,
-    ];
+    /// The dungeons' mobs, each dungeon's elite and boss last.
+    pub const DUNGEON: [MobKind; 15] = {
+        use MobKind::*;
+        [
+            VaultHound,
+            VaultCrawler,
+            DrownedEnforcer,
+            DrownedAdept,
+            StoneWarden,
+            SunkenKing,
+            AshHound,
+            CinderGrunt,
+            CinderFirecaller,
+            MoltenColossus,
+            GorrakAshfist,
+            FrostfangWolf,
+            CavernYeti,
+            ElderYeti,
+            Hrimja,
+        ]
+    };
 
     /// Chances of a green armor piece (`RARE_DROPS`) and a green weapon
     /// (`WEAPON_DROPS`) on its corpse.
     pub fn drop_chances(self) -> (f32, f32) {
-        if self == MobKind::SunkenKing {
+        if self.template().boss {
             (SUNKEN_KING_RARE_DROP_CHANCE, SUNKEN_KING_WEAPON_DROP_CHANCE)
         } else if self.template().elite {
             (ELITE_RARE_DROP_CHANCE, ELITE_WEAPON_DROP_CHANCE)
         } else {
             (RARE_DROP_CHANCE, WEAPON_DROP_CHANCE)
+        }
+    }
+
+    /// The mob that lives in a zone's lakes, if it has any worth a camp.
+    pub fn water(zone: Zone) -> Option<MobKind> {
+        match zone {
+            Zone::Amberfall => Some(MobKind::MudsnapCrab),
+            Zone::Silverbough => Some(MobKind::GlimmershellCrab),
+            Zone::Witherwood => Some(MobKind::BogLurker),
+            // No lakes, or too small for a camp.
+            Zone::Scorchsand | Zone::Grubdeep | Zone::Frostcog => None,
         }
     }
 
@@ -3789,12 +4471,18 @@ mod tests {
 
     #[test]
     fn ability_ids_match_table() {
-        assert_eq!(ABILITIES.len(), 96);
+        assert_eq!(ABILITIES.len(), FIRST_SPELL as usize);
+        assert_eq!(spells::SPELLS.len(), Class::ALL.len() * spells::PER_CLASS);
+        assert_eq!(BOSS_SPELLS.len(), 5);
         for class in Class::ALL {
-            for id in class.abilities() {
-                assert!((id.0 as usize) < ABILITIES.len());
+            for (id, _) in class.spellbook() {
+                assert!(try_ability(id).is_some());
             }
         }
+        assert_eq!(ability(Class::Barbarian.spells()[0]).name, "Bloodthirst");
+        assert_eq!(ability(Class::Warlock.spells()[4]).name, "Summon Infernal");
+        assert_eq!(FIRST_BOSS_SPELL, FIRST_SPELL + 65);
+        assert!(try_ability(AbilityId(FIRST_BOSS_SPELL + 5)).is_none());
         assert_eq!(ability(ids::GROUND_SLAM).name, "Ground Slam");
         assert_eq!(ability(ids::SMITE).name, "Smite");
         assert_eq!(ability(ids::FIREBALL).name, "Fireball");
@@ -3802,6 +4490,8 @@ mod tests {
         assert_eq!(ability(ids::CHARGE).name, "Charge");
         assert_eq!(ability(ids::DISSONANT_WHISPERS).name, "Dissonant Whispers");
         assert_eq!(ability(ids::LIGHTNING_BOLT).name, "Lightning Bolt");
+        assert_eq!(ability(ids::MOLTEN_BLAST).name, "Molten Blast");
+        assert_eq!(ability(ids::GLACIAL_HOWL).name, "Glacial Howl");
         assert_eq!(item(items::MANA_POTION).name, "Mana Potion");
     }
 
@@ -3818,7 +4508,21 @@ mod tests {
                 );
             }
             assert_eq!(class.known(1).count(), 1, "{class:?}");
-            assert_eq!(class.known(MAX_LEVEL).count(), ACTION_BAR_SLOTS);
+            assert_eq!(class.known(10).count(), CORE_ABILITIES);
+            assert_eq!(class.known(MAX_LEVEL).count(), SPELLBOOK_SIZE);
+            let book = class.spellbook();
+            assert!(book.windows(2).all(|w| w[0].1 < w[1].1), "{class:?}");
+            for (i, (x, _)) in book.iter().enumerate() {
+                assert!(
+                    book[i + 1..].iter().all(|(y, _)| y != x),
+                    "{class:?} repeats {}",
+                    ability(*x).name
+                );
+            }
+            // Everything fits on the hotbars at first.
+            let bar = class.default_hotbar();
+            assert_eq!(class.sanitize_hotbar(&bar), bar);
+            assert_eq!(bar.iter().flatten().count(), SPELLBOOK_SIZE);
             assert_eq!(class.unlock_level(class.abilities()[0]), Some(1));
             // The first ability always does damage, so everyone can fight.
             let first = ability(a[0]);
@@ -3831,7 +4535,12 @@ mod tests {
                 "{class:?}"
             );
         }
-        assert_eq!(Class::Barbarian.abilities()[E_SLOT], ids::CHARGE);
+        assert_eq!(Class::Barbarian.default_hotbar()[7], Some(ids::CHARGE));
+        assert_eq!(Class::Mage.unlock_level(Class::Mage.spells()[4]), Some(20));
+        assert_eq!(
+            Class::Mage.sanitize_hotbar(&[Some(ids::SMITE); HOTBAR_SLOTS]),
+            [None; HOTBAR_SLOTS]
+        );
         assert_eq!(Class::Mage.unlock_level(ids::SMITE), None);
     }
 
@@ -3853,8 +4562,14 @@ mod tests {
             assert!(hunter.template().aggressive && !grazer.template().aggressive);
             assert!(fighter.template().social && caster.template().spell.is_some());
             assert!(elite.template().elite);
-            for k in MobKind::for_zone(zone) {
+            for k in MobKind::for_zone(zone)
+                .into_iter()
+                .chain(MobKind::water(zone))
+            {
                 assert!(seen.insert(k), "{k:?} is in two zones");
+            }
+            if let Some(w) = MobKind::water(zone) {
+                assert!(w.template().aggressive && !w.template().elite);
             }
         }
     }
@@ -3879,10 +4594,14 @@ mod tests {
     #[test]
     fn recipes_make_gear_from_drops() {
         for r in &RECIPES {
-            assert!(matches!(
-                item(r.result).kind,
-                ItemKind::Armor { .. } | ItemKind::Weapon { .. }
-            ));
+            let made = item(r.result).kind;
+            match r.skill {
+                Skill::Crafting => assert!(matches!(
+                    made,
+                    ItemKind::Armor { .. } | ItemKind::Weapon { .. }
+                )),
+                Skill::Cooking => assert!(matches!(made, ItemKind::Food { .. })),
+            }
             for (m, n) in r.materials {
                 assert_eq!(item(*m).kind, ItemKind::Material);
                 assert!(*n <= item(*m).max_stack);
@@ -3965,6 +4684,11 @@ mod tests {
             (HEARTSTONE_GREATSWORD, "Heartstone Greatsword"),
             (MOONWHISPER_STAFF, "Moonwhisper Staff"),
             (CROWN_OF_THE_SUNKEN_KING, "Crown of the Sunken King"),
+            (TIDEBREAKER_TRIDENT, "Tidebreaker Trident"),
+            (ASHFIST_GAUNTLETS, "Ashfist Gauntlets"),
+            (EMBERFALL_GREATAXE, "Emberfall Greataxe"),
+            (RIMEHEART_CHESTGUARD, "Rimeheart Chestguard"),
+            (HRIMFANG_GLAIVE, "Hrimfang Glaive"),
         ] {
             assert_eq!(item(id).name, name);
         }

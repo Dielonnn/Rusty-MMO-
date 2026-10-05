@@ -1,13 +1,14 @@
 //! The 2D interface drawn over the world: unit frames, action bar, cast bar,
 //! nameplates, chat, minimap, floating combat text and the bag, character
-//! crafting and merchant windows.
+//! skills and merchant windows.
 
 use macroquad::prelude::*;
 use shared::data::*;
 use shared::dungeon;
 use shared::protocol::*;
-use shared::world::Zone;
+use shared::world::{Place, Zone};
 
+use crate::drag::{self, Win};
 use crate::game::{Game, Windows, wrap_angle};
 use crate::render;
 
@@ -32,7 +33,9 @@ pub struct Layout {
     pub player_frame: Rect,
     pub target_frame: Rect,
     pub tot_frame: Rect,
-    pub hotbar: [Rect; ACTION_BAR_SLOTS],
+    /// Both hotbars: the bottom one (1-6, Q, E), then the one above it
+    /// (Shift).
+    pub hotbar: [Rect; HOTBAR_SLOTS],
     pub castbar: Rect,
     pub xpbar: Rect,
     pub minimap: (Vec2, f32),
@@ -42,11 +45,15 @@ pub struct Layout {
     pub bag_slots: Vec<Rect>,
     pub character: Option<Rect>,
     pub gear_slots: Vec<Rect>,
-    pub crafting: Option<Rect>,
+    /// The skills window (K): a tab per skill, and the showing skill's
+    /// recipes.
+    pub skills: Option<Rect>,
+    pub skill_tabs: Vec<Rect>,
     pub craft_buttons: Vec<Rect>,
     pub vendor: Option<Rect>,
     pub vendor_buttons: Vec<Rect>,
     pub talents: Option<Rect>,
+    pub spellbook: Option<Rect>,
     pub sandbox: Option<Rect>,
     pub travel: Option<Rect>,
     pub map: bool,
@@ -137,19 +144,25 @@ impl Layout {
         let (w, h) = (screen_width(), screen_height());
         let slot = 54.0;
         let gap = 6.0;
-        let bar_w = ACTION_BAR_SLOTS as f32 * (slot + gap) - gap;
+        let bar_w = BAR_SLOTS as f32 * (slot + gap) - gap;
         let bar_x = (w - bar_w) / 2.0;
         let bar_y = h - slot - 26.0;
-        let hotbar =
-            std::array::from_fn(|i| Rect::new(bar_x + i as f32 * (slot + gap), bar_y, slot, slot));
+        let top_y = bar_y - slot - gap;
+        let hotbar = std::array::from_fn(|i| {
+            let (col, y) = (i % BAR_SLOTS, if i < BAR_SLOTS { bar_y } else { top_y });
+            Rect::new(bar_x + col as f32 * (slot + gap), y, slot, slot)
+        });
         let menu_w = 240.0;
         let menu_x = (w - menu_w) / 2.0;
 
-        let bags_rect = Rect::new(
-            w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
-            h - 330.0,
-            5.0 * (SLOT + 4.0) + 20.0,
-            4.0 * (SLOT + 4.0) + 76.0,
+        let bags_rect = drag::place(
+            Win::Bags,
+            Rect::new(
+                w - 16.0 - 5.0 * (SLOT + 4.0) - 20.0,
+                h - 330.0,
+                5.0 * (SLOT + 4.0) + 20.0,
+                4.0 * (SLOT + 4.0) + 76.0,
+            ),
         );
         let bag_slots = if windows.bags {
             (0..BAG_SLOTS)
@@ -166,7 +179,7 @@ impl Layout {
         } else {
             Vec::new()
         };
-        let char_rect = Rect::new(16.0, 150.0, 280.0, 380.0);
+        let char_rect = drag::place(Win::Character, Rect::new(16.0, 150.0, 280.0, 380.0));
         let gear_slots = if windows.character {
             (0..GEAR_ROWS)
                 .map(|i| {
@@ -182,13 +195,38 @@ impl Layout {
             Vec::new()
         };
         let craft_x = if windows.character { 312.0 } else { 16.0 };
-        let craft_rect = Rect::new(craft_x, 150.0, 400.0, 46.0 + RECIPES.len() as f32 * 34.0);
-        let craft_buttons = if windows.crafting {
-            (0..RECIPES.len())
+        let recipes = windows.skill.recipes().count();
+        let craft_rect = drag::place(
+            Win::Skills,
+            Rect::new(
+                craft_x,
+                150.0,
+                400.0,
+                SKILL_LIST_TOP + 8.0 + recipes as f32 * 34.0,
+            ),
+        );
+        let tab_w =
+            (craft_rect.w - 24.0 - 8.0 * (Skill::ALL.len() - 1) as f32) / Skill::ALL.len() as f32;
+        let skill_tabs = if windows.skills {
+            (0..Skill::ALL.len())
+                .map(|i| {
+                    Rect::new(
+                        craft_rect.x + 12.0 + i as f32 * (tab_w + 8.0),
+                        craft_rect.y + 34.0,
+                        tab_w,
+                        28.0,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let craft_buttons = if windows.skills {
+            (0..recipes)
                 .map(|i| {
                     Rect::new(
                         craft_rect.x + craft_rect.w - 82.0,
-                        craft_rect.y + 38.0 + i as f32 * 34.0,
+                        craft_rect.y + SKILL_LIST_TOP + i as f32 * 34.0,
                         70.0,
                         28.0,
                     )
@@ -199,16 +237,19 @@ impl Layout {
         };
         let vendor_x = 16.0
             + if windows.character { 296.0 } else { 0.0 }
-            + if windows.crafting {
+            + if windows.skills {
                 craft_rect.w + 16.0
             } else {
                 0.0
             };
-        let vendor_rect = Rect::new(
-            vendor_x,
-            150.0,
-            340.0,
-            70.0 + MERCHANT_GOODS.len() as f32 * 40.0,
+        let vendor_rect = drag::place(
+            Win::Vendor,
+            Rect::new(
+                vendor_x,
+                150.0,
+                340.0,
+                70.0 + MERCHANT_GOODS.len() as f32 * 40.0,
+            ),
         );
         let vendor_buttons = if windows.vendor.is_some() {
             (0..MERCHANT_GOODS.len())
@@ -229,7 +270,7 @@ impl Layout {
             target_frame: Rect::new(282.0, 16.0, 250.0, 66.0),
             tot_frame: Rect::new(548.0, 30.0, 140.0, 36.0),
             hotbar,
-            castbar: Rect::new((w - 320.0) / 2.0, bar_y - 46.0, 320.0, 20.0),
+            castbar: Rect::new((w - 320.0) / 2.0, top_y - 46.0, 320.0, 20.0),
             xpbar: Rect::new(bar_x - 120.0, h - 16.0, bar_w + 240.0, 10.0),
             minimap: (vec2(w - 96.0, 104.0), 80.0),
             release_button: Rect::new((w - 200.0) / 2.0, h * 0.3 + 46.0, 200.0, 40.0),
@@ -240,13 +281,15 @@ impl Layout {
             bag_slots,
             character: windows.character.then_some(char_rect),
             gear_slots,
-            crafting: windows.crafting.then_some(craft_rect),
+            skills: windows.skills.then_some(craft_rect),
+            skill_tabs,
             craft_buttons,
             vendor: windows.vendor.is_some().then_some(vendor_rect),
             vendor_buttons,
             talents: windows
                 .talents
                 .then(|| crate::panels::talent_layout().window),
+            spellbook: windows.spellbook.then(|| crate::spellbook::layout().window),
             sandbox: windows
                 .sandbox
                 .then(|| crate::panels::sandbox_layout(Zone::Amberfall).window),
@@ -257,15 +300,33 @@ impl Layout {
         }
     }
 
+    /// The open windows you can drag (quest windows aside), topmost last.
+    pub fn draggable(&self) -> Vec<(Win, Rect)> {
+        [
+            (Win::Bags, self.bags),
+            (Win::Character, self.character),
+            (Win::Skills, self.skills),
+            (Win::Vendor, self.vendor),
+            (Win::Talents, self.talents),
+            (Win::Spellbook, self.spellbook),
+            (Win::Sandbox, self.sandbox),
+            (Win::Travel, self.travel),
+        ]
+        .into_iter()
+        .filter_map(|(win, r)| r.map(|r| (win, r)))
+        .collect()
+    }
+
     /// Whether the mouse is over an open window.
     pub fn over_window(&self, mouse: Vec2) -> bool {
         self.map
             || [
                 self.bags,
                 self.character,
-                self.crafting,
+                self.skills,
                 self.vendor,
                 self.talents,
+                self.spellbook,
                 self.sandbox,
                 self.travel,
                 self.quest_window,
@@ -287,9 +348,10 @@ impl Layout {
             || [
                 self.bags,
                 self.character,
-                self.crafting,
+                self.skills,
                 self.vendor,
                 self.talents,
+                self.spellbook,
                 self.sandbox,
                 self.travel,
                 self.quest_window,
@@ -399,7 +461,7 @@ pub fn panel(r: Rect) {
     );
 }
 
-fn window(r: Rect, title: &str) {
+pub fn window(r: Rect, title: &str) {
     panel(r);
     draw_rectangle(
         r.x + 2.0,
@@ -573,6 +635,7 @@ fn hp_color(frac: f32) -> Color {
 
 fn level_label(view: &EntityView) -> String {
     match view.kind {
+        EntityKind::Mob { kind, .. } if kind.template().boss => format!("{} Boss", view.level),
         EntityKind::Mob { elite: true, .. } => format!("{} Elite", view.level),
         _ => view.level.to_string(),
     }
@@ -851,8 +914,8 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if let Some(r) = layout.character {
         character(game, layout, r, me);
     }
-    if let Some(r) = layout.crafting {
-        crafting(game, layout, r);
+    if let Some(r) = layout.skills {
+        skills(game, layout, r);
     }
     if let Some(r) = layout.vendor {
         vendor(game, layout, r);
@@ -875,6 +938,10 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if layout.talents.is_some() {
         crate::panels::draw_talents(game, me.level);
     }
+    if layout.spellbook.is_some() {
+        crate::spellbook::draw(game, me.level);
+    }
+    crate::spellbook::draw_dragged(game);
 
     // Errors and banners.
     for (i, (msg, t)) in game.errors.iter().enumerate() {
@@ -944,7 +1011,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         .and_then(|id| game.entities.get(&id))
         && let Some((icon, id)) = crate::quests_ui::draw_giver(
             &giver.view.name,
-            game.zone,
+            game.place,
             &game.me.quests,
             level,
             &game.me.bags,
@@ -1000,103 +1067,89 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let target = game.target_ent();
     let mut tooltip = None;
-    for (i, (r, id)) in layout.hotbar.iter().zip(game.class.abilities()).enumerate() {
-        let a = ability(id);
-        let c = school_color(a.school);
-        let locked = UNLOCK_LEVELS[i] > me.level;
+    for (i, (r, slot)) in layout.hotbar.iter().zip(game.hotbar).enumerate() {
         draw_rectangle(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0, PANEL);
-        if locked {
-            draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.12, 0.12, 0.13, 1.0));
-            // A little padlock.
-            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0 - 4.0);
-            draw_circle_lines(cx, cy - 4.0, 7.0, 3.0, Color::new(0.55, 0.55, 0.58, 1.0));
-            draw_rectangle(
-                cx - 10.0,
-                cy - 2.0,
-                20.0,
-                14.0,
-                Color::new(0.55, 0.55, 0.58, 1.0),
-            );
-            text_centered(
-                &format!("Lv {}", UNLOCK_LEVELS[i]),
-                cx,
-                r.y + r.h - 4.0,
-                15.0,
-                Color::new(0.8, 0.8, 0.8, 1.0),
-            );
-        } else {
-            draw_rectangle(
-                r.x,
-                r.y,
-                r.w,
-                r.h,
-                Color::new(c.r * 0.45, c.g * 0.45, c.b * 0.45, 1.0),
-            );
-            draw_rectangle(
-                r.x + 4.0,
-                r.y + 4.0,
-                r.w - 8.0,
-                r.h - 8.0,
-                Color::new(c.r * 0.7, c.g * 0.7, c.b * 0.7, 1.0),
-            );
-            let out_of_range = a.targeting.needs_enemy()
-                && target.is_some_and(|t| {
-                    game.is_hostile(&t.view)
-                        && t.pos.distance(game.pos)
-                            > a.range + 1.0 + render::model_radius(t.view.kind) * 0.5
-                });
-            let label_color = if out_of_range {
-                Color::new(1.0, 0.25, 0.2, 1.0)
-            } else {
-                WHITE
-            };
-            text_centered(
-                &abbreviation(a.name),
-                r.x + r.w / 2.0,
-                r.y + r.h / 2.0 + 7.0,
-                20.0,
-                label_color,
-            );
-            let unusable = (a.cost > 0.0 && me.power < a.cost)
-                || (a.needs_combo_points() && game.me.combo_points == 0);
-            if unusable {
-                draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.1, 0.2, 0.8, 0.45));
-            }
-            // Cooldown, or the global cooldown, as a shrinking shade.
-            let cd = game
-                .me
-                .cooldowns
-                .iter()
-                .find(|(a, _, _)| *a == id)
-                .map(|(_, rem, total)| (*rem, *total));
-            let (rem, total) = match cd {
-                Some((rem, total)) if rem > game.me.gcd => (rem, total),
-                _ => (game.me.gcd, GCD),
-            };
-            if rem > 0.0 {
-                let frac = (rem / total).clamp(0.0, 1.0);
-                draw_rectangle(
-                    r.x,
-                    r.y + r.h * (1.0 - frac),
-                    r.w,
-                    r.h * frac,
-                    Color::new(0.0, 0.0, 0.0, 0.6),
-                );
-                if rem > 1.6 {
+        let hover = r.contains(mouse);
+        // The slot a spell is being dragged out of shows empty.
+        let lifted = game.dragging.is_some_and(|d| d.moved && d.from == Some(i));
+        match slot.filter(|_| !lifted) {
+            None => draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.05, 0.05, 0.06, 0.7)),
+            Some(id) => {
+                let a = ability(id);
+                let learned_at = game.class.unlock_level(id).unwrap_or(1);
+                let locked = learned_at > me.level;
+                ability_icon(*r, a, locked);
+                if locked {
                     text_centered(
-                        &format!("{:.0}", rem.ceil()),
+                        &format!("Lv {learned_at}"),
                         r.x + r.w / 2.0,
-                        r.y + r.h - 6.0,
-                        18.0,
-                        GOLD,
+                        r.y + r.h - 4.0,
+                        15.0,
+                        Color::new(0.8, 0.8, 0.8, 1.0),
                     );
+                } else {
+                    let out_of_range = a.targeting.needs_enemy()
+                        && target.is_some_and(|t| {
+                            game.is_hostile(&t.view)
+                                && t.pos.distance(game.pos)
+                                    > a.range + 1.0 + render::model_radius(t.view.kind) * 0.5
+                        });
+                    if out_of_range {
+                        text_centered(
+                            &abbreviation(a.name),
+                            r.x + r.w / 2.0,
+                            r.y + r.h / 2.0 + 7.0,
+                            20.0,
+                            Color::new(1.0, 0.25, 0.2, 1.0),
+                        );
+                    }
+                    let unusable = (a.cost > 0.0 && me.power < a.cost)
+                        || (a.needs_combo_points() && game.me.combo_points == 0);
+                    if unusable {
+                        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.1, 0.2, 0.8, 0.45));
+                    }
+                    // Cooldown, or the global cooldown, as a shrinking shade.
+                    let cd = game
+                        .me
+                        .cooldowns
+                        .iter()
+                        .find(|(a, _, _)| *a == id)
+                        .map(|(_, rem, total)| (*rem, *total));
+                    let (rem, total) = match cd {
+                        Some((rem, total)) if rem > game.me.gcd => (rem, total),
+                        _ => (game.me.gcd, GCD),
+                    };
+                    if rem > 0.0 {
+                        let frac = (rem / total).clamp(0.0, 1.0);
+                        draw_rectangle(
+                            r.x,
+                            r.y + r.h * (1.0 - frac),
+                            r.w,
+                            r.h * frac,
+                            Color::new(0.0, 0.0, 0.0, 0.6),
+                        );
+                        if rem > 1.6 {
+                            text_centered(
+                                &format!("{:.0}", rem.ceil()),
+                                r.x + r.w / 2.0,
+                                r.y + r.h - 6.0,
+                                18.0,
+                                GOLD,
+                            );
+                        }
+                    }
+                }
+                if hover && game.dragging.is_none() {
+                    tooltip = Some((a, *r, locked.then_some(learned_at)));
                 }
             }
         }
-        let key = if i == E_SLOT {
-            "E".to_string()
+        // The top bar's keys need Shift.
+        let key = BAR_KEYS[i % BAR_SLOTS];
+        let key = if i < BAR_SLOTS {
+            key.to_string()
         } else {
-            (i + 1).to_string()
+            format!("s{key}")
         };
         text(
             &key,
@@ -1105,15 +1158,47 @@ fn action_bar(game: &Game, layout: &Layout, me: &EntityView) {
             15.0,
             Color::new(0.9, 0.9, 0.9, 1.0),
         );
-        let hover = r.contains(mouse);
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if hover { GOLD } else { BORDER });
-        if hover {
-            tooltip = Some((a, *r, UNLOCK_LEVELS[i], locked));
-        }
     }
-    if let Some((a, r, level, locked)) = tooltip {
-        ability_tooltip(a, r, game.class, locked.then_some(level));
+    if let Some((a, r, locked)) = tooltip {
+        ability_tooltip(a, r, game.class, locked);
     }
+}
+
+/// An ability's square: its school's color and a short name, greyed out
+/// with a padlock while it's still to be learned.
+pub fn ability_icon(r: Rect, a: &Ability, locked: bool) {
+    if locked {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.12, 0.12, 0.13, 1.0));
+        // A little padlock.
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0 - 4.0);
+        let grey = Color::new(0.55, 0.55, 0.58, 1.0);
+        draw_circle_lines(cx, cy - 4.0, 7.0, 3.0, grey);
+        draw_rectangle(cx - 10.0, cy - 2.0, 20.0, 14.0, grey);
+        return;
+    }
+    let c = school_color(a.school);
+    draw_rectangle(
+        r.x,
+        r.y,
+        r.w,
+        r.h,
+        Color::new(c.r * 0.45, c.g * 0.45, c.b * 0.45, 1.0),
+    );
+    draw_rectangle(
+        r.x + 4.0,
+        r.y + 4.0,
+        r.w - 8.0,
+        r.h - 8.0,
+        Color::new(c.r * 0.7, c.g * 0.7, c.b * 0.7, 1.0),
+    );
+    text_centered(
+        &abbreviation(a.name),
+        r.x + r.w / 2.0,
+        r.y + r.h / 2.0 + 7.0,
+        20.0,
+        WHITE,
+    );
 }
 
 pub fn tooltip_box(lines: &[(String, Color)], anchor: Rect, above: bool) {
@@ -1138,7 +1223,7 @@ pub fn tooltip_box(lines: &[(String, Color)], anchor: Rect, above: bool) {
     }
 }
 
-fn ability_tooltip(a: &Ability, slot: Rect, class: Class, locked_until: Option<u8>) {
+pub fn ability_tooltip(a: &Ability, slot: Rect, class: Class, locked_until: Option<u8>) {
     let mut lines: Vec<(String, Color)> = vec![(a.name.to_string(), WHITE)];
     let mut stats = Vec::new();
     if a.cost > 0.0 {
@@ -1178,7 +1263,17 @@ pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
     let green = Color::new(0.3, 1.0, 0.25, 1.0);
     let mut lines = vec![(it.name.to_string(), quality_color(it.quality))];
     match it.kind {
-        ItemKind::Material => lines.push(("Crafting material".into(), grey)),
+        ItemKind::Material => {
+            let cooked = Skill::Cooking
+                .recipes()
+                .any(|(_, r)| r.materials.iter().any(|(m, _)| *m == id));
+            let what = if cooked {
+                "Cooking ingredient"
+            } else {
+                "Crafting material"
+            };
+            lines.push((what.into(), grey));
+        }
         ItemKind::Potion { health, power } => {
             let mut what = Vec::new();
             if health > 0.0 {
@@ -1189,6 +1284,13 @@ pub fn item_lines(id: ItemId) -> Vec<(String, Color)> {
             }
             lines.push((format!("Use: restores {}", what.join(" and ")), green));
         }
+        ItemKind::Food { health } => lines.push((
+            format!(
+                "Use: restores {:.0}% of your health (shares the potion cooldown)",
+                health * 100.0
+            ),
+            green,
+        )),
         ItemKind::Weapon {
             damage,
             stamina,
@@ -1248,6 +1350,8 @@ fn item_tooltips(game: &Game, layout: &Layout) {
                 lines.push(("Click to hold".into(), hint));
             } else if matches!(item(*id).kind, ItemKind::Potion { .. }) {
                 lines.push(("Right-click to drink".into(), hint));
+            } else if matches!(item(*id).kind, ItemKind::Food { .. }) {
+                lines.push(("Right-click to eat".into(), hint));
             }
             tooltip_box(&lines, *r, true);
         }
@@ -1412,10 +1516,20 @@ fn character(game: &Game, layout: &Layout, r: Rect, me: &EntityView) {
     );
 }
 
-fn crafting(game: &Game, layout: &Layout, r: Rect) {
-    window(r, "Crafting (K)");
-    for (i, (recipe, b)) in RECIPES.iter().zip(&layout.craft_buttons).enumerate() {
-        let y = r.y + 38.0 + i as f32 * 34.0;
+/// Where the recipe list starts in the skills window, below the tabs.
+const SKILL_LIST_TOP: f32 = 72.0;
+
+fn skills(game: &Game, layout: &Layout, r: Rect) {
+    window(r, "Skills (K)");
+    for (skill, tab) in Skill::ALL.iter().zip(&layout.skill_tabs) {
+        button(*tab, skill.name());
+        if *skill == game.windows.skill {
+            draw_rectangle_lines(tab.x, tab.y, tab.w, tab.h, 2.0, GOLD);
+        }
+    }
+    let recipes = game.windows.skill.recipes().map(|(_, r)| r);
+    for (i, (recipe, b)) in recipes.zip(&layout.craft_buttons).enumerate() {
+        let y = r.y + SKILL_LIST_TOP + i as f32 * 34.0;
         let result = item(recipe.result);
         text(
             result.name,
@@ -1447,7 +1561,11 @@ fn crafting(game: &Game, layout: &Layout, r: Rect) {
             Color::new(0.9, 0.4, 0.35, 1.0)
         };
         text(&mats.join(", "), r.x + 12.0, y + 29.0, 14.0, color);
-        button_ex(*b, "Craft", have_all);
+        let verb = match game.windows.skill {
+            Skill::Crafting => "Craft",
+            Skill::Cooking => "Cook",
+        };
+        button_ex(*b, verb, have_all);
         let _ = i;
     }
 }
@@ -1558,7 +1676,7 @@ fn nameplates(game: &Game, cam: &Camera3D) {
             if matches!(v.kind, EntityKind::QuestGiver(_))
                 && let Some(m) = crate::quests_ui::marker(
                     &game.me.quests,
-                    Zone::at(e.pos),
+                    Place::at(e.pos),
                     my_level,
                     &game.me.bags,
                 )
@@ -1628,15 +1746,17 @@ fn minimap(game: &Game, layout: &Layout) {
         zone.to_local(vec2(game.pos.x, game.pos.z))
     };
     let place = if dungeon {
-        dungeon::room_at(local).unwrap_or(dungeon::NAME)
+        dungeon::at(game.pos)
+            .map(|d| d.room_at(local).unwrap_or(d.name))
+            .unwrap_or_default()
     } else if zone.in_town(game.pos) {
         zone.town_name()
     } else {
         zone.name()
     };
     text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
-    let t = if dungeon {
-        render::dungeon_theme()
+    let t = if let Some(index) = game.dungeon() {
+        render::dungeon_theme(index)
     } else {
         render::theme(zone)
     };
@@ -1676,7 +1796,7 @@ fn minimap(game: &Game, layout: &Layout) {
         }
         if matches!(e.view.kind, EntityKind::QuestGiver(_))
             && let Some(mk) =
-                crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
+                crate::quests_ui::marker(&game.me.quests, game.place, game.level(), &game.me.bags)
         {
             let s = if mk == crate::quests_ui::Marker::Ready {
                 "?"
@@ -1802,9 +1922,11 @@ fn help() {
         ("Tab", "Target the next enemy"),
         ("Left click", "Target"),
         ("Right click", "Attack, loot, or trade"),
-        ("1 - 6, E", "Use abilities"),
+        ("1 - 6, Q, E", "Use abilities"),
+        ("Shift + 1 - 6, Q, E", "Use the top hotbar"),
+        ("Y", "Spell book (drag spells to bars)"),
         ("T  /  F1", "Toggle attack / target self"),
-        ("B  C  K", "Bags, character, crafting"),
+        ("B  C  K", "Bags, character, skills"),
         ("N  M", "Talents, world map"),
         ("F", "Use a waystone (travel)"),
         ("P", "Sandbox panel (sandbox mode)"),

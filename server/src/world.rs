@@ -16,8 +16,11 @@ use crate::character::{Character, add_item, count_item, gear_stats, remove_item}
 use shared::props::{ARRIVAL_SPOT, MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
+mod boss;
 mod instance;
 mod party;
+
+use boss::{BossTimers, Hazard};
 pub use instance::{Instance, Owner};
 pub use party::{Party, PartyId};
 
@@ -96,6 +99,8 @@ pub struct PlayerData {
     pub talents: Ranks,
     /// What the talents add up to.
     pub bonuses: Bonuses,
+    /// Rearranged hotbars; `None` until the player first moves something.
+    pub hotbar: Option<Hotbar>,
     /// Sandbox god mode: no damage taken, abilities are free.
     pub god: bool,
     pub quests: QuestLog,
@@ -122,11 +127,26 @@ pub struct Loot {
     /// A party member whose turn it is: only they may loot until the
     /// seconds run out.
     pub turn: Option<(EntityId, f32)>,
+    /// Gear rolled for each player on their own (in the dungeon): only they
+    /// see and take it.
+    pub personal: Vec<(EntityId, Vec<Stack>)>,
 }
 
 impl Loot {
+    /// Whether this player may take the shared money and items.
+    fn shares_with(&self, id: EntityId) -> bool {
+        (self.money > 0 || !self.items.is_empty())
+            && self.looters.contains(&id)
+            && self.turn.is_none_or(|(t, _)| t == id)
+    }
+
+    /// Whether there's anything here this player may take.
     pub fn allows(&self, id: EntityId) -> bool {
-        self.looters.contains(&id) && self.turn.is_none_or(|(t, _)| t == id)
+        self.shares_with(id) || self.personal.iter().any(|(p, _)| *p == id)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.money == 0 && self.items.is_empty() && self.personal.is_empty()
     }
 }
 
@@ -141,8 +161,11 @@ pub struct MobData {
     wander_to: Option<Vec3>,
     respawn_timer: f32,
     spell_timer: f32,
+    /// Bosses' own mechanics.
+    boss: BossTimers,
     pub loot: Option<Loot>,
-    /// Who summoned this mob in sandbox mode; it doesn't come back.
+    /// Who summoned this mob (a player in sandbox mode, or a boss calling
+    /// for help); it doesn't come back.
     pub summoner: Option<EntityId>,
 }
 
@@ -417,6 +440,19 @@ fn camps() -> Vec<Camp> {
                 });
             }
         }
+        if let Some(kind) = MobKind::water(zone) {
+            for shore in &zone.layout().shores {
+                camps.push(Camp {
+                    center: zone.to_world(shore.center),
+                    radius: shared::layout::SHORE_RADIUS,
+                    kind,
+                    levels: shared::layout::SHORE_LEVELS,
+                    count: shared::layout::SHORE_COUNT,
+                    group: camps.len(),
+                    instance: None,
+                });
+            }
+        }
     }
     camps
 }
@@ -442,6 +478,30 @@ pub struct World {
     pub instances: BTreeMap<u32, Instance>,
     /// Camps of closed vault copies, to reuse.
     free_camps: Vec<usize>,
+    /// Ground marked by bosses, about to be hit.
+    hazards: Vec<Hazard>,
+    /// Spells in flight.
+    missiles: Vec<Missile>,
+}
+
+/// How hard an ability hits, fixed when it's used.
+#[derive(Clone, Copy, Debug)]
+struct Power {
+    scale: f32,
+    harm: f32,
+    heal: f32,
+    crit: f32,
+}
+
+/// A spell or shot on its way to its target.
+#[derive(Clone, Copy, Debug)]
+struct Missile {
+    caster: EntityId,
+    ability: AbilityId,
+    target: EntityId,
+    /// Seconds until it arrives.
+    eta: f32,
+    power: Power,
 }
 
 impl World {
@@ -458,6 +518,8 @@ impl World {
             next_party: 1,
             instances: BTreeMap::new(),
             free_camps: Vec::new(),
+            hazards: Vec::new(),
+            missiles: Vec::new(),
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -478,14 +540,25 @@ impl World {
 
     /// A townsperson standing at their spot in a zone's town.
     fn spawn_npc(&mut self, zone: Zone, role: NpcRole) -> EntityId {
-        let id = self.alloc_id();
         let (spot, name) = match role {
             NpcRole::Merchant => (MERCHANT_SPOT, zone.merchant_name()),
             NpcRole::QuestGiver => (QUEST_SPOT, quests::quest_giver_name(zone)),
         };
         let pos = zone.ground_local(spot);
         let center = zone.ground_local(Vec2::ZERO);
-        let yaw = yaw_towards(pos, center);
+        self.spawn_npc_at(zone, role, name, pos, yaw_towards(pos, center))
+    }
+
+    /// Puts an NPC of `zone`'s race at `pos`.
+    fn spawn_npc_at(
+        &mut self,
+        zone: Zone,
+        role: NpcRole,
+        name: &str,
+        pos: Vec3,
+        yaw: f32,
+    ) -> EntityId {
+        let id = self.alloc_id();
         self.entities.insert(
             id,
             Entity {
@@ -556,6 +629,7 @@ impl World {
                 wander_to: None,
                 respawn_timer: 0.0,
                 spell_timer: 0.0,
+                boss: BossTimers::default(),
                 loot: None,
                 summoner: None,
             }),
@@ -582,6 +656,7 @@ impl World {
         m.wander_timer = self.rng.range(2.0, 8.0);
         m.wander_to = None;
         m.spell_timer = self.rng.range(1.0, 3.0);
+        m.boss = BossTimers::default();
         m.loot = None;
         mob.name = t.name.to_string();
         mob.level = level;
@@ -649,6 +724,7 @@ impl World {
                     potion_cooldown: 0.0,
                     talents: ranks,
                     bonuses,
+                    hotbar: c.hotbar.map(|bar| c.class.sanitize_hotbar(&bar)),
                     god: false,
                     quests: c.quests.clone(),
                     party: None,
@@ -688,6 +764,7 @@ impl World {
             gear: p.gear,
             weapon: p.weapon,
             talents: p.talents,
+            hotbar: p.hotbar,
             quests: p.quests.clone(),
         })
     }
@@ -756,6 +833,8 @@ impl World {
         let p = me.player()?;
         Some(Snapshot {
             tick: self.tick,
+            hazards: self.hazards_near(me.pos),
+            portal: self.portal_at(me.pos),
             entities,
             me: SelfView {
                 xp: p.xp,
@@ -781,6 +860,7 @@ impl World {
                     .invite
                     .and_then(|(from, _)| self.entities.get(&from))
                     .map(|e| e.name.clone()),
+                hotbar: p.hotbar.unwrap_or_else(|| p.class.default_hotbar()),
             },
         })
     }
@@ -813,6 +893,10 @@ impl World {
             ClientMsg::StopAttack => {
                 let e = self.entities.get_mut(&id).unwrap();
                 e.player_mut().unwrap().auto_attack = false;
+            }
+            ClientMsg::SetHotbar(bar) => {
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                p.hotbar = Some(p.class.sanitize_hotbar(&bar));
             }
             ClientMsg::Chat(text) => self.chat(id, text),
             ClientMsg::ReleaseSpirit => self.release(id),
@@ -906,7 +990,7 @@ impl World {
             }
             ClientMsg::Travel(to) => {
                 if let Err(e) = self.travel(id, to) {
-                    self.error(id, e);
+                    self.error(id, &e);
                 }
             }
             // Session messages are handled by the network layer.
@@ -1058,39 +1142,58 @@ impl World {
         if c.pos.distance(me.pos) > LOOT_RANGE + 1.0 {
             return Err("You are too far away.");
         }
-        let loot = mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain)
+        let mut loot = mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain)
             .loot
             .take()
             .unwrap();
+        let shared = loot.shares_with(id);
+        let money = if shared {
+            loot.turn = None;
+            std::mem::take(&mut loot.money)
+        } else {
+            0
+        };
+        let shared_items = if shared {
+            std::mem::take(&mut loot.items)
+        } else {
+            Vec::new()
+        };
+        let mine = loot
+            .personal
+            .iter()
+            .position(|(p, _)| *p == id)
+            .map_or(Vec::new(), |i| loot.personal.remove(i).1);
         let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
-        p.money += loot.money;
+        p.money += money;
         let mut got = Vec::new();
-        let mut left = Vec::new();
-        for (item, n) in loot.items {
-            let rest = add_item(&mut p.bags, item, n);
-            if rest < n {
-                got.push((item, n - rest));
+        let mut full = false;
+        // What doesn't fit stays on the corpse, shared or still just yours.
+        let mut take = |stacks: Vec<Stack>, bags: &mut Vec<Option<Stack>>| {
+            let mut left = Vec::new();
+            for (item, n) in stacks {
+                let rest = add_item(bags, item, n);
+                if rest < n {
+                    got.push((item, n - rest));
+                }
+                if rest > 0 {
+                    left.push((item, rest));
+                    full = true;
+                }
             }
-            if rest > 0 {
-                left.push((item, rest));
-            }
+            left
+        };
+        loot.items.extend(take(shared_items, &mut p.bags));
+        let mine_left = take(mine, &mut p.bags);
+        if !mine_left.is_empty() {
+            loot.personal.push((id, mine_left));
         }
-        if !left.is_empty() {
-            mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain).loot = Some(Loot {
-                money: 0,
-                items: left,
-                looters: loot.looters,
-                turn: None,
-            });
+        if !loot.is_empty() {
+            mob_of(&mut self.entities.get_mut(&corpse).unwrap().brain).loot = Some(loot);
+        }
+        if full {
             self.error(id, "Your bags are full.");
         }
-        self.send(
-            Audience::Only(id),
-            GameEvent::Looted {
-                money: loot.money,
-                items: got,
-            },
-        );
+        self.send(Audience::Only(id), GameEvent::Looted { money, items: got });
         Ok(())
     }
 
@@ -1339,7 +1442,8 @@ impl World {
         let Brain::Npc(n) = &g.brain else {
             return Err("They have no quests for you.");
         };
-        if n.role != NpcRole::QuestGiver || quests::quest(quest).zone != n.zone {
+        let theirs = quests::offered(Place::at(g.pos));
+        if n.role != NpcRole::QuestGiver || !theirs.iter().any(|q| q.id == quest) {
             return Err("They have no quests for you.");
         }
         if g.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
@@ -1536,11 +1640,13 @@ impl World {
             .copied()
             .flatten()
             .ok_or("That slot is empty.")?;
-        let ItemKind::Potion { health, power } = item(item_id).kind else {
-            return Err("You can't use that.");
+        let (health, power) = match item(item_id).kind {
+            ItemKind::Potion { health, power } => (health, power),
+            ItemKind::Food { health } => (health, 0.0),
+            _ => return Err("You can't use that."),
         };
         if p.potion_cooldown > 0.0 {
-            return Err("Potions are not ready yet.");
+            return Err("Potions and food are not ready yet.");
         }
         p.potion_cooldown = POTION_COOLDOWN;
         p.bags[slot] = (count > 1).then_some((item_id, count - 1));
@@ -1570,7 +1676,7 @@ impl World {
 
     /// Checks whether `caster` can use `ability` right now, and starts it.
     pub fn try_use(&mut self, caster: EntityId, id: AbilityId) -> Result<(), &'static str> {
-        let a = ABILITIES.get(id.0 as usize).ok_or("Unknown ability.")?;
+        let a = try_ability(id).ok_or("Unknown ability.")?;
         let e = &self.entities[&caster];
         if let Some(p) = e.player() {
             match p.class.unlock_level(id) {
@@ -1745,7 +1851,62 @@ impl World {
                 ability: id,
             },
         );
+        let power = Power {
+            scale,
+            harm: harm_scale,
+            heal: heal_scale,
+            crit,
+        };
+        // A missile hits when it gets there, not when it's thrown.
+        if a.projectile
+            && let Some(t) = target.filter(|&t| t != caster)
+        {
+            let class = match self.entities[&caster].kind() {
+                EntityKind::Player(c) => Some(c),
+                _ => None,
+            };
+            let eta = pos.distance(self.pos_of(t)) / a.missile_speed(class);
+            self.missiles.push(Missile {
+                caster,
+                ability: id,
+                target: t,
+                eta,
+                power,
+            });
+            return;
+        }
+        self.land(caster, id, target, power);
+    }
 
+    /// Missiles fly on; those that arrive land their ability's effects.
+    fn tick_missiles(&mut self, dt: f32) {
+        let mut arrived = Vec::new();
+        self.missiles.retain_mut(|m| {
+            m.eta -= dt;
+            if m.eta > 0.0 {
+                return true;
+            }
+            arrived.push(*m);
+            false
+        });
+        for m in arrived {
+            let alive = |id| self.entities.get(&id).is_some_and(|e: &Entity| !e.dead);
+            if self.entities.contains_key(&m.caster) && alive(m.target) {
+                self.land(m.caster, m.ability, Some(m.target), m.power);
+            }
+        }
+    }
+
+    /// An ability's effects reach their targets.
+    fn land(&mut self, caster: EntityId, id: AbilityId, target: Option<EntityId>, power: Power) {
+        let a = ability(id);
+        let pos = self.pos_of(caster);
+        let Power {
+            scale,
+            harm: harm_scale,
+            heal: heal_scale,
+            crit,
+        } = power;
         let targets: Vec<EntityId> = match a.targeting {
             Targeting::Enemy | Targeting::Friendly => target.into_iter().collect(),
             Targeting::Caster => vec![caster],
@@ -2116,19 +2277,22 @@ impl World {
         let money = self.rng.int(lo, hi) * level as u32;
         let mut items = Vec::new();
         for &(item, chance, min, max) in table.items {
-            if self.rng.chance(chance) {
+            if !is_gear(item) && self.rng.chance(chance) {
                 items.push((item, self.rng.int(min as u32, max as u32) as u16));
             }
         }
-        // Now and then, a piece of green gear.
-        let (rare, weapon) = kind.drop_chances();
-        if self.rng.chance(rare) {
-            let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
-            items.push((pick, 1));
-        }
-        if self.rng.chance(weapon) {
-            let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
-            items.push((pick, 1));
+        // The dungeon rolls gear for each player on their own; elsewhere
+        // it's shared like everything else.
+        let mut personal = Vec::new();
+        if MobKind::DUNGEON.contains(&kind) {
+            for &p in &looters {
+                let gear = self.roll_gear(kind);
+                if !gear.is_empty() {
+                    personal.push((p, gear));
+                }
+            }
+        } else {
+            items.extend(self.roll_gear(kind));
         }
         let turn = self.loot_turn(&looters).map(|t| (t, LOOT_TURN_TIME));
         (!looters.is_empty()).then_some(Loot {
@@ -2136,7 +2300,29 @@ impl World {
             items,
             looters,
             turn,
+            personal,
         })
+    }
+
+    /// The gear a mob drops: anything wearable from its loot table, and now
+    /// and then a green piece or weapon.
+    fn roll_gear(&mut self, kind: MobKind) -> Vec<Stack> {
+        let mut gear = Vec::new();
+        for &(item, chance, min, max) in kind.template().loot.items {
+            if is_gear(item) && self.rng.chance(chance) {
+                gear.push((item, self.rng.int(min as u32, max as u32) as u16));
+            }
+        }
+        let (rare, weapon) = kind.drop_chances();
+        if self.rng.chance(rare) {
+            let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
+            gear.push((pick, 1));
+        }
+        if self.rng.chance(weapon) {
+            let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
+            gear.push((pick, 1));
+        }
+        gear
     }
 
     fn kill(&mut self, victim: EntityId, killer: Option<EntityId>) {
@@ -2169,6 +2355,9 @@ impl World {
         self.forget(victim);
         let Some(kind) = mob_kind else { return };
         let t = kind.template();
+        if t.boss {
+            self.open_portal(pos);
+        }
         // Everyone who fought the mob, and their party members nearby, share
         // the kill and may loot it.
         let fighters: Vec<EntityId> = fighters
@@ -2224,9 +2413,17 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         e.hp = e.max_hp;
         self.send(Audience::Near(pos), GameEvent::LevelUp { id, level });
-        for (ability, unlock) in class.abilities().into_iter().zip(UNLOCK_LEVELS) {
+        for (ability, unlock) in class.spellbook() {
             if unlock > old_level && unlock <= level {
                 self.send(Audience::Only(id), GameEvent::Learned(ability));
+                // A rearranged hotbar gets new spells in its first free slot.
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                if let Some(bar) = &mut p.hotbar
+                    && !bar.contains(&Some(ability))
+                    && let Some(slot) = bar.iter_mut().find(|s| s.is_none())
+                {
+                    *slot = Some(ability);
+                }
             }
         }
     }
@@ -2235,6 +2432,8 @@ impl World {
         self.tick += 1;
         self.tick_parties(dt);
         self.tick_instances(dt);
+        self.tick_hazards(dt);
+        self.tick_missiles(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -2539,8 +2738,15 @@ impl World {
         if m.threat.is_empty() || e.pos.distance(home) > LEASH_RANGE {
             m.state = MobState::Evading;
             m.threat.clear();
+            m.boss = BossTimers::default();
+            let boss = m.kind.template().boss;
             e.cast = None;
             e.hp = e.max_hp;
+            // A boss starts over: its rage cools and its pack goes.
+            if boss {
+                e.auras.clear();
+                self.dismiss_pack(id);
+            }
             return;
         }
         let target = m
@@ -2562,6 +2768,11 @@ impl World {
         e.yaw = yaw_towards(e.pos, target_pos);
         let dist = e.pos.distance(target_pos);
 
+        if t.boss && self.boss_combat(id, dt) {
+            self.entities.get_mut(&id).unwrap().moving = false;
+            return;
+        }
+        let e = self.entities.get_mut(&id).unwrap();
         if let Some((spell, interval)) = t.spell {
             let a = ability(spell);
             let in_range = match a.targeting {
@@ -2598,6 +2809,13 @@ impl World {
             self.apply_hit(id, target, Hit::Damage(amount, crit), None);
         }
     }
+}
+
+fn is_gear(id: ItemId) -> bool {
+    matches!(
+        item(id).kind,
+        ItemKind::Armor { .. } | ItemKind::Weapon { .. }
+    )
 }
 
 fn vec3_on_ground(p: Vec3) -> Vec3 {
@@ -2639,6 +2857,7 @@ pub fn test_character(name: &str, class: Class, level: u8) -> Character {
 mod tests {
     use super::*;
     use shared::data::{ids, items};
+    use shared::dungeon::DungeonId;
 
     const DT: f32 = 0.05;
 
@@ -2685,7 +2904,12 @@ mod tests {
     #[test]
     fn camps_are_on_dry_land() {
         let w = World::new(1);
-        for e in w.entities.values().filter(|e| e.mob().is_some()) {
+        // Water mobs aside: they live in the shallows.
+        let dry = |e: &&Entity| {
+            e.mob()
+                .is_some_and(|m| MobKind::water(Zone::at(e.pos)) != Some(m.kind))
+        };
+        for e in w.entities.values().filter(dry) {
             assert!(
                 e.pos.y > WATER_LEVEL,
                 "{} at {:?} is under water",
@@ -2902,7 +3126,7 @@ mod tests {
         let p = join(&mut w, "Pyro", Class::Mage, 1);
         let boar = engage(&mut w, p, MobKind::Boar);
         w.try_use(p, ids::FIREBALL).unwrap();
-        run(&mut w, 2.6);
+        run(&mut w, 3.2);
         assert!(
             w.entities[&boar]
                 .auras
@@ -2996,7 +3220,7 @@ mod tests {
             e.power = e.max_power;
             face(&mut w, p, boar);
             w.try_use(p, ability_id).unwrap();
-            run(&mut w, 3.0);
+            run(&mut w, 4.0);
             let b = &w.entities[&boar];
             assert_eq!(
                 b.mob().unwrap().state,
@@ -3152,7 +3376,7 @@ mod tests {
         run(&mut w, 1.6);
         face(&mut w, p, boar);
         w.try_use(p, ids::FIREBALL).unwrap();
-        run(&mut w, 2.6);
+        run(&mut w, 3.2);
         assert!(w.entities[&boar].hp < hp);
         assert!(w.entities[&boar].mob().unwrap().state == MobState::Combat);
     }
@@ -3313,7 +3537,10 @@ mod tests {
                 .filter(|e| e.mob().is_some() && Zone::at(e.pos) == zone)
                 .collect();
             assert!(mobs.len() >= 50, "{zone:?} has {} mobs", mobs.len());
-            assert!(mobs.iter().all(|m| kinds.contains(&m.mob().unwrap().kind)));
+            assert!(mobs.iter().all(|m| {
+                let kind = m.mob().unwrap().kind;
+                kinds.contains(&kind) || MobKind::water(zone) == Some(kind)
+            }));
             let merchant = w
                 .entities
                 .values()
@@ -3416,6 +3643,9 @@ mod tests {
         e.yaw = yaw_towards(e.pos, bpos);
         w.try_use(p, ids::MULTI_SHOT).unwrap();
         let hurt = |w: &World, id| w.entities[&id].hp < w.entities[&id].max_hp;
+        // It lands when the arrows get there, not when they're loosed.
+        assert!(!hurt(&w, boar));
+        run(&mut w, 1.0);
         assert!(hurt(&w, boar) && hurt(&w, other));
         assert!(!hurt(&w, far));
     }
@@ -3540,13 +3770,65 @@ mod tests {
         w.entities.get_mut(&p).unwrap().pos = ground(spos.x + 15.0, spos.z);
         w.entities.get_mut(&shaman).unwrap().target = Some(p);
         assert_eq!(w.try_use(shaman, ids::FROSTBOLT), Ok(()));
-        run(&mut w, 2.1);
+        run(&mut w, 2.8);
         assert!(
             w.entities[&p]
                 .auras
                 .iter()
                 .any(|a| a.ability == ids::FROSTBOLT)
         );
+    }
+
+    #[test]
+    fn hotbars_are_saved_and_new_spells_land_on_them() {
+        let mut w = World::new(32);
+        let p = join(&mut w, "Bars", Class::Mage, 11);
+        assert!(w.character(p).unwrap().hotbar.is_none(), "default layout");
+        // Move Fireball to Shift+E and clear Q.
+        let mut bar = Class::Mage.default_hotbar();
+        let fireball = bar[0];
+        bar[15] = fireball;
+        bar[0] = None;
+        bar[6] = None;
+        // Junk is dropped: another class's ability, and a repeat.
+        bar[13] = Some(ids::SMITE);
+        bar[14] = fireball;
+        w.handle(p, ClientMsg::SetHotbar(bar));
+        let saved = w.character(p).unwrap().hotbar.unwrap();
+        assert_eq!(saved[15], None, "the later copy of Fireball is dropped");
+        assert_eq!(saved[14], fireball);
+        assert_eq!(saved[13], None);
+        assert_eq!(saved[0], None);
+        // Level 12's spell isn't on the bars any more; learning it puts it
+        // in the first free slot.
+        let new = Class::Mage.spells()[0];
+        assert!(!saved.contains(&Some(new)));
+        w.give_xp(p, xp_to_next(11), "test");
+        assert_eq!(w.entities[&p].level, 12);
+        assert_eq!(w.character(p).unwrap().hotbar.unwrap()[0], Some(new));
+    }
+
+    #[test]
+    fn new_spells_are_learned_from_level_12() {
+        for class in Class::ALL {
+            let mut w = World::new(33);
+            let p = join(&mut w, "Learner", class, 11);
+            let first = class.spells()[0];
+            assert!(w.try_use(p, first).is_err(), "{class:?} too early");
+            w.entities.get_mut(&p).unwrap().level = MAX_LEVEL;
+            for id in class.spells() {
+                assert_ne!(
+                    w.try_use(p, id),
+                    Err("You don't know that ability."),
+                    "{class:?}"
+                );
+                assert_ne!(
+                    w.try_use(p, id),
+                    Err("You haven't learned that yet."),
+                    "{class:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3740,6 +4022,55 @@ mod tests {
     }
 
     #[test]
+    fn dungeon_master_joe_sends_you_after_the_sunken_king() {
+        let mut w = World::new(45);
+        let p = join(&mut w, "Hero", Class::Mage, 10);
+        let ours = quests::dungeon_quest(DungeonId::SunkenVault).id;
+        // The town quest givers don't offer it.
+        let giver = visit_giver(&mut w, p, Zone::Amberfall);
+        assert!(w.accept_quest(p, giver, ours).is_err());
+        at_waystone(&mut w, p);
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let joe = w
+            .entities
+            .values()
+            .find(|e| e.name == quests::VAULT_GIVER && Place::at(e.pos) == Place::Dungeon(index))
+            .unwrap()
+            .id;
+        assert_eq!(w.entities[&joe].kind(), EntityKind::QuestGiver(Race::Human));
+        assert!(
+            w.accept_quest(p, joe, quests::zone_quests(Zone::Amberfall)[0].id)
+                .is_err()
+        );
+        assert_eq!(w.accept_quest(p, joe, ours), Ok(()));
+        // Kill the King, come back to Joe, and the trident is yours.
+        let king = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
+            .unwrap();
+        w.provoke(p, king, 10.0);
+        w.kill(king, Some(p));
+        assert_eq!(
+            w.entities[&p].player().unwrap().quests.progress(ours),
+            Some(1)
+        );
+        assert_eq!(w.turn_in_quest(p, joe, ours), Ok(()));
+        let bags = &w.entities[&p].player().unwrap().bags;
+        assert!(bags.contains(&Some((items::TIDEBREAKER_TRIDENT, 1))));
+        // Joe goes when the vault closes.
+        w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        run(&mut w, dungeon::EMPTY_RESET + 5.0);
+        assert!(!w.entities.contains_key(&joe));
+    }
+
+    #[test]
     fn mobs_sometimes_drop_green_gear() {
         let mut w = World::new(44);
         let mut greens = 0;
@@ -3816,6 +4147,33 @@ mod tests {
     }
 
     #[test]
+    fn casters_drop_potions_and_elites_drop_scrap() {
+        let mut w = World::new(17);
+        let mut potions = 0;
+        for _ in 0..400 {
+            let loot = w.roll_loot(MobKind::BanditMystic, 3, vec![1]).unwrap();
+            for (id, n) in loot.items {
+                if id == items::HEALING_POTION {
+                    assert_eq!(n, 1);
+                    potions += 1;
+                }
+            }
+        }
+        assert!((100..=180).contains(&potions), "{potions} potions from 400");
+        for kind in [MobKind::Golem, MobKind::Yeti, MobKind::StoneWarden] {
+            let loot = w.roll_loot(kind, 5, vec![1]).unwrap();
+            assert!(loot.items.contains(&(items::IRON_SCRAP, 5)), "{kind:?}");
+        }
+        for _ in 0..20 {
+            let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
+            for mat in [items::IRON_SCRAP, items::LIGHT_LEATHER] {
+                let n = loot.items.iter().find(|(i, _)| *i == mat).unwrap().1;
+                assert!((3..=5).contains(&n));
+            }
+        }
+    }
+
+    #[test]
     fn fighters_drop_scrap_for_weapons_and_mobs_drop_weapons() {
         let mut w = World::new(9);
         let mut scrap = 0;
@@ -3846,6 +4204,235 @@ mod tests {
         let pd = w.entities[&p].player().unwrap();
         assert_eq!(count_item(&pd.bags, items::IRON_SWORD), 1);
         assert_eq!(count_item(&pd.bags, items::IRON_SCRAP), 0);
+    }
+
+    #[test]
+    fn water_mobs_live_in_the_shallows() {
+        let w = World::new(3);
+        for zone in Zone::ALL {
+            let water: Vec<_> = w
+                .entities
+                .values()
+                .filter(|e| {
+                    e.mob()
+                        .is_some_and(|m| Some(m.kind) == MobKind::water(zone))
+                })
+                .collect();
+            let lakes = zone.layout().shores.len();
+            assert_eq!(water.len(), lakes * shared::layout::SHORE_COUNT, "{zone:?}");
+            assert_eq!(lakes > 0, MobKind::water(zone).is_some(), "{zone:?}");
+            for e in water {
+                assert!((3..=5).contains(&e.level));
+                assert_eq!(Zone::at(e.pos), zone);
+                assert!(e.pos.y < zone.water_level() + 0.5, "{zone:?} {}", e.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn boars_and_water_mobs_drop_food_to_cook_and_eat() {
+        let mut w = World::new(23);
+        let count = |w: &mut World, kind: MobKind, food: ItemId| {
+            (0..200)
+                .map(|_| {
+                    let loot = w.roll_loot(kind, 4, vec![1]).unwrap();
+                    loot.items.iter().filter(|(i, _)| *i == food).count()
+                })
+                .sum::<usize>()
+        };
+        for boar in [MobKind::Boar, MobKind::PlagueBoar] {
+            assert!(count(&mut w, boar, items::BOAR_MEAT) > 60, "{boar:?}");
+        }
+        assert_eq!(count(&mut w, MobKind::Hyena, items::BOAR_MEAT), 0);
+        for fish in [MobKind::MudsnapCrab, MobKind::BogLurker] {
+            assert!(count(&mut w, fish, items::RAW_FISH) > 80, "{fish:?}");
+        }
+
+        let p = join(&mut w, "Cook", Class::Fighter, 5);
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        add_item(&mut pd.bags, items::RAW_FISH, 2);
+        let (fish, _) = Skill::Cooking
+            .recipes()
+            .find(|(_, r)| r.result == items::COOKED_FISH)
+            .unwrap();
+        w.craft(p, fish).unwrap();
+        w.craft(p, fish).unwrap();
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(count_item(&pd.bags, items::COOKED_FISH), 2);
+
+        // Eating heals three quarters of a potion, and shares its cooldown.
+        let e = w.entities.get_mut(&p).unwrap();
+        e.hp = 1.0;
+        let max = e.max_hp;
+        let slot = e
+            .player()
+            .unwrap()
+            .bags
+            .iter()
+            .position(|s| matches!(s, Some((i, _)) if *i == items::COOKED_FISH))
+            .unwrap();
+        w.use_item(p, slot).unwrap();
+        let healed = w.entities[&p].hp - 1.0;
+        assert!(
+            (healed - max * 0.35 * 0.75).abs() < 1.0,
+            "healed {healed} of {max}"
+        );
+        assert!(w.use_item(p, slot).is_err());
+    }
+
+    /// A Sunken King summoned next to a player, already fighting them.
+    fn boss_fight(w: &mut World, p: EntityId) -> EntityId {
+        boss_fight_with(w, p, MobKind::SunkenKing)
+    }
+
+    /// A boss summoned next to a player, already fighting them.
+    fn boss_fight_with(w: &mut World, p: EntityId, kind: MobKind) -> EntityId {
+        w.sandbox = true;
+        // Out of town, where mobs keep their threat.
+        let e = w.entities.get_mut(&p).unwrap();
+        let zone = Zone::at(e.pos);
+        let c = zone.center();
+        e.pos = ground(c.x + shared::world::TOWN_RADIUS + 12.0, c.y);
+        assert!(!zone.in_town(e.pos));
+        w.handle(
+            p,
+            ClientMsg::Sandbox(SandboxCmd::SpawnMob { kind, level: 10 }),
+        );
+        let boss = w
+            .entities
+            .values()
+            .find(|e| e.mob().is_some_and(|m| m.kind == kind))
+            .unwrap()
+            .id;
+        sturdy(w, boss);
+        w.provoke(p, boss, 100.0);
+        boss
+    }
+
+    #[test]
+    fn the_sunken_king_marks_the_ground_and_it_hurts_to_stand_in() {
+        for dodge in [false, true] {
+            let mut w = World::new(5);
+            let p = join(&mut w, "Tank", Class::Fighter, 10);
+            w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = false;
+            let boss = boss_fight(&mut w, p);
+            // Wait for the first Tidal Crash to be marked.
+            let mut marked = None;
+            for _ in 0..(10.0 / DT) as usize {
+                w.tick(DT);
+                let e = w.entities.get_mut(&p).unwrap();
+                e.hp = e.max_hp;
+                if let Some(h) = w.hazards.first() {
+                    marked = Some(h.pos);
+                    break;
+                }
+            }
+            let at = marked.expect("no Tidal Crash");
+            assert!(at.distance(w.entities[&p].pos) < 0.5);
+            assert!(!w.snapshot_for(p).unwrap().hazards.is_empty());
+            // It comes down twice in a row, the second time wherever you are
+            // when the first lands.
+            let hp = w.entities[&p].hp;
+            for crash in 0..boss::kit(MobKind::SunkenKing).hazard.times {
+                if dodge {
+                    let e = w.entities.get_mut(&p).unwrap();
+                    e.pos = ground(e.pos.x + 8.0, e.pos.z);
+                }
+                // Keep the boss from swinging, so only the crash can hurt.
+                for _ in 0..(boss::kit(MobKind::SunkenKing).hazard.warning / DT) as usize + 2 {
+                    w.entities.get_mut(&boss).unwrap().swing_timer = 10.0;
+                    w.entities.get_mut(&boss).unwrap().cast = None;
+                    w.tick(DT);
+                }
+                if crash + 1 < boss::kit(MobKind::SunkenKing).hazard.times {
+                    let next = w.hazards.first().expect("no second Tidal Crash");
+                    assert!(next.pos.distance(w.entities[&p].pos) < 0.5);
+                }
+            }
+            assert!(w.hazards.is_empty());
+            let lost = hp - w.entities[&p].hp;
+            if dodge {
+                assert_eq!(lost, 0.0, "dodged but lost {lost}");
+            } else {
+                assert!(lost > 60.0, "stood in both and lost only {lost}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_sunken_kings_spells_can_be_interrupted() {
+        let mut w = World::new(6);
+        let p = join(&mut w, "Rogue", Class::Rogue, 10);
+        let boss = boss_fight(&mut w, p);
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let mut seen = Vec::new();
+        for _ in 0..(40.0 / DT) as usize {
+            // Hurt him enough that he wants to heal.
+            let b = w.entities.get_mut(&boss).unwrap();
+            b.hp = b.hp.min(b.max_hp * 0.5);
+            w.tick(DT);
+            let Some(cast) = w.entities[&boss].cast.as_ref().map(|c| c.ability) else {
+                continue;
+            };
+            if !seen.contains(&cast) {
+                seen.push(cast);
+            }
+            let me = w.entities.get_mut(&p).unwrap();
+            me.target = Some(boss);
+            me.gcd = 0.0;
+            me.cooldowns.clear();
+            let bpos = w.entities[&boss].pos;
+            let me = w.entities.get_mut(&p).unwrap();
+            me.pos = ground(bpos.x - 2.5, bpos.z);
+            me.yaw = yaw_towards(me.pos, bpos);
+            me.power = me.max_power;
+            w.try_use(p, ids::KICK).unwrap();
+            assert!(
+                w.entities[&boss].cast.is_none(),
+                "{cast:?} wasn't interrupted"
+            );
+        }
+        assert!(seen.contains(&ids::DROWNING_GRASP), "{seen:?}");
+        assert!(seen.contains(&ids::CALL_OF_THE_DEEP), "{seen:?}");
+        assert!(MobKind::SunkenKing.template().boss);
+    }
+
+    #[test]
+    fn dungeon_gear_drops_for_each_player_on_their_own() {
+        let mut w = World::new(8);
+        let a = join(&mut w, "Ann", Class::Fighter, 10);
+        let b = join(&mut w, "Bo", Class::Mage, 10);
+        let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![a, b]).unwrap();
+        // The King always drops green armor, so both get some.
+        assert_eq!(loot.personal.len(), 2);
+        assert!(loot.items.iter().all(|(i, _)| !is_gear(*i)));
+        let bs_gear = loot
+            .personal
+            .iter()
+            .find(|(p, _)| *p == b)
+            .unwrap()
+            .1
+            .clone();
+        // Ann loots the corpse: she gets the shared loot and her own gear.
+        let boss = boss_fight(&mut w, a);
+        let e = w.entities.get_mut(&boss).unwrap();
+        e.dead = true;
+        let bpos = e.pos;
+        mob_of(&mut e.brain).loot = Some(Loot { turn: None, ..loot });
+        for p in [a, b] {
+            w.entities.get_mut(&p).unwrap().pos = ground(bpos.x - 1.0, bpos.z);
+        }
+        w.loot(a, boss).unwrap();
+        let left = w.entities[&boss].mob().unwrap().loot.as_ref().unwrap();
+        assert!(left.allows(b) && !left.allows(a));
+        w.loot(b, boss).unwrap();
+        assert!(w.entities[&boss].mob().unwrap().loot.is_none());
+        for (item, n) in bs_gear {
+            assert!(count_item(&w.entities[&b].player().unwrap().bags, item) >= n as u32);
+        }
+        // Out in the world, gear is still shared.
+        let wolf = w.roll_loot(MobKind::Golem, 10, vec![a, b]).unwrap();
+        assert!(wolf.personal.is_empty());
     }
 
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {
@@ -4012,6 +4599,33 @@ mod tests {
     }
 
     #[test]
+    fn killing_the_boss_opens_a_teleporter_out() {
+        let mut w = World::new(12);
+        let p = join(&mut w, "Wren", Class::Mage, 10);
+        at_waystone(&mut w, p);
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let king = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
+            .unwrap();
+        let portal = dungeon::to_world(index, dungeon::SUNKEN_VAULT.portal);
+        w.entities.get_mut(&p).unwrap().pos = portal;
+        assert!(w.snapshot_for(p).unwrap().portal.is_none());
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Dungeon(index), "no teleporter yet");
+        w.kill(king, Some(p));
+        assert_eq!(w.snapshot_for(p).unwrap().portal, Some(portal));
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
+    }
+
+    #[test]
     fn waystones_carry_players_between_towns() {
         let mut w = World::new(11);
         let p = join(&mut w, "Wren", Class::Mage, 2);
@@ -4043,13 +4657,21 @@ mod tests {
         let mut w = World::new(12);
         let (a, b) = party_of_two(&mut w);
         let c = join(&mut w, "Cy", Class::Rogue, 9);
-        let low = join(&mut w, "Lo", Class::Rogue, dungeon::MIN_LEVEL - 1);
+        let low = join(
+            &mut w,
+            "Lo",
+            Class::Rogue,
+            dungeon::SUNKEN_VAULT.min_level - 1,
+        );
         for p in [a, b] {
             w.entities.get_mut(&p).unwrap().level = 9;
         }
         for p in [a, b, c, low] {
             at_waystone(&mut w, p);
-            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+            w.handle(
+                p,
+                ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+            );
         }
         assert!(matches!(place(&w, low), Place::Zone(_)), "too low to enter");
         let Place::Dungeon(ours) = place(&w, a) else {
@@ -4060,7 +4682,8 @@ mod tests {
             panic!("not in the vault")
         };
         assert_ne!(ours, theirs);
-        let per_copy: usize = dungeon::PACKS
+        let per_copy: usize = dungeon::SUNKEN_VAULT
+            .packs
             .iter()
             .flat_map(|p| p.mobs.iter().map(|m| m.2))
             .sum();
@@ -4079,7 +4702,10 @@ mod tests {
         let mut w = World::new(13);
         let p = join(&mut w, "Vex", Class::Barbarian, 10);
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(index) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4098,7 +4724,10 @@ mod tests {
         );
         // Leave by the stone at the entrance, back to the town you came from.
         w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         assert_eq!(place(&w, p), Place::Dungeon(index), "already inside");
         w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
         assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
@@ -4110,7 +4739,10 @@ mod tests {
         assert!(!w.entities.contains_key(&hound));
         // A fresh copy next time, with every mob back.
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(again) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4127,7 +4759,10 @@ mod tests {
         for p in [a, b, c] {
             w.entities.get_mut(&p).unwrap().level = 9;
             at_waystone(&mut w, p);
-            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+            w.handle(
+                p,
+                ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+            );
         }
         let Place::Dungeon(index) = place(&w, a) else {
             panic!("not in the vault")
@@ -4150,7 +4785,10 @@ mod tests {
         let p = join(&mut w, "Ivo", Class::Mage, 9);
         w.entities.get_mut(&p).unwrap().pos =
             Zone::Grubdeep.ground_local(WAYSTONE_SPOT + vec2(1.0, 0.0));
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         assert!(matches!(place(&w, p), Place::Dungeon(_)));
         let c = w.remove_player(p).unwrap();
         let pos = Vec3::from(c.pos);
@@ -4168,13 +4806,218 @@ mod tests {
         let mut crowns = 0;
         for _ in 0..400 {
             let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
-            assert!(loot.items.iter().any(|(i, _)| RARE_DROPS.contains(i)));
+            // Gear is the looter's own.
+            let mine = &loot.personal[0].1;
+            assert!(mine.iter().any(|(i, _)| RARE_DROPS.contains(i)));
             assert!(loot.items.contains(&(items::ANCIENT_CORE, 2)));
-            if loot.items.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)) {
+            if mine.contains(&(items::CROWN_OF_THE_SUNKEN_KING, 1)) {
                 crowns += 1;
             }
         }
         // The crown drops a quarter of the time.
         assert!((70..130).contains(&crowns), "{crowns} crowns in 400 kills");
+    }
+
+    // ---- The Cinderforge and Frosthowl Cavern ----
+
+    #[test]
+    fn each_dungeon_needs_its_level_and_a_party_can_hold_one_of_each() {
+        let mut w = World::new(17);
+        let (a, b) = party_of_two(&mut w);
+        let mut copies = Vec::new();
+        for which in [DungeonId::Cinderforge, DungeonId::Frosthowl] {
+            let d = which.get();
+            for p in [a, b] {
+                w.entities.get_mut(&p).unwrap().level = d.min_level - 1;
+                at_waystone(&mut w, p);
+                w.handle(p, ClientMsg::Travel(Destination::Dungeon(which)));
+                assert!(
+                    matches!(place(&w, p), Place::Zone(_)),
+                    "too low for {}",
+                    d.name
+                );
+                w.entities.get_mut(&p).unwrap().level = d.min_level;
+                w.handle(p, ClientMsg::Travel(Destination::Dungeon(which)));
+            }
+            let Place::Dungeon(index) = place(&w, a) else {
+                panic!("not in {}", d.name)
+            };
+            assert_eq!(place(&w, b), Place::Dungeon(index));
+            assert_eq!(dungeon::of(index).id, which);
+            // Every pack is there, the boss among them, and Joe offers this
+            // dungeon's quest.
+            let per_copy: usize = d
+                .packs
+                .iter()
+                .flat_map(|p| p.mobs.iter().map(|m| m.2))
+                .sum();
+            let mobs = vault_mobs(&w, index);
+            assert_eq!(mobs.len(), per_copy);
+            assert!(
+                mobs.iter()
+                    .any(|m| w.entities[m].mob().unwrap().kind == d.boss())
+            );
+            let joe = w
+                .entities
+                .values()
+                .find(|e| {
+                    e.name == quests::VAULT_GIVER && Place::at(e.pos) == Place::Dungeon(index)
+                })
+                .expect("no quest giver");
+            assert_eq!(
+                quests::offered(Place::at(joe.pos))[0].id,
+                quests::dungeon_quest(which).id
+            );
+            copies.push(index);
+            // Back out to town, so the next dungeon can be entered.
+            for p in [a, b] {
+                w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+                w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+            }
+        }
+        // Both copies stay open, and going back finds the same one.
+        assert_eq!(w.instances.len(), 2);
+        at_waystone(&mut w, a);
+        w.handle(
+            a,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::Cinderforge)),
+        );
+        assert_eq!(place(&w, a), Place::Dungeon(copies[0]));
+    }
+
+    #[test]
+    fn gorraks_spells_can_be_interrupted_and_he_rages_when_low() {
+        let mut w = World::new(18);
+        let p = join(&mut w, "Rogue", Class::Rogue, 10);
+        let boss = boss_fight_with(&mut w, p, MobKind::GorrakAshfist);
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let mut seen = Vec::new();
+        for _ in 0..(40.0 / DT) as usize {
+            w.tick(DT);
+            let Some(cast) = w.entities[&boss].cast.as_ref().map(|c| c.ability) else {
+                continue;
+            };
+            if !seen.contains(&cast) {
+                seen.push(cast);
+            }
+            let bpos = w.entities[&boss].pos;
+            let me = w.entities.get_mut(&p).unwrap();
+            me.target = Some(boss);
+            me.gcd = 0.0;
+            me.cooldowns.clear();
+            me.pos = ground(bpos.x - 2.5, bpos.z);
+            me.yaw = yaw_towards(me.pos, bpos);
+            me.power = me.max_power;
+            w.try_use(p, ids::KICK).unwrap();
+            assert!(
+                w.entities[&boss].cast.is_none(),
+                "{cast:?} wasn't interrupted"
+            );
+        }
+        assert!(seen.contains(&ids::MOLTEN_BLAST), "{seen:?}");
+        assert!(seen.contains(&ids::FLAME_WAVE), "{seen:?}");
+        let raging = |w: &World| {
+            w.entities[&boss]
+                .auras
+                .iter()
+                .any(|a| a.ability == ids::BLOODRAGE)
+        };
+        assert!(!raging(&w), "not yet");
+        let b = w.entities.get_mut(&boss).unwrap();
+        b.hp = b.max_hp * 0.25;
+        run(&mut w, 1.0);
+        assert!(raging(&w));
+    }
+
+    #[test]
+    fn hrimja_calls_her_pack_at_half_health_and_it_leaves_when_she_resets() {
+        let mut w = World::new(19);
+        let p = join(&mut w, "Tank", Class::Fighter, 10);
+        w.entities.get_mut(&p).unwrap().level = 20;
+        at_waystone(&mut w, p);
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::Frosthowl)),
+        );
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in Frosthowl Cavern")
+        };
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let boss = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::Hrimja)
+            .unwrap();
+        sturdy(&mut w, boss);
+        let bpos = w.entities[&boss].pos;
+        w.entities.get_mut(&p).unwrap().pos = ground(bpos.x, bpos.z - 3.0);
+        w.provoke(p, boss, 100.0);
+        let pack = |w: &World| -> Vec<EntityId> {
+            w.entities
+                .values()
+                .filter(|e| e.mob().is_some_and(|m| m.summoner == Some(boss)))
+                .map(|e| e.id)
+                .collect()
+        };
+        run(&mut w, 2.0);
+        assert!(pack(&w).is_empty(), "not before half health");
+        let b = w.entities.get_mut(&boss).unwrap();
+        b.hp = b.max_hp * 0.45;
+        run(&mut w, 0.5);
+        let wolves = pack(&w);
+        assert_eq!(wolves.len(), 3);
+        for wolf in &wolves {
+            let e = &w.entities[wolf];
+            let m = e.mob().unwrap();
+            assert_eq!(m.kind, MobKind::FrostfangWolf);
+            assert_eq!(m.state, MobState::Combat);
+            assert!(m.threat.iter().any(|(t, _)| *t == p));
+            assert_eq!(Place::at(e.pos), Place::Dungeon(index));
+        }
+        // Only once per fight.
+        run(&mut w, 2.0);
+        assert_eq!(pack(&w).len(), 3);
+        // The player gets away: she resets and her pack is gone.
+        w.entities.get_mut(&p).unwrap().dead = true;
+        run(&mut w, 1.0);
+        assert!(pack(&w).is_empty());
+        assert_eq!(w.entities[&boss].hp, w.entities[&boss].max_hp);
+    }
+
+    #[test]
+    fn avalanche_chases_you_three_times() {
+        let mut w = World::new(20);
+        let p = join(&mut w, "Tank", Class::Fighter, 10);
+        let boss = boss_fight_with(&mut w, p, MobKind::Hrimja);
+        let h = &boss::kit(MobKind::Hrimja).hazard;
+        assert_eq!(h.times, 3);
+        let calm = |w: &mut World| {
+            let b = w.entities.get_mut(&boss).unwrap();
+            b.swing_timer = 10.0;
+            b.cast = None;
+            let e = w.entities.get_mut(&p).unwrap();
+            e.hp = e.max_hp;
+        };
+        for _ in 0..(10.0 / DT) as usize {
+            calm(&mut w);
+            w.tick(DT);
+            if !w.hazards.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(w.hazards.len(), 1, "no Avalanche");
+        for k in 0..h.times {
+            // Step aside each time: the next one follows.
+            let e = w.entities.get_mut(&p).unwrap();
+            e.pos = ground(e.pos.x + 6.0, e.pos.z);
+            for _ in 0..(h.warning / DT) as usize + 2 {
+                calm(&mut w);
+                w.tick(DT);
+            }
+            if k + 1 < h.times {
+                let next = w.hazards.first().expect("Avalanche stopped early");
+                assert!(next.pos.distance(w.entities[&p].pos) < 0.5);
+            }
+        }
+        assert!(w.hazards.is_empty());
     }
 }

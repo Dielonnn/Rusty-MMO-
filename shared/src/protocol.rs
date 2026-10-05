@@ -10,13 +10,13 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
-use crate::data::{AbilityId, Appearance, Class, ItemId, MobKind, Race, Slot};
+use crate::data::{AbilityId, Appearance, Class, Hotbar, ItemId, MobKind, Race, Slot};
 use crate::quests::{QuestId, QuestLog};
 use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -56,6 +56,8 @@ pub enum ClientMsg {
     },
     StartAttack,
     StopAttack,
+    /// Rearranged hotbars, saved with the character.
+    SetHotbar(Hotbar),
     Chat(String),
     /// Come back to life at the graveyard.
     ReleaseSpirit,
@@ -119,8 +121,8 @@ pub enum ClientMsg {
 pub enum Destination {
     /// Another starting area's town (or back out of the vault).
     Town(Zone),
-    /// Your party's copy of the Sunken Vault.
-    Dungeon,
+    /// Your party's copy of a dungeon.
+    Dungeon(crate::dungeon::DungeonId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -135,7 +137,7 @@ pub enum ServerMsg {
     },
     /// The server refused the connection.
     Rejected(String),
-    Snapshot(Snapshot),
+    Snapshot(Box<Snapshot>),
     Event(GameEvent),
     /// The server moved you (respawn) or refused a move.
     SetPosition {
@@ -182,6 +184,19 @@ pub struct Snapshot {
     pub tick: u64,
     pub entities: Vec<EntityView>,
     pub me: SelfView,
+    /// Marked ground about to be hit nearby: get out of the circle!
+    pub hazards: Vec<HazardView>,
+    /// The teleporter out of the vault, once its boss is dead.
+    pub portal: Option<Vec3>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct HazardView {
+    pub pos: Vec3,
+    pub radius: f32,
+    /// Seconds until it lands, and how long the warning lasts in all.
+    pub remaining: f32,
+    pub total: f32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -292,6 +307,8 @@ pub struct SelfView {
     pub party: Option<PartyView>,
     /// Who has invited you to a party, if anyone.
     pub invite: Option<String>,
+    /// What's on your two hotbars.
+    pub hotbar: Hotbar,
 }
 
 /// The party you're in, yourself included.

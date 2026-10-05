@@ -433,7 +433,10 @@ impl Server {
                 }
             }
             if let Some(snapshot) = self.world.snapshot_for(id) {
-                ok &= client.conn.send(&ServerMsg::Snapshot(snapshot)).is_ok();
+                ok &= client
+                    .conn
+                    .send(&ServerMsg::Snapshot(Box::new(snapshot)))
+                    .is_ok();
             }
             if !ok {
                 dropped.push(*cid);

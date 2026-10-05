@@ -1,11 +1,13 @@
 //! Quests: every starting area's quest giver offers three. Hunt a number of
 //! the area's beasts, craft a piece of armor and hand it over, and slay the
-//! area's elite.
+//! area's elite. A quest giver at each dungeon's entrance sends you after
+//! its boss.
 
 use serde::{Deserialize, Serialize};
 
 use crate::data::{ItemId, MobKind, items};
-use crate::world::Zone;
+use crate::dungeon::{self, DungeonId};
+use crate::world::{Place, Zone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QuestId(pub u16);
@@ -35,6 +37,8 @@ pub struct Quest {
     /// In copper.
     pub money: u32,
     pub reward: Option<ItemId>,
+    /// Offered at this dungeon's entrance instead of in `zone`.
+    pub dungeon: Option<DungeonId>,
 }
 
 /// Quests you can have at once.
@@ -106,13 +110,43 @@ pub fn zone_quests(zone: Zone) -> &'static [Quest] {
     &QUESTS[i..i + 3]
 }
 
+/// The quest the giver at a dungeon's entrance offers.
+pub fn dungeon_quest(id: DungeonId) -> &'static Quest {
+    QUESTS
+        .iter()
+        .find(|q| q.dungeon == Some(id))
+        .expect("every dungeon has a quest")
+}
+
+/// The quests offered by the quest giver at `place`: a town's three, or the
+/// dungeon's own.
+pub fn offered(place: Place) -> &'static [Quest] {
+    match place {
+        Place::Zone(zone) => zone_quests(zone),
+        Place::Dungeon(i) => std::slice::from_ref(dungeon_quest(dungeon::of(i).id)),
+    }
+}
+
+/// The quest giver at every dungeon's entrance.
+pub const VAULT_GIVER: &str = "Dungeon Master Joe";
+
+impl Quest {
+    /// Who gives the quest (and takes it back), and where they are.
+    pub fn giver(&self) -> (&'static str, &'static str) {
+        match self.dungeon {
+            Some(d) => (VAULT_GIVER, d.get().name),
+            None => (quest_giver_name(self.zone), self.zone.town_name()),
+        }
+    }
+}
+
 /// The quest giver in each town.
 pub fn quest_giver_name(zone: Zone) -> &'static str {
     match zone {
         Zone::Amberfall => "Marshal Edda Vane",
         Zone::Scorchsand => "Warchief Ruk",
         Zone::Silverbough => "Ranger Lyssara",
-        Zone::Grubdeep => "Foreman Skizzle",
+        Zone::Grubdeep => "Issagoblin",
         Zone::Frostcog => "Tinker Pip Gearwhistle",
         Zone::Witherwood => "Deathguard Morrow",
     }
@@ -140,6 +174,7 @@ const fn hunt(
         xp: 250,
         money: 150,
         reward: Some(reward),
+        dungeon: None,
     }
 }
 
@@ -163,6 +198,7 @@ const fn craft(
         xp: 350,
         money: 300,
         reward: Some(reward),
+        dungeon: None,
     }
 }
 
@@ -186,12 +222,13 @@ const fn elite(
         xp: 600,
         money: 2000,
         reward: Some(reward),
+        dungeon: None,
     }
 }
 
 use items::*;
 
-pub static QUESTS: [Quest; 18] = [
+pub static QUESTS: [Quest; 21] = [
     // Amberfall Vale
     hunt(
         0,
@@ -366,6 +403,57 @@ pub static QUESTS: [Quest; 18] = [
         "The colossus is dust. Gravenhold stands because of you.",
         IRONBARK_JERKIN,
     ),
+    // The Sunken Vault, from the quest giver at its entrance.
+    Quest {
+        id: QuestId(18),
+        zone: Zone::Amberfall,
+        name: "The Sunken King",
+        text: "Morvane the Sunken King sits on a drowned throne at the bottom of this vault, calling the dead to serve him. Fight your way down through the halls and end his reign. Bring friends.",
+        done_text: "His call has gone quiet. The tide is turning. Take his trident; you've earned it more than he ever did.",
+        goal: Goal::Kill {
+            kind: MobKind::SunkenKing,
+            count: 1,
+        },
+        min_level: 8,
+        xp: 1200,
+        money: 5000,
+        reward: Some(TIDEBREAKER_TRIDENT),
+        dungeon: Some(DungeonId::SunkenVault),
+    },
+    // The Cinderforge.
+    Quest {
+        id: QuestId(19),
+        zone: Zone::Scorchsand,
+        name: "The Molten Warlord",
+        text: "Warlord Gorrak Ashfist has gathered every orc clan that worships fire under this volcano, and he's forging an army in its heart. Burn your way through his war camp and his forge, and bring him down on his own throne.",
+        done_text: "Gorrak's fires are out, and his clans are scattering. Here, his greataxe. It's still warm.",
+        goal: Goal::Kill {
+            kind: MobKind::GorrakAshfist,
+            count: 1,
+        },
+        min_level: 15,
+        xp: 2400,
+        money: 10000,
+        reward: Some(EMBERFALL_GREATAXE),
+        dungeon: Some(DungeonId::Cinderforge),
+    },
+    // Frosthowl Cavern.
+    Quest {
+        id: QuestId(20),
+        zone: Zone::Frostcog,
+        name: "The Frostmother",
+        text: "Deep in this cavern lives Hrimja, the Frostmother, oldest of the yetis. Her howl calls every snow wolf in the mountains to her side. Fight through her pack and silence her for good.",
+        done_text: "The cavern is quiet for the first time in a hundred winters. Take this glaive, carved from one of her fangs.",
+        goal: Goal::Kill {
+            kind: MobKind::Hrimja,
+            count: 1,
+        },
+        min_level: 20,
+        xp: 4000,
+        money: 20000,
+        reward: Some(HRIMFANG_GLAIVE),
+        dungeon: Some(DungeonId::Frosthowl),
+    },
 ];
 
 #[cfg(test)]
@@ -397,6 +485,32 @@ mod tests {
             }
             assert!(matches!(qs[2].goal, Goal::Kill { kind, count: 1 } if kind == mobs[4]));
             assert!(mobs[4].template().elite);
+        }
+    }
+
+    #[test]
+    fn every_dungeon_has_its_own_quest() {
+        for zone in Zone::ALL {
+            assert!(
+                offered(Place::Zone(zone))
+                    .iter()
+                    .all(|q| q.dungeon.is_none())
+            );
+        }
+        for d in DungeonId::ALL {
+            let offer = offered(Place::Dungeon(d.instance(3)));
+            assert_eq!(offer.len(), 1);
+            let q = &offer[0];
+            assert_eq!(q.dungeon, Some(d));
+            assert_eq!(q.min_level, d.get().min_level);
+            assert_eq!(q.giver().1, d.get().name);
+            assert!(matches!(
+                q.goal,
+                Goal::Kill { kind, count: 1 } if kind == d.get().boss()
+            ));
+            let reward = item(q.reward.unwrap());
+            assert!(matches!(reward.kind, ItemKind::Weapon { .. }));
+            assert_eq!(reward.quality, crate::data::Quality::Rare);
         }
     }
 

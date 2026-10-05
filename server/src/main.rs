@@ -57,7 +57,7 @@ fn main() {
     }
     println!(
         "Rusty MMO {} server listening on {}, saving characters to {}",
-        shared::VERSION,
+        shared::version(),
         server.local_addr().unwrap(),
         save.display()
     );
