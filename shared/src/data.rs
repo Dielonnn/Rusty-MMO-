@@ -3586,11 +3586,9 @@ impl Appearance {
     pub const BODIES: u8 = 2;
     /// The top of the height and weight sliders.
     pub const SLIDER_MAX: u8 = 100;
-    /// How far the height slider stretches the race's usual height, each way
-    /// (placeholder until the range is settled).
+    /// How far the height slider stretches the race's usual height, each way.
     pub const HEIGHT_RANGE: f32 = 0.1;
-    /// How far the weight slider widens or narrows the body, each way
-    /// (placeholder until the range is settled).
+    /// How far the weight slider widens or narrows the body, each way.
     pub const WEIGHT_RANGE: f32 = 0.2;
     pub const SKINS: u8 = 5;
     pub const HAIR_STYLES: u8 = 5;
