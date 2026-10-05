@@ -417,6 +417,19 @@ fn camps() -> Vec<Camp> {
                 });
             }
         }
+        if let Some(kind) = MobKind::water(zone) {
+            for shore in &zone.layout().shores {
+                camps.push(Camp {
+                    center: zone.to_world(shore.center),
+                    radius: shared::layout::SHORE_RADIUS,
+                    kind,
+                    levels: shore.levels,
+                    count: shared::layout::SHORE_COUNT,
+                    group: camps.len(),
+                    instance: None,
+                });
+            }
+        }
     }
     camps
 }
@@ -2685,7 +2698,12 @@ mod tests {
     #[test]
     fn camps_are_on_dry_land() {
         let w = World::new(1);
-        for e in w.entities.values().filter(|e| e.mob().is_some()) {
+        // Water mobs aside: they live in the shallows.
+        let dry = |e: &&Entity| {
+            e.mob()
+                .is_some_and(|m| MobKind::water(Zone::at(e.pos)) != Some(m.kind))
+        };
+        for e in w.entities.values().filter(dry) {
             assert!(
                 e.pos.y > WATER_LEVEL,
                 "{} at {:?} is under water",
@@ -3313,7 +3331,10 @@ mod tests {
                 .filter(|e| e.mob().is_some() && Zone::at(e.pos) == zone)
                 .collect();
             assert!(mobs.len() >= 50, "{zone:?} has {} mobs", mobs.len());
-            assert!(mobs.iter().all(|m| kinds.contains(&m.mob().unwrap().kind)));
+            assert!(mobs.iter().all(|m| {
+                let kind = m.mob().unwrap().kind;
+                kinds.contains(&kind) || MobKind::water(zone) == Some(kind)
+            }));
             let merchant = w
                 .entities
                 .values()
@@ -3846,6 +3867,28 @@ mod tests {
         let pd = w.entities[&p].player().unwrap();
         assert_eq!(count_item(&pd.bags, items::IRON_SWORD), 1);
         assert_eq!(count_item(&pd.bags, items::IRON_SCRAP), 0);
+    }
+
+    #[test]
+    fn water_mobs_live_in_the_shallows() {
+        let w = World::new(3);
+        for zone in Zone::ALL {
+            let water: Vec<_> = w
+                .entities
+                .values()
+                .filter(|e| {
+                    e.mob()
+                        .is_some_and(|m| Some(m.kind) == MobKind::water(zone))
+                })
+                .collect();
+            let lakes = zone.layout().shores.len();
+            assert_eq!(water.len(), lakes * shared::layout::SHORE_COUNT, "{zone:?}");
+            assert_eq!(lakes > 0, MobKind::water(zone).is_some(), "{zone:?}");
+            for e in water {
+                assert_eq!(Zone::at(e.pos), zone);
+                assert!(e.pos.y < zone.water_level() + 0.5, "{zone:?} {}", e.pos);
+            }
+        }
     }
 
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {

@@ -70,6 +70,76 @@ pub struct Layout {
     pub sites: Vec<Site>,
     /// Where the town's well stands.
     pub well: Vec2,
+    /// Shallow lake edges where the zone's water mobs live.
+    pub shores: Vec<Shore>,
+}
+
+/// A pack of water mobs in the shallows of a lake.
+#[derive(Clone, Copy, Debug)]
+pub struct Shore {
+    pub center: Vec2,
+    /// The levels of the nearest site, so they fit the area.
+    pub levels: (u8, u8),
+}
+
+/// Water mobs per shore, how far they wander, and at most how many shores a
+/// zone has.
+pub const SHORE_COUNT: usize = 4;
+pub const SHORE_RADIUS: f32 = 8.0;
+const MAX_SHORES: usize = 3;
+
+/// Finds the shallowest, widest lake edges, away from town and the other
+/// sites, and gives each the levels of its nearest site.
+fn shores(t: &Terrain, water: f32, sites: &[Site]) -> Vec<Shore> {
+    const STEP: f32 = 3.0;
+    let limit = WORLD_HALF_SIZE - 20.0;
+    let shallow = |p: Vec2| {
+        let h = t.height(p.x, p.y);
+        h < water - 0.2 && h > water - 1.4
+    };
+    let mut spots = Vec::new();
+    let mut x = -limit;
+    while x <= limit {
+        let mut z = -limit;
+        while z <= limit {
+            let p = vec2(x, z);
+            if shallow(p)
+                && p.length() > TOWN_RADIUS + 30.0
+                && sites.iter().all(|s| s.center.distance(p) > 30.0)
+            {
+                spots.push(p);
+            }
+            z += STEP;
+        }
+        x += STEP;
+    }
+    // Score each spot by how much shallow water is around it.
+    let mut scored: Vec<(usize, Vec2)> = spots
+        .iter()
+        .map(|&p| {
+            let n = spots
+                .iter()
+                .filter(|q| q.distance(p) < SHORE_RADIUS + 2.0)
+                .count();
+            (n, p)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.x.total_cmp(&b.1.x)));
+    let mut out: Vec<Shore> = Vec::new();
+    for (n, p) in scored {
+        if out.len() == MAX_SHORES || n < 12 {
+            break;
+        }
+        if out.iter().all(|s| s.center.distance(p) > 60.0) {
+            let nearest = sites
+                .iter()
+                .filter(|s| s.kind != SiteKind::Ruins)
+                .min_by(|a, b| a.center.distance(p).total_cmp(&b.center.distance(p)));
+            let levels = nearest.map_or((1, 2), |s| s.spawns[0].levels);
+            out.push(Shore { center: p, levels });
+        }
+    }
+    out
 }
 
 impl Layout {
@@ -407,12 +477,18 @@ fn build(zone: Zone) -> Layout {
         Zone::Frostcog => vec2(8.0, -7.0),
         Zone::Witherwood => vec2(7.0, -4.0),
     };
+    let shores = if crate::data::MobKind::water(zone).is_some() {
+        shores(&t, water, &sites)
+    } else {
+        Vec::new()
+    };
     Layout {
         terrain: t,
         houses: houses(zone),
         fields,
         sites,
         well,
+        shores,
     }
 }
 
@@ -442,6 +518,19 @@ mod tests {
                     "{zone:?} field {f}"
                 );
             }
+            for s in &l.shores {
+                let h = l.terrain.height(s.center.x, s.center.y);
+                assert!(
+                    h < zone.water_level(),
+                    "{zone:?} shore at {} is dry",
+                    s.center
+                );
+            }
+            assert_eq!(
+                !l.shores.is_empty(),
+                crate::data::MobKind::water(zone).is_some(),
+                "{zone:?} shores"
+            );
             for h in &l.houses {
                 assert!(h.pos.length() < TOWN_RADIUS, "{zone:?} house outside town");
             }

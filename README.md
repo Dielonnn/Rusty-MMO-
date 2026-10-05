@@ -270,7 +270,9 @@ its own town layout, and its own places for fields, camps and the elite's
 ruins. Mob levels rise the further you go from town: hunters and grazers
 (levels 1-8) roam the open, two camps of fighters and casters (4-5 and 6-8) and
 a fighters' camp (8-9) sit further out, and the area's **elite** (10) waits in
-its ruins near the edge.
+its ruins near the edge. Areas with lakes have water mobs in the shallows, at
+the level of the land around them: Mudsnap Crabs in Amberfall, Glimmershell
+Crabs in Silverbough and Bog Lurkers in Witherwood.
 
 Press `M` for the world map of your area, inked on parchment: the town, every
 camp and its levels (tents for camps, paw prints for beasts, a skull for the

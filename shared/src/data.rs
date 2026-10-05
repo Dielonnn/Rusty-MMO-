@@ -3116,6 +3116,10 @@ pub enum MobKind {
     DrownedAdept,
     StoneWarden,
     SunkenKing,
+    // Water mobs, in the shallows of zones with lakes.
+    MudsnapCrab,
+    GlimmershellCrab,
+    BogLurker,
 }
 
 /// What a mob is built from when drawn.
@@ -3576,6 +3580,26 @@ const SUNKEN_KING: MobTemplate = MobTemplate {
     )
 };
 
+// Water mobs hunt like the zone's aggressive beasts, from the shallows.
+const MUDSNAP_CRAB: MobTemplate = hunter(
+    "Mudsnap Crab",
+    Mm::Scorpion,
+    ids::SAVAGE_BITE,
+    [(0.45, 0.33, 0.2), (0.3, 0.24, 0.14), (0.55, 0.6, 0.3)],
+);
+const GLIMMERSHELL_CRAB: MobTemplate = hunter(
+    "Glimmershell Crab",
+    Mm::Scorpion,
+    ids::SAVAGE_BITE,
+    [(0.3, 0.62, 0.62), (0.7, 0.75, 0.8), (0.85, 0.95, 1.0)],
+);
+const BOG_LURKER: MobTemplate = hunter(
+    "Bog Lurker",
+    Mm::Spider,
+    ids::VENOM_STING,
+    [(0.3, 0.38, 0.2), (0.12, 0.14, 0.1), (0.6, 0.85, 0.25)],
+);
+
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
         use MobKind::*;
@@ -3616,6 +3640,9 @@ impl MobKind {
             DrownedAdept => &DROWNED_ADEPT,
             StoneWarden => &STONE_WARDEN,
             SunkenKing => &SUNKEN_KING,
+            MudsnapCrab => &MUDSNAP_CRAB,
+            GlimmershellCrab => &GLIMMERSHELL_CRAB,
+            BogLurker => &BOG_LURKER,
         }
     }
 
@@ -3642,6 +3669,17 @@ impl MobKind {
             (ELITE_RARE_DROP_CHANCE, ELITE_WEAPON_DROP_CHANCE)
         } else {
             (RARE_DROP_CHANCE, WEAPON_DROP_CHANCE)
+        }
+    }
+
+    /// The mob that lives in a zone's lakes, if it has any worth a camp.
+    pub fn water(zone: Zone) -> Option<MobKind> {
+        match zone {
+            Zone::Amberfall => Some(MobKind::MudsnapCrab),
+            Zone::Silverbough => Some(MobKind::GlimmershellCrab),
+            Zone::Witherwood => Some(MobKind::BogLurker),
+            // No lakes, or too small for a camp.
+            Zone::Scorchsand | Zone::Grubdeep | Zone::Frostcog => None,
         }
     }
 
@@ -3853,8 +3891,14 @@ mod tests {
             assert!(hunter.template().aggressive && !grazer.template().aggressive);
             assert!(fighter.template().social && caster.template().spell.is_some());
             assert!(elite.template().elite);
-            for k in MobKind::for_zone(zone) {
+            for k in MobKind::for_zone(zone)
+                .into_iter()
+                .chain(MobKind::water(zone))
+            {
                 assert!(seen.insert(k), "{k:?} is in two zones");
+            }
+            if let Some(w) = MobKind::water(zone) {
+                assert!(w.template().aggressive && !w.template().elite);
             }
         }
     }
