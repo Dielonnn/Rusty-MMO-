@@ -5,7 +5,7 @@
 
 use std::f32::consts::TAU;
 
-pub const RATE: u32 = 22_050;
+pub const RATE: u32 = 44_100;
 
 /// A sound being built: mono samples at `RATE`.
 #[derive(Clone, Default)]
@@ -39,7 +39,7 @@ impl Rng {
     }
 }
 
-fn samples(secs: f32) -> usize {
+pub fn samples(secs: f32) -> usize {
     (secs * RATE as f32) as usize
 }
 
@@ -125,6 +125,34 @@ impl Wave {
         self
     }
 
+    /// Makes the sound loop smoothly every `len` seconds: whatever rings on
+    /// past the end (echoes, long notes) is laid over the start, which is
+    /// what you hear when it repeats.
+    pub fn fold_loop(self, len: f32) -> Self {
+        let n = samples(len);
+        let mut out = vec![0.0; n];
+        for (i, s) in self.0.into_iter().enumerate() {
+            out[i % n] += s;
+        }
+        Wave(out)
+    }
+
+    /// Makes a steady sound (wind, water) loop every `len` seconds without a
+    /// jump: the extra `xfade` seconds past the end are blended into the
+    /// start. Needs at least `len + xfade` seconds of sound.
+    pub fn crossfade_loop(self, len: f32, xfade: f32) -> Self {
+        let (n, x) = (samples(len), samples(xfade));
+        let mut w = self.0;
+        w.resize(w.len().max(n + x), 0.0);
+        for i in 0..x {
+            let t = i as f32 / x as f32;
+            // Equal power, so the blend doesn't dip in loudness.
+            w[i] = w[i] * t.sqrt() + w[n + i] * (1.0 - t).sqrt();
+        }
+        w.truncate(n);
+        Wave(w)
+    }
+
     /// Fades the last `secs` out, so a sound cut short doesn't click.
     pub fn fade_tail(mut self, secs: f32) -> Self {
         let n = samples(secs).min(self.0.len());
@@ -172,15 +200,43 @@ impl Wave {
 /// A tone gliding from `f0` to `f1` Hz over `len` seconds.
 pub fn tone(shape: Shape, f0: f32, f1: f32, len: f32, attack: f32, curve: f32) -> Wave {
     let n = samples(len);
-    let mut phase = 0.0;
+    // Exponential glide sounds even to the ear: the same step every sample.
+    let step = (f1 / f0).powf(1.0 / n.max(1) as f32);
+    let mut f = f0;
+    let mut phase = 0.0f32;
     Wave(
         (0..n)
             .map(|i| {
                 let t = i as f32 / RATE as f32;
-                // Exponential glide sounds even to the ear.
-                let f = f0 * (f1 / f0).powf(t / len);
-                phase += f / RATE as f32;
+                phase = (phase + f / RATE as f32).fract();
+                f *= step;
                 osc(shape, phase) * envelope(t, len, attack, curve)
+            })
+            .collect(),
+    )
+}
+
+/// Wind: noise whose brightness and loudness drift slowly up and down.
+/// `base` is the usual brightness in Hz; `gust` how much it swings.
+pub fn wind(len: f32, base: f32, gust: f32, seed: u32) -> Wave {
+    let mut rng = Rng::new(seed);
+    let n = samples(len);
+    let (mut y, mut y2) = (0.0f32, 0.0f32);
+    // Two slow waves at odd rates, so the gusts don't repeat evenly.
+    let (r1, r2) = (
+        0.07 + rng.next().abs() * 0.05,
+        0.17 + rng.next().abs() * 0.08,
+    );
+    Wave(
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / RATE as f32;
+                let swell = 0.6 + 0.25 * (t * r1 * TAU).sin() + 0.15 * (t * r2 * TAU + 1.3).sin();
+                let c = base * (1.0 + gust * (swell - 0.5) * 2.0).max(0.1);
+                let a = 1.0 - (-TAU * c / RATE as f32).exp();
+                y += a * (rng.next() - y);
+                y2 += a * (y - y2);
+                y2 * swell
             })
             .collect(),
     )

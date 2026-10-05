@@ -8,6 +8,7 @@ mod gfx;
 mod hud;
 mod menu;
 mod models;
+mod music;
 mod panels;
 mod quests_ui;
 mod render;
@@ -57,6 +58,10 @@ async fn main() {
     let mut screen = Screen::Login;
     loop {
         audio::update();
+        if !matches!(screen, Screen::Game(..)) {
+            audio::set_music(Some(music::Track::Menu));
+            audio::set_ambience(None);
+        }
         screen = match screen {
             Screen::Login => match login.frame(&scene) {
                 Some(chars) => Screen::Characters(Box::new(chars)),
