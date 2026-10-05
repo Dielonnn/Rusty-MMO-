@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -151,6 +151,8 @@ pub struct CharacterSummary {
     pub level: u8,
     pub appearance: Appearance,
     pub gear: [Option<ItemId>; 5],
+    /// Held weapon.
+    pub weapon: Option<ItemId>,
 }
 
 /// What you can do in sandbox mode.

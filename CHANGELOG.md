@@ -29,7 +29,20 @@ Commit: the one titled "v7.4: Waystones and the Sunken Vault".
 - **Loot**: Morvane also always drops a green armor piece and 2 Ancient Cores,
   and half the time a green weapon. The Stone Warden drops like other elites
 - The minimap and the world map (`M`) show the vault's halls and room names
-- Older games can't join a v7.4 server (protocol 9)
+- Older games can't join a v7.4 server (protocol 10)
+
+## v7.3
+
+Commit: the one titled "v7.3: Height and weight sliders".
+
+- **Height and weight sliders** in character creation: drag them to make a
+  character shorter or taller, thinner or heavier. The choice is saved with
+  the character and sent to everyone who sees them. Characters don't change
+  shape yet: the models catch up in a later release
+- Characters made before v7.3 start with both sliders in the middle
+- Other players and the character list now know which weapon each character
+  holds, ready for the models to draw it
+- Protocol version 9: clients and servers must both be v7.3
 
 ## v7.2
 

@@ -327,6 +327,7 @@ impl Entity {
                     skin: (self.id % 5) as u8,
                     hair_style: 1 + (self.id % 4) as u8,
                     hair_color: (self.id % 6) as u8,
+                    ..Default::default()
                 },
                 [None; 5],
                 None,
