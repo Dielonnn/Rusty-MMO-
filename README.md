@@ -99,7 +99,7 @@ title and on the login screen.
 | `N` | Talents |
 | `L` | Quest log |
 | `M` | World map |
-| `F` | Use a waystone (travel to another town or the Sunken Vault) |
+| `F` | Use a waystone (travel to another town or a dungeon) |
 | `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
 | Drag a window's title bar | Move the window |
@@ -119,7 +119,7 @@ full experience for their level and quest credit, and members take turns
 looting (10 seconds each, then it's open to the party). `/p MESSAGE` is party
 chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 
-### Waystones and the Sunken Vault
+### Waystones and dungeons
 
 Every town has a waystone beside its square. Stand next to it and press `F`
 to travel to any other starting area's town, or, from level 8, into the
@@ -138,6 +138,19 @@ Your party shares one copy of the vault; anyone else gets their own. Mobs you
 kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
 inside and you come back at the vault's entrance; the waystone there takes you
 back to town. Leaving your party sends you out of its vault.
+
+Two more dungeons work the same way, each with Dungeon Master Joe and his
+quest at the entrance:
+
+- **The Cinderforge** (level 15+): an orc war camp in a volcano. Its boss,
+  Warlord Gorrak Ashfist, rains magma on everyone fighting him, casts Molten
+  Blast and Flame Wave (interrupt them), and rages below 30% health.
+- **Frosthowl Cavern** (level 20+): snow wolves and yetis in an ice cave. Its
+  boss, Hrimja the Frostmother, brings an Avalanche down three times in a
+  row, casts Frozen Tomb and Glacial Howl (interrupt them), and calls three
+  snow wolves at half health.
+
+A party can have a copy of each dungeon open at once.
 
 ### Combat
 

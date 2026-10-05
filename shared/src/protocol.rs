@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -121,8 +121,8 @@ pub enum ClientMsg {
 pub enum Destination {
     /// Another starting area's town (or back out of the vault).
     Town(Zone),
-    /// Your party's copy of the Sunken Vault.
-    Dungeon,
+    /// Your party's copy of a dungeon.
+    Dungeon(crate::dungeon::DungeonId),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

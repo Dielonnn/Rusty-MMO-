@@ -770,6 +770,9 @@ pub fn ability(id: AbilityId) -> &'static Ability {
 
 /// An ability, if the id is one.
 pub fn try_ability(id: AbilityId) -> Option<&'static Ability> {
+    if let Some(i) = id.0.checked_sub(FIRST_BOSS_SPELL) {
+        return BOSS_SPELLS.get(i as usize);
+    }
     match id.0.checked_sub(FIRST_SPELL) {
         None => ABILITIES.get(id.0 as usize),
         Some(i) => spells::SPELLS.get(i as usize),
@@ -893,6 +896,12 @@ pub mod ids {
     // The Sunken King's spells. Interrupt them!
     pub const DROWNING_GRASP: AbilityId = AbilityId(96);
     pub const CALL_OF_THE_DEEP: AbilityId = AbilityId(97);
+    // The newer dungeon bosses' spells, after the class spells.
+    pub const MOLTEN_BLAST: AbilityId = AbilityId(super::FIRST_BOSS_SPELL);
+    pub const FLAME_WAVE: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 1);
+    pub const BLOODRAGE: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 2);
+    pub const FROZEN_TOMB: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 3);
+    pub const GLACIAL_HOWL: AbilityId = AbilityId(super::FIRST_BOSS_SPELL + 4);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2498,6 +2507,98 @@ pub static ABILITIES: &[Ability] = &[
     ),
 ];
 
+/// The id of the first dungeon boss spell, after every class's level 12-20
+/// spells.
+pub const FIRST_BOSS_SPELL: u16 = FIRST_SPELL + (Class::ALL.len() * spells::PER_CLASS) as u16;
+
+/// The dungeon bosses' own spells, from `FIRST_BOSS_SPELL` on.
+pub static BOSS_SPELLS: &[Ability] = &[
+    // Warlord Gorrak Ashfist's
+    projectile(ab(
+        "Molten Blast",
+        "Hurls a ball of molten rock at the target.",
+        S::Fire,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 30.0,
+            max: 36.0,
+        }],
+    )),
+    ab(
+        "Flame Wave",
+        "A wave of fire rolls out over everyone nearby.",
+        S::Fire,
+        T::AroundCaster(40.0),
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 14.0,
+            max: 18.0,
+        }],
+    ),
+    ab(
+        "Bloodrage",
+        "The caster flies into a rage, hitting much harder.",
+        S::Physical,
+        T::Caster,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        &[E::Aura {
+            kind: A::DamageDone(1.5),
+            duration: 600.0,
+        }],
+    ),
+    // Hrimja the Frostmother's
+    projectile(ab(
+        "Frozen Tomb",
+        "Encases the target in ice, freezing them in place for 4 sec.",
+        S::Frost,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[
+            E::Damage {
+                min: 24.0,
+                max: 28.0,
+            },
+            E::Aura {
+                kind: A::Root,
+                duration: 4.0,
+            },
+        ],
+    )),
+    ab(
+        "Glacial Howl",
+        "A howl of freezing wind that hits and slows everyone nearby.",
+        S::Frost,
+        T::AroundCaster(40.0),
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[
+            E::Damage {
+                min: 14.0,
+                max: 18.0,
+            },
+            E::Aura {
+                kind: A::Slow(0.5),
+                duration: 6.0,
+            },
+        ],
+    ),
+];
+
 // ---- Items ----
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2637,6 +2738,12 @@ pub mod items {
     pub const ROASTED_BOAR: ItemId = ItemId(41);
     // The Sunken Vault quest.
     pub const TIDEBREAKER_TRIDENT: ItemId = ItemId(42);
+    // The Cinderforge and Frosthowl Cavern: their bosses' drops and quest
+    // rewards.
+    pub const ASHFIST_GAUNTLETS: ItemId = ItemId(43);
+    pub const EMBERFALL_GREATAXE: ItemId = ItemId(44);
+    pub const RIMEHEART_CHESTGUARD: ItemId = ItemId(45);
+    pub const HRIMFANG_GLAIVE: ItemId = ItemId(46);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2677,7 +2784,7 @@ pub const WEAPON_DROPS: [ItemId; 6] = {
 pub const WEAPON_DROP_CHANCE: f32 = 0.03;
 /// Chance an elite does.
 pub const ELITE_WEAPON_DROP_CHANCE: f32 = 0.3;
-/// The Sunken Vault's last boss always drops green armor, and often a weapon.
+/// Dungeon bosses always drop green armor, and often a weapon.
 pub const SUNKEN_KING_RARE_DROP_CHANCE: f32 = 1.0;
 pub const SUNKEN_KING_WEAPON_DROP_CHANCE: f32 = 0.5;
 
@@ -2791,7 +2898,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 43] = [
+pub static ITEMS: [Item; 47] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -3195,6 +3302,52 @@ pub static ITEMS: [Item; 43] = [
         (0.2, 0.7, 0.75),
         4500,
     ),
+    Item {
+        description: "Warlord Gorrak's fists, still glowing from the forge.",
+        ..armor(
+            "Ashfist Gauntlets",
+            Slot::Hands,
+            16.0,
+            9.0,
+            7.0,
+            Quality::Rare,
+            (0.85, 0.35, 0.15),
+            6000,
+        )
+    },
+    weapon(
+        "Emberfall Greataxe",
+        "Forged in the caldera's heart. The edge never quite cools.",
+        12.0,
+        10.0,
+        6.0,
+        Quality::Rare,
+        (0.95, 0.42, 0.12),
+        6500,
+    ),
+    Item {
+        description: "Cut from the Frostmother's hide. Snow never settles on it.",
+        ..armor(
+            "Rimeheart Chestguard",
+            Slot::Chest,
+            30.0,
+            13.0,
+            10.0,
+            Quality::Rare,
+            (0.6, 0.85, 1.0),
+            9000,
+        )
+    },
+    weapon(
+        "Hrimfang Glaive",
+        "Carved from one of Hrimja's fangs. It hums in the cold.",
+        16.0,
+        13.0,
+        8.0,
+        Quality::Rare,
+        (0.55, 0.85, 1.0),
+        9500,
+    ),
 ];
 
 /// Cooked food heals three quarters of what a Healing Potion does.
@@ -3385,6 +3538,17 @@ pub enum MobKind {
     DrownedAdept,
     StoneWarden,
     SunkenKing,
+    // The Cinderforge (dungeon)
+    AshHound,
+    CinderGrunt,
+    CinderFirecaller,
+    MoltenColossus,
+    GorrakAshfist,
+    // Frosthowl Cavern (dungeon)
+    FrostfangWolf,
+    CavernYeti,
+    ElderYeti,
+    Hrimja,
     // Water mobs, in the shallows of zones with lakes.
     MudsnapCrab,
     GlimmershellCrab,
@@ -3505,6 +3669,26 @@ const BOSS_LOOT: LootTable = LootTable {
     copper_per_level: (40, 80),
     items: &[
         (items::CROWN_OF_THE_SUNKEN_KING, 0.25, 1, 1),
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
+    ],
+};
+const GORRAK_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::ASHFIST_GAUNTLETS, 0.25, 1, 1),
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
+    ],
+};
+const HRIMJA_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::RIMEHEART_CHESTGUARD, 0.25, 1, 1),
         (items::ANCIENT_CORE, 1.0, 2, 2),
         (items::LINEN_CLOTH, 1.0, 3, 5),
         (items::IRON_SCRAP, 1.0, 3, 5),
@@ -3901,6 +4085,124 @@ const SUNKEN_KING: MobTemplate = MobTemplate {
     )
 };
 
+// The Cinderforge: orcs of the war camp, their hounds, and the warlord.
+
+const ASH_HOUND: MobTemplate = MobTemplate {
+    hp: 130.0,
+    damage: (7.0, 10.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Ash Hound",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.2, 0.17, 0.16), (0.11, 0.09, 0.09), (1.0, 0.45, 0.1)],
+    )
+};
+const CINDER_GRUNT: MobTemplate = MobTemplate {
+    hp: 160.0,
+    damage: (9.0, 13.0),
+    respawn: 0.0,
+    ..fighter(
+        "Cinderforge Grunt",
+        H::Troll,
+        [(0.36, 0.52, 0.24), (0.24, 0.16, 0.12), (0.95, 0.4, 0.1)],
+    )
+};
+const CINDER_FIRECALLER: MobTemplate = MobTemplate {
+    hp: 125.0,
+    damage: (4.0, 7.0),
+    respawn: 0.0,
+    ..caster(
+        "Cinderforge Firecaller",
+        H::TrollShaman,
+        ids::FIREBALL,
+        [(0.34, 0.5, 0.24), (0.45, 0.12, 0.08), (1.0, 0.55, 0.15)],
+    )
+};
+const MOLTEN_COLOSSUS: MobTemplate = MobTemplate {
+    hp: 560.0,
+    respawn: 0.0,
+    ..elite(
+        "Molten Colossus",
+        GiantStyle::Sandstone,
+        [(0.24, 0.2, 0.18), (0.14, 0.11, 0.1), (1.0, 0.45, 0.1)],
+    )
+};
+const GORRAK_ASHFIST: MobTemplate = MobTemplate {
+    hp: 950.0,
+    damage: (18.0, 24.0),
+    size: 2.6,
+    respawn: 0.0,
+    loot: GORRAK_LOOT,
+    boss: true,
+    // His mechanics are in server/src/world/boss.rs.
+    spell: None,
+    ..elite(
+        "Warlord Gorrak Ashfist",
+        GiantStyle::Stone,
+        [(0.3, 0.26, 0.24), (0.34, 0.5, 0.22), (1.0, 0.4, 0.1)],
+    )
+};
+
+// Frosthowl Cavern: snow wolves, yetis, and the Frostmother.
+
+const FROSTFANG_WOLF: MobTemplate = MobTemplate {
+    hp: 140.0,
+    damage: (8.0, 11.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Frostfang Snow Wolf",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.88, 0.91, 0.96), (0.62, 0.68, 0.78), (0.35, 0.7, 1.0)],
+    )
+};
+/// A yeti that isn't an elite: as big as one, but no tougher than a
+/// couple of wolves.
+const CAVERN_YETI: MobTemplate = MobTemplate {
+    hp: 300.0,
+    damage: (12.0, 16.0),
+    attack_interval: 2.8,
+    speed: 6.0,
+    elite: false,
+    social: true,
+    size: 2.0,
+    spell: Some((ids::GROUND_SLAM, 14.0)),
+    loot: HIDE_LOOT,
+    respawn: 0.0,
+    ..elite(
+        "Cavern Yeti",
+        GiantStyle::Yeti,
+        [(0.86, 0.88, 0.92), (0.55, 0.58, 0.66), (0.4, 0.75, 1.0)],
+    )
+};
+const ELDER_YETI: MobTemplate = MobTemplate {
+    hp: 640.0,
+    respawn: 0.0,
+    ..elite(
+        "Elder Yeti",
+        GiantStyle::Yeti,
+        [(0.75, 0.77, 0.8), (0.45, 0.47, 0.52), (0.3, 0.9, 1.0)],
+    )
+};
+const HRIMJA: MobTemplate = MobTemplate {
+    hp: 1100.0,
+    damage: (20.0, 27.0),
+    size: 2.8,
+    respawn: 0.0,
+    loot: HRIMJA_LOOT,
+    boss: true,
+    // Her mechanics are in server/src/world/boss.rs.
+    spell: None,
+    ..elite(
+        "Hrimja the Frostmother",
+        GiantStyle::Yeti,
+        [(0.8, 0.9, 1.0), (0.55, 0.7, 0.86), (0.3, 0.8, 1.0)],
+    )
+};
+
 // Water mobs hunt like the zone's aggressive beasts, from the shallows.
 const MUDSNAP_CRAB: MobTemplate = water_hunter(
     "Mudsnap Crab",
@@ -3961,6 +4263,15 @@ impl MobKind {
             DrownedAdept => &DROWNED_ADEPT,
             StoneWarden => &STONE_WARDEN,
             SunkenKing => &SUNKEN_KING,
+            AshHound => &ASH_HOUND,
+            CinderGrunt => &CINDER_GRUNT,
+            CinderFirecaller => &CINDER_FIRECALLER,
+            MoltenColossus => &MOLTEN_COLOSSUS,
+            GorrakAshfist => &GORRAK_ASHFIST,
+            FrostfangWolf => &FROSTFANG_WOLF,
+            CavernYeti => &CAVERN_YETI,
+            ElderYeti => &ELDER_YETI,
+            Hrimja => &HRIMJA,
             MudsnapCrab => &MUDSNAP_CRAB,
             GlimmershellCrab => &GLIMMERSHELL_CRAB,
             BogLurker => &BOG_LURKER,
@@ -3971,20 +4282,32 @@ impl MobKind {
         self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
     }
 
-    /// The Sunken Vault's mobs, bosses last.
-    pub const DUNGEON: [MobKind; 6] = [
-        MobKind::VaultHound,
-        MobKind::VaultCrawler,
-        MobKind::DrownedEnforcer,
-        MobKind::DrownedAdept,
-        MobKind::StoneWarden,
-        MobKind::SunkenKing,
-    ];
+    /// The dungeons' mobs, each dungeon's elite and boss last.
+    pub const DUNGEON: [MobKind; 15] = {
+        use MobKind::*;
+        [
+            VaultHound,
+            VaultCrawler,
+            DrownedEnforcer,
+            DrownedAdept,
+            StoneWarden,
+            SunkenKing,
+            AshHound,
+            CinderGrunt,
+            CinderFirecaller,
+            MoltenColossus,
+            GorrakAshfist,
+            FrostfangWolf,
+            CavernYeti,
+            ElderYeti,
+            Hrimja,
+        ]
+    };
 
     /// Chances of a green armor piece (`RARE_DROPS`) and a green weapon
     /// (`WEAPON_DROPS`) on its corpse.
     pub fn drop_chances(self) -> (f32, f32) {
-        if self == MobKind::SunkenKing {
+        if self.template().boss {
             (SUNKEN_KING_RARE_DROP_CHANCE, SUNKEN_KING_WEAPON_DROP_CHANCE)
         } else if self.template().elite {
             (ELITE_RARE_DROP_CHANCE, ELITE_WEAPON_DROP_CHANCE)
@@ -4150,6 +4473,7 @@ mod tests {
     fn ability_ids_match_table() {
         assert_eq!(ABILITIES.len(), FIRST_SPELL as usize);
         assert_eq!(spells::SPELLS.len(), Class::ALL.len() * spells::PER_CLASS);
+        assert_eq!(BOSS_SPELLS.len(), 5);
         for class in Class::ALL {
             for (id, _) in class.spellbook() {
                 assert!(try_ability(id).is_some());
@@ -4157,7 +4481,8 @@ mod tests {
         }
         assert_eq!(ability(Class::Barbarian.spells()[0]).name, "Bloodthirst");
         assert_eq!(ability(Class::Warlock.spells()[4]).name, "Summon Infernal");
-        assert!(try_ability(AbilityId(FIRST_SPELL + 65)).is_none());
+        assert_eq!(FIRST_BOSS_SPELL, FIRST_SPELL + 65);
+        assert!(try_ability(AbilityId(FIRST_BOSS_SPELL + 5)).is_none());
         assert_eq!(ability(ids::GROUND_SLAM).name, "Ground Slam");
         assert_eq!(ability(ids::SMITE).name, "Smite");
         assert_eq!(ability(ids::FIREBALL).name, "Fireball");
@@ -4165,6 +4490,8 @@ mod tests {
         assert_eq!(ability(ids::CHARGE).name, "Charge");
         assert_eq!(ability(ids::DISSONANT_WHISPERS).name, "Dissonant Whispers");
         assert_eq!(ability(ids::LIGHTNING_BOLT).name, "Lightning Bolt");
+        assert_eq!(ability(ids::MOLTEN_BLAST).name, "Molten Blast");
+        assert_eq!(ability(ids::GLACIAL_HOWL).name, "Glacial Howl");
         assert_eq!(item(items::MANA_POTION).name, "Mana Potion");
     }
 
@@ -4358,6 +4685,10 @@ mod tests {
             (MOONWHISPER_STAFF, "Moonwhisper Staff"),
             (CROWN_OF_THE_SUNKEN_KING, "Crown of the Sunken King"),
             (TIDEBREAKER_TRIDENT, "Tidebreaker Trident"),
+            (ASHFIST_GAUNTLETS, "Ashfist Gauntlets"),
+            (EMBERFALL_GREATAXE, "Emberfall Greataxe"),
+            (RIMEHEART_CHESTGUARD, "Rimeheart Chestguard"),
+            (HRIMFANG_GLAIVE, "Hrimfang Glaive"),
         ] {
             assert_eq!(item(id).name, name);
         }

@@ -164,7 +164,8 @@ pub struct MobData {
     /// Bosses' own mechanics.
     boss: BossTimers,
     pub loot: Option<Loot>,
-    /// Who summoned this mob in sandbox mode; it doesn't come back.
+    /// Who summoned this mob (a player in sandbox mode, or a boss calling
+    /// for help); it doesn't come back.
     pub summoner: Option<EntityId>,
 }
 
@@ -989,7 +990,7 @@ impl World {
             }
             ClientMsg::Travel(to) => {
                 if let Err(e) = self.travel(id, to) {
-                    self.error(id, e);
+                    self.error(id, &e);
                 }
             }
             // Session messages are handled by the network layer.
@@ -2738,8 +2739,14 @@ impl World {
             m.state = MobState::Evading;
             m.threat.clear();
             m.boss = BossTimers::default();
+            let boss = m.kind.template().boss;
             e.cast = None;
             e.hp = e.max_hp;
+            // A boss starts over: its rage cools and its pack goes.
+            if boss {
+                e.auras.clear();
+                self.dismiss_pack(id);
+            }
             return;
         }
         let target = m
@@ -2850,6 +2857,7 @@ pub fn test_character(name: &str, class: Class, level: u8) -> Character {
 mod tests {
     use super::*;
     use shared::data::{ids, items};
+    use shared::dungeon::DungeonId;
 
     const DT: f32 = 0.05;
 
@@ -4017,12 +4025,15 @@ mod tests {
     fn dungeon_master_joe_sends_you_after_the_sunken_king() {
         let mut w = World::new(45);
         let p = join(&mut w, "Hero", Class::Mage, 10);
-        let ours = quests::vault_quest().id;
+        let ours = quests::dungeon_quest(DungeonId::SunkenVault).id;
         // The town quest givers don't offer it.
         let giver = visit_giver(&mut w, p, Zone::Amberfall);
         assert!(w.accept_quest(p, giver, ours).is_err());
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(index) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4271,6 +4282,11 @@ mod tests {
 
     /// A Sunken King summoned next to a player, already fighting them.
     fn boss_fight(w: &mut World, p: EntityId) -> EntityId {
+        boss_fight_with(w, p, MobKind::SunkenKing)
+    }
+
+    /// A boss summoned next to a player, already fighting them.
+    fn boss_fight_with(w: &mut World, p: EntityId, kind: MobKind) -> EntityId {
         w.sandbox = true;
         // Out of town, where mobs keep their threat.
         let e = w.entities.get_mut(&p).unwrap();
@@ -4280,15 +4296,12 @@ mod tests {
         assert!(!zone.in_town(e.pos));
         w.handle(
             p,
-            ClientMsg::Sandbox(SandboxCmd::SpawnMob {
-                kind: MobKind::SunkenKing,
-                level: 10,
-            }),
+            ClientMsg::Sandbox(SandboxCmd::SpawnMob { kind, level: 10 }),
         );
         let boss = w
             .entities
             .values()
-            .find(|e| e.mob().is_some_and(|m| m.kind == MobKind::SunkenKing))
+            .find(|e| e.mob().is_some_and(|m| m.kind == kind))
             .unwrap()
             .id;
         sturdy(w, boss);
@@ -4320,18 +4333,18 @@ mod tests {
             // It comes down twice in a row, the second time wherever you are
             // when the first lands.
             let hp = w.entities[&p].hp;
-            for crash in 0..boss::CRASH_TIMES {
+            for crash in 0..boss::kit(MobKind::SunkenKing).hazard.times {
                 if dodge {
                     let e = w.entities.get_mut(&p).unwrap();
                     e.pos = ground(e.pos.x + 8.0, e.pos.z);
                 }
                 // Keep the boss from swinging, so only the crash can hurt.
-                for _ in 0..(boss::CRASH_WARNING / DT) as usize + 2 {
+                for _ in 0..(boss::kit(MobKind::SunkenKing).hazard.warning / DT) as usize + 2 {
                     w.entities.get_mut(&boss).unwrap().swing_timer = 10.0;
                     w.entities.get_mut(&boss).unwrap().cast = None;
                     w.tick(DT);
                 }
-                if crash + 1 < boss::CRASH_TIMES {
+                if crash + 1 < boss::kit(MobKind::SunkenKing).hazard.times {
                     let next = w.hazards.first().expect("no second Tidal Crash");
                     assert!(next.pos.distance(w.entities[&p].pos) < 0.5);
                 }
@@ -4590,7 +4603,10 @@ mod tests {
         let mut w = World::new(12);
         let p = join(&mut w, "Wren", Class::Mage, 10);
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(index) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4598,7 +4614,7 @@ mod tests {
             .into_iter()
             .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
             .unwrap();
-        let portal = dungeon::to_world(index, dungeon::PORTAL);
+        let portal = dungeon::to_world(index, dungeon::SUNKEN_VAULT.portal);
         w.entities.get_mut(&p).unwrap().pos = portal;
         assert!(w.snapshot_for(p).unwrap().portal.is_none());
         w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
@@ -4641,13 +4657,21 @@ mod tests {
         let mut w = World::new(12);
         let (a, b) = party_of_two(&mut w);
         let c = join(&mut w, "Cy", Class::Rogue, 9);
-        let low = join(&mut w, "Lo", Class::Rogue, dungeon::MIN_LEVEL - 1);
+        let low = join(
+            &mut w,
+            "Lo",
+            Class::Rogue,
+            dungeon::SUNKEN_VAULT.min_level - 1,
+        );
         for p in [a, b] {
             w.entities.get_mut(&p).unwrap().level = 9;
         }
         for p in [a, b, c, low] {
             at_waystone(&mut w, p);
-            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+            w.handle(
+                p,
+                ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+            );
         }
         assert!(matches!(place(&w, low), Place::Zone(_)), "too low to enter");
         let Place::Dungeon(ours) = place(&w, a) else {
@@ -4658,7 +4682,8 @@ mod tests {
             panic!("not in the vault")
         };
         assert_ne!(ours, theirs);
-        let per_copy: usize = dungeon::PACKS
+        let per_copy: usize = dungeon::SUNKEN_VAULT
+            .packs
             .iter()
             .flat_map(|p| p.mobs.iter().map(|m| m.2))
             .sum();
@@ -4677,7 +4702,10 @@ mod tests {
         let mut w = World::new(13);
         let p = join(&mut w, "Vex", Class::Barbarian, 10);
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(index) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4696,7 +4724,10 @@ mod tests {
         );
         // Leave by the stone at the entrance, back to the town you came from.
         w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         assert_eq!(place(&w, p), Place::Dungeon(index), "already inside");
         w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
         assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
@@ -4708,7 +4739,10 @@ mod tests {
         assert!(!w.entities.contains_key(&hound));
         // A fresh copy next time, with every mob back.
         at_waystone(&mut w, p);
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         let Place::Dungeon(again) = place(&w, p) else {
             panic!("not in the vault")
         };
@@ -4725,7 +4759,10 @@ mod tests {
         for p in [a, b, c] {
             w.entities.get_mut(&p).unwrap().level = 9;
             at_waystone(&mut w, p);
-            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+            w.handle(
+                p,
+                ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+            );
         }
         let Place::Dungeon(index) = place(&w, a) else {
             panic!("not in the vault")
@@ -4748,7 +4785,10 @@ mod tests {
         let p = join(&mut w, "Ivo", Class::Mage, 9);
         w.entities.get_mut(&p).unwrap().pos =
             Zone::Grubdeep.ground_local(WAYSTONE_SPOT + vec2(1.0, 0.0));
-        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::SunkenVault)),
+        );
         assert!(matches!(place(&w, p), Place::Dungeon(_)));
         let c = w.remove_player(p).unwrap();
         let pos = Vec3::from(c.pos);
@@ -4776,5 +4816,208 @@ mod tests {
         }
         // The crown drops a quarter of the time.
         assert!((70..130).contains(&crowns), "{crowns} crowns in 400 kills");
+    }
+
+    // ---- The Cinderforge and Frosthowl Cavern ----
+
+    #[test]
+    fn each_dungeon_needs_its_level_and_a_party_can_hold_one_of_each() {
+        let mut w = World::new(17);
+        let (a, b) = party_of_two(&mut w);
+        let mut copies = Vec::new();
+        for which in [DungeonId::Cinderforge, DungeonId::Frosthowl] {
+            let d = which.get();
+            for p in [a, b] {
+                w.entities.get_mut(&p).unwrap().level = d.min_level - 1;
+                at_waystone(&mut w, p);
+                w.handle(p, ClientMsg::Travel(Destination::Dungeon(which)));
+                assert!(
+                    matches!(place(&w, p), Place::Zone(_)),
+                    "too low for {}",
+                    d.name
+                );
+                w.entities.get_mut(&p).unwrap().level = d.min_level;
+                w.handle(p, ClientMsg::Travel(Destination::Dungeon(which)));
+            }
+            let Place::Dungeon(index) = place(&w, a) else {
+                panic!("not in {}", d.name)
+            };
+            assert_eq!(place(&w, b), Place::Dungeon(index));
+            assert_eq!(dungeon::of(index).id, which);
+            // Every pack is there, the boss among them, and Joe offers this
+            // dungeon's quest.
+            let per_copy: usize = d
+                .packs
+                .iter()
+                .flat_map(|p| p.mobs.iter().map(|m| m.2))
+                .sum();
+            let mobs = vault_mobs(&w, index);
+            assert_eq!(mobs.len(), per_copy);
+            assert!(
+                mobs.iter()
+                    .any(|m| w.entities[m].mob().unwrap().kind == d.boss())
+            );
+            let joe = w
+                .entities
+                .values()
+                .find(|e| {
+                    e.name == quests::VAULT_GIVER && Place::at(e.pos) == Place::Dungeon(index)
+                })
+                .expect("no quest giver");
+            assert_eq!(
+                quests::offered(Place::at(joe.pos))[0].id,
+                quests::dungeon_quest(which).id
+            );
+            copies.push(index);
+            // Back out to town, so the next dungeon can be entered.
+            for p in [a, b] {
+                w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+                w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+            }
+        }
+        // Both copies stay open, and going back finds the same one.
+        assert_eq!(w.instances.len(), 2);
+        at_waystone(&mut w, a);
+        w.handle(
+            a,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::Cinderforge)),
+        );
+        assert_eq!(place(&w, a), Place::Dungeon(copies[0]));
+    }
+
+    #[test]
+    fn gorraks_spells_can_be_interrupted_and_he_rages_when_low() {
+        let mut w = World::new(18);
+        let p = join(&mut w, "Rogue", Class::Rogue, 10);
+        let boss = boss_fight_with(&mut w, p, MobKind::GorrakAshfist);
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let mut seen = Vec::new();
+        for _ in 0..(40.0 / DT) as usize {
+            w.tick(DT);
+            let Some(cast) = w.entities[&boss].cast.as_ref().map(|c| c.ability) else {
+                continue;
+            };
+            if !seen.contains(&cast) {
+                seen.push(cast);
+            }
+            let bpos = w.entities[&boss].pos;
+            let me = w.entities.get_mut(&p).unwrap();
+            me.target = Some(boss);
+            me.gcd = 0.0;
+            me.cooldowns.clear();
+            me.pos = ground(bpos.x - 2.5, bpos.z);
+            me.yaw = yaw_towards(me.pos, bpos);
+            me.power = me.max_power;
+            w.try_use(p, ids::KICK).unwrap();
+            assert!(
+                w.entities[&boss].cast.is_none(),
+                "{cast:?} wasn't interrupted"
+            );
+        }
+        assert!(seen.contains(&ids::MOLTEN_BLAST), "{seen:?}");
+        assert!(seen.contains(&ids::FLAME_WAVE), "{seen:?}");
+        let raging = |w: &World| {
+            w.entities[&boss]
+                .auras
+                .iter()
+                .any(|a| a.ability == ids::BLOODRAGE)
+        };
+        assert!(!raging(&w), "not yet");
+        let b = w.entities.get_mut(&boss).unwrap();
+        b.hp = b.max_hp * 0.25;
+        run(&mut w, 1.0);
+        assert!(raging(&w));
+    }
+
+    #[test]
+    fn hrimja_calls_her_pack_at_half_health_and_it_leaves_when_she_resets() {
+        let mut w = World::new(19);
+        let p = join(&mut w, "Tank", Class::Fighter, 10);
+        w.entities.get_mut(&p).unwrap().level = 20;
+        at_waystone(&mut w, p);
+        w.handle(
+            p,
+            ClientMsg::Travel(Destination::Dungeon(DungeonId::Frosthowl)),
+        );
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in Frosthowl Cavern")
+        };
+        w.entities.get_mut(&p).unwrap().player_mut().unwrap().god = true;
+        let boss = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::Hrimja)
+            .unwrap();
+        sturdy(&mut w, boss);
+        let bpos = w.entities[&boss].pos;
+        w.entities.get_mut(&p).unwrap().pos = ground(bpos.x, bpos.z - 3.0);
+        w.provoke(p, boss, 100.0);
+        let pack = |w: &World| -> Vec<EntityId> {
+            w.entities
+                .values()
+                .filter(|e| e.mob().is_some_and(|m| m.summoner == Some(boss)))
+                .map(|e| e.id)
+                .collect()
+        };
+        run(&mut w, 2.0);
+        assert!(pack(&w).is_empty(), "not before half health");
+        let b = w.entities.get_mut(&boss).unwrap();
+        b.hp = b.max_hp * 0.45;
+        run(&mut w, 0.5);
+        let wolves = pack(&w);
+        assert_eq!(wolves.len(), 3);
+        for wolf in &wolves {
+            let e = &w.entities[wolf];
+            let m = e.mob().unwrap();
+            assert_eq!(m.kind, MobKind::FrostfangWolf);
+            assert_eq!(m.state, MobState::Combat);
+            assert!(m.threat.iter().any(|(t, _)| *t == p));
+            assert_eq!(Place::at(e.pos), Place::Dungeon(index));
+        }
+        // Only once per fight.
+        run(&mut w, 2.0);
+        assert_eq!(pack(&w).len(), 3);
+        // The player gets away: she resets and her pack is gone.
+        w.entities.get_mut(&p).unwrap().dead = true;
+        run(&mut w, 1.0);
+        assert!(pack(&w).is_empty());
+        assert_eq!(w.entities[&boss].hp, w.entities[&boss].max_hp);
+    }
+
+    #[test]
+    fn avalanche_chases_you_three_times() {
+        let mut w = World::new(20);
+        let p = join(&mut w, "Tank", Class::Fighter, 10);
+        let boss = boss_fight_with(&mut w, p, MobKind::Hrimja);
+        let h = &boss::kit(MobKind::Hrimja).hazard;
+        assert_eq!(h.times, 3);
+        let calm = |w: &mut World| {
+            let b = w.entities.get_mut(&boss).unwrap();
+            b.swing_timer = 10.0;
+            b.cast = None;
+            let e = w.entities.get_mut(&p).unwrap();
+            e.hp = e.max_hp;
+        };
+        for _ in 0..(10.0 / DT) as usize {
+            calm(&mut w);
+            w.tick(DT);
+            if !w.hazards.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(w.hazards.len(), 1, "no Avalanche");
+        for k in 0..h.times {
+            // Step aside each time: the next one follows.
+            let e = w.entities.get_mut(&p).unwrap();
+            e.pos = ground(e.pos.x + 6.0, e.pos.z);
+            for _ in 0..(h.warning / DT) as usize + 2 {
+                calm(&mut w);
+                w.tick(DT);
+            }
+            if k + 1 < h.times {
+                let next = w.hazards.first().expect("Avalanche stopped early");
+                assert!(next.pos.distance(w.entities[&p].pos) < 0.5);
+            }
+        }
+        assert!(w.hazards.is_empty());
     }
 }

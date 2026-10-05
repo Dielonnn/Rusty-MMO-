@@ -5,6 +5,37 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.14
+
+Commit: the one titled "v7.14: the Cinderforge and Frosthowl Cavern dungeons".
+
+- **Two new dungeons**, built like the Sunken Vault: a copy of your own for
+  you or your party, Dungeon Master Joe at the entrance, an elite partway
+  through, a boss at the end, gear rolled for each player, and a teleporter
+  out once the boss is dead. The waystone lists all three dungeons.
+- **The Cinderforge (level 15+)**: an orc war camp inside a volcano, all
+  black basalt and glowing lava cracks. Cinderforge Grunts, Firecallers and
+  Ash Hounds (levels 15-16), and a Molten Colossus in the forge.
+  - **Boss: Warlord Gorrak Ashfist (level 16).** Magma Rain marks a wide
+    circle under every player; Molten Blast is a heavy hit on his target and
+    Flame Wave burns the whole party (interrupt both); below 30% health he
+    flies into a Bloodrage and hits half again as hard.
+  - Drops the **Ashfist Gauntlets** (blue gloves, 25%). Joe's quest **The
+    Molten Warlord** rewards the **Emberfall Greataxe** (blue), 2400
+    experience and 1 gold.
+- **Frosthowl Cavern (level 20+)**: an ice cave of snow and blue crystals.
+  Packs of Frostfang Snow Wolves and Cavern Yetis (levels 20-21), and an
+  Elder Yeti in the hollow.
+  - **Boss: Hrimja the Frostmother (level 21).** Avalanche lands three times
+    in a row, each one where you're standing when the last hits; Frozen Tomb
+    hits and roots her target for 4 seconds and Glacial Howl hits and slows
+    the whole party (interrupt both); at half health she calls three snow
+    wolves to her side.
+  - Drops the **Rimeheart Chestguard** (blue chest, 25%). Joe's quest **The
+    Frostmother** rewards the **Hrimfang Glaive** (blue), 4000 experience
+    and 2 gold.
+- Every number above is a placeholder until it's been played.
+- Protocol version 15 (an older client can't join a v7.14 server).
 ## v7.13
 
 Commit: the one titled "v7.13: level 20, spell book, two hotbars".

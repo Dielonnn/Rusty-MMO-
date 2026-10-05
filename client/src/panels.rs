@@ -4,7 +4,7 @@
 
 use macroquad::prelude::*;
 use shared::data::*;
-use shared::dungeon;
+use shared::dungeon::{self, DungeonId};
 use shared::props::{self, PropKind};
 use shared::protocol::{Destination, EntityKind, SandboxCmd};
 use shared::talents::{self, TALENTS, TIER_RANKS, TIER_REQUIRES};
@@ -857,7 +857,7 @@ pub struct TravelLayout {
 
 /// Where the waystone window sits.
 pub fn travel_window() -> Rect {
-    let rows = Zone::ALL.len() + 1;
+    let rows = Zone::ALL.len() + DungeonId::ALL.len();
     let h = 92.0 + rows as f32 * 40.0 + 30.0;
     drag::place(
         Win::Travel,
@@ -880,8 +880,11 @@ pub fn travel_layout(place: Place, level: u8) -> TravelLayout {
         y += 40.0;
     }
     y += 26.0;
-    let vault = matches!(place, Place::Zone(_)) && level >= dungeon::MIN_LEVEL;
-    buttons.push((Rect::new(x, y, w, 32.0), Destination::Dungeon, vault));
+    for d in DungeonId::ALL {
+        let ok = matches!(place, Place::Zone(_)) && level >= d.get().min_level;
+        buttons.push((Rect::new(x, y, w, 32.0), Destination::Dungeon(d), ok));
+        y += 40.0;
+    }
     TravelLayout {
         window,
         close: Rect::new(window.right() - 30.0, window.y + 6.0, 22.0, 22.0),
@@ -901,18 +904,18 @@ pub fn draw_travel(game: &Game) {
                 format!("{}  (you are here)", z.town_name())
             }
             Destination::Town(z) => format!("{}  -  {}", z.town_name(), z.name()),
-            Destination::Dungeon if game.in_dungeon() => {
-                format!("{}  (you are here)", dungeon::NAME)
+            Destination::Dungeon(d) if game.dungeon().is_some_and(|i| dungeon::of(i).id == *d) => {
+                format!("{}  (you are here)", d.get().name)
             }
-            Destination::Dungeon => {
-                format!("{}  (level {}+, party)", dungeon::NAME, dungeon::MIN_LEVEL)
+            Destination::Dungeon(d) => {
+                format!("{}  (level {}+, party)", d.get().name, d.get().min_level)
             }
         };
         button_ex(*b, &label, *ok);
     }
-    if let Some((b, _, _)) = l.buttons.last() {
+    if let Some((b, _, _)) = l.buttons.get(Zone::ALL.len()) {
         text(
-            "Dungeon",
+            "Dungeons",
             b.x,
             b.y - 8.0,
             16.0,
@@ -930,9 +933,9 @@ pub fn draw_travel(game: &Game) {
     }
 }
 
-// ---- The Sunken Vault's maps ----
+// ---- Dungeon maps ----
 
-/// The vault's floor under the minimap, around you and turned with the
+/// The dungeon's floor under the minimap, around you and turned with the
 /// camera.
 pub fn minimap_halls(center: Vec2, radius: f32, me: Vec3, cam_yaw: f32, range: f32) {
     let f = vec2(cam_yaw.sin(), cam_yaw.cos());
@@ -949,7 +952,7 @@ pub fn minimap_halls(center: Vec2, radius: f32, me: Vec3, cam_yaw: f32, range: f
                 continue;
             }
             let p = me + vec3(rel.x, 0.0, rel.y);
-            if dungeon::open(dungeon::to_local(p)) {
+            if dungeon::at(me).is_some_and(|d| d.open(dungeon::to_local(p))) {
                 let s = step * scale + 0.6;
                 draw_rectangle(
                     center.x + m.x - s / 2.0,
@@ -963,8 +966,11 @@ pub fn minimap_halls(center: Vec2, radius: f32, me: Vec3, cam_yaw: f32, range: f
     }
 }
 
-/// The vault's plan, with its rooms named and you on it.
+/// The dungeon's plan, with its rooms named and you on it.
 pub fn draw_dungeon_map(game: &Game) {
+    let Some(d) = dungeon::at(game.pos) else {
+        return;
+    };
     draw_rectangle(
         0.0,
         0.0,
@@ -974,10 +980,10 @@ pub fn draw_dungeon_map(game: &Game) {
     );
     let r = map_rect();
     panel(Rect::new(r.x - 18.0, r.y - 52.0, r.w + 36.0, r.h + 70.0));
-    text_centered(dungeon::NAME, r.x + r.w / 2.0, r.y - 20.0, 24.0, GOLD);
+    text_centered(d.name, r.x + r.w / 2.0, r.y - 20.0, 24.0, GOLD);
     // Fit every hall in the square, entrance at the bottom.
     let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
-    for h in &dungeon::HALLS {
+    for h in d.halls {
         lo = lo.min(h.center - h.half);
         hi = hi.max(h.center + h.half);
     }
@@ -992,12 +998,12 @@ pub fn draw_dungeon_map(game: &Game) {
         )
     };
     let floor = Color::new(0.35, 0.42, 0.42, 1.0);
-    for h in &dungeon::HALLS {
+    for h in d.halls {
         let a = to_screen(h.center + h.half);
         let b = to_screen(h.center - h.half);
         draw_rectangle(a.x, a.y, b.x - a.x, b.y - a.y, floor);
     }
-    for h in dungeon::HALLS.iter().filter(|h| !h.name.is_empty()) {
+    for h in d.halls.iter().filter(|h| !h.name.is_empty()) {
         let p = to_screen(h.center);
         text_centered(h.name, p.x, p.y + 6.0, 18.0, WHITE);
     }

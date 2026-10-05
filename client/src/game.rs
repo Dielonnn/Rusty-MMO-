@@ -328,14 +328,14 @@ impl Game {
             self.map_texture = Some((self.zone, crate::panels::map_texture(self.zone)));
         }
         let cam = self.camera();
-        if self.in_dungeon() {
-            clear_background(render::dungeon_theme().fog);
+        if let Some(index) = self.dungeon() {
+            clear_background(render::dungeon_theme(index).fog);
         } else {
             render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
         }
         set_camera(&cam);
-        if self.in_dungeon() {
-            scene.begin_dungeon();
+        if let Some(index) = self.dungeon() {
+            scene.begin_dungeon(index);
         } else {
             scene.begin_3d(self.zone);
         }
@@ -356,10 +356,11 @@ impl Game {
         let arrived = place != self.place;
         self.place = place;
         match place {
-            Place::Dungeon(_) => {
+            Place::Dungeon(index) => {
                 if arrived || self.banner_due {
                     self.banner_due = false;
-                    self.banner = Some((dungeon::NAME.into(), "Dungeon".into(), 0.0));
+                    let name = dungeon::of(index).name;
+                    self.banner = Some((name.into(), "Dungeon".into(), 0.0));
                 }
             }
             Place::Zone(zone) => {
@@ -381,6 +382,14 @@ impl Game {
 
     pub fn in_dungeon(&self) -> bool {
         matches!(self.place, Place::Dungeon(_))
+    }
+
+    /// The dungeon instance you're in, if any.
+    pub fn dungeon(&self) -> Option<u32> {
+        match self.place {
+            Place::Dungeon(i) => Some(i),
+            Place::Zone(_) => None,
+        }
     }
 
     /// The waystone where you are: in your town, or by the vault's entrance.
