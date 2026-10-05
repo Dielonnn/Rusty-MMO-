@@ -2,6 +2,9 @@
 //!
 //! Usage: `server [--bind ADDRESS] [--port PORT] [--save FILE] [--sandbox]`
 //!
+//! The host can type commands into the server's window: `level NAME LEVEL`
+//! sets a character's level, `help` lists them.
+//!
 //! Characters are saved to `server_characters.json` in the game's data folder
 //! (`%APPDATA%\RustyMMO` on Windows) unless `--save` names another file.
 
@@ -77,6 +80,7 @@ fn main() {
         }
     };
     server.world.sandbox = sandbox;
+    server.read_console();
     if sandbox {
         println!("Sandbox mode: players can use cheats.");
     }
@@ -86,6 +90,7 @@ fn main() {
         server.local_addr().unwrap(),
         save.display()
     );
+    println!("Type help for host commands, like level NAME LEVEL.");
     server.run();
 }
 

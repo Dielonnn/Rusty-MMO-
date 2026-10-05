@@ -47,7 +47,10 @@ cargo run --release -p server -- --sandbox          # everyone may use the cheat
 Characters are saved to `server_characters.json` in the game's data folder
 (`%APPDATA%\RustyMMO` on Windows, `~/.local/share/rusty-mmo` on Linux), or
 the `--save` file, every few seconds and whenever someone logs out. The server
-prints the full path when it starts. Accounts have no passwords yet, so only
+prints the full path when it starts.
+
+Whoever runs the server can type commands into its window: `level NAME LEVEL`
+sets a character's level (online or offline), and `help` lists them. Accounts have no passwords yet, so only
 share a server with people you trust.
 
 On Linux you may need the system libraries macroquad links against:

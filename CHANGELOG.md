@@ -7,7 +7,7 @@ built from that commit.
 
 ## v8.2.1
 
-Commit: the one titled "v8.2.1: the server keeps its save in one place".
+Commit: the one titled "v8.2.1: server save location and host level command".
 
 - **Server saves carry over between versions**: the dedicated server now
   saves characters to `server_characters.json` in the game's data folder
@@ -21,6 +21,10 @@ Commit: the one titled "v8.2.1: the server keeps its save in one place".
   can't write there (Windows "access is denied") it says so straight away and
   stops, instead of running without saving. `--save FILE` still picks any
   other file.
+- **The host can set levels**: type `level NAME LEVEL` (1 to 20) into the
+  server's window to set a character's level, whether they're online or
+  not. Online players see "The server host set your level to N." and keep
+  playing; it saves straight away. `help` lists the commands.
 - Same protocol as v8.2 (18), so v8.2 clients can join.
 
 ## v8.2

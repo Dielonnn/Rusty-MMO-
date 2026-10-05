@@ -25,7 +25,7 @@ impl World {
             .map_or_else(|| vec![id], |p| p.members.clone())
     }
 
-    pub(super) fn player_named(&self, name: &str) -> Option<EntityId> {
+    pub fn player_named(&self, name: &str) -> Option<EntityId> {
         let name = name.trim();
         self.entities
             .values()
