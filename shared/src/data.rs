@@ -640,7 +640,23 @@ pub struct Ability {
     pub from_behind: bool,
 }
 
+/// How fast a spell's missile flies, in yards per second.
+pub const MISSILE_SPEED: f32 = 32.0;
+
 impl Ability {
+    /// How fast this ability's missile flies when `class` (`None` for a mob)
+    /// uses it. Arrows and bullets are quicker than spells; its damage lands
+    /// when the missile does.
+    pub fn missile_speed(&self, class: Option<Class>) -> f32 {
+        let fast = self.school == School::Physical
+            && matches!(class, Some(Class::Ranger | Class::Artificer) | None);
+        if fast {
+            MISSILE_SPEED * 1.6
+        } else {
+            MISSILE_SPEED
+        }
+    }
+
     pub fn needs_combo_points(&self) -> bool {
         self.effects
             .iter()

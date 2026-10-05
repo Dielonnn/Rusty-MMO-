@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -184,6 +184,8 @@ pub struct Snapshot {
     pub me: SelfView,
     /// Marked ground about to be hit nearby: get out of the circle!
     pub hazards: Vec<HazardView>,
+    /// The teleporter out of the vault, once its boss is dead.
+    pub portal: Option<Vec3>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

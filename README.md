@@ -124,10 +124,12 @@ to travel to any other starting area's town, or, from level 8, into the
 Sunken Vault: a dungeon of flooded halls, packs of hounds, crawlers and
 drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King,
 who sometimes drops the Crown of the Sunken King, a blue helm.
-The King is a boss: he marks red circles under the players fighting him (step
-out before they fill), and casts Drowning Grasp and, when hurt, Call of the
+The King is a boss: he marks red circles under the players fighting him, twice
+in a row (step out before each one fills), and casts Drowning Grasp and, when hurt, Call of the
 Deep, which a kick or other interrupt stops. Every enemy in the vault rolls
 gear for each player separately, so only you can loot your own gear.
+Once he's dead, a teleporter opens in the throne room that works like the
+waystone at the entrance.
 Your party shares one copy of the vault; anyone else gets their own. Mobs you
 kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
 inside and you come back at the vault's entrance; the waystone there takes you
