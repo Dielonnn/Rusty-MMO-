@@ -135,6 +135,8 @@ pub struct Game {
     pub chat: Vec<ChatLine>,
     pub chat_input: Option<String>,
     pub errors: Vec<(String, f32)>,
+    /// Ground a boss has marked, about to be hit.
+    hazards: Vec<HazardView>,
     pub floats: Vec<FloatText>,
     pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
@@ -198,6 +200,7 @@ impl Game {
             chat: Vec::new(),
             chat_input: None,
             errors: Vec::new(),
+            hazards: Vec::new(),
             floats: Vec::new(),
             banner: None,
             cast_flash: None,
@@ -414,7 +417,7 @@ impl Game {
                 self.yaw = yaw;
                 self.vel_y = 0.0;
             }
-            ServerMsg::Snapshot(snap) => {
+            ServerMsg::Snapshot(mut snap) => {
                 let first = self
                     .my_id
                     .is_some_and(|id| !self.entities.contains_key(&id));
@@ -441,6 +444,7 @@ impl Game {
                     }
                 }
                 self.entities.retain(|id, _| seen.contains(id));
+                self.hazards = std::mem::take(&mut snap.hazards);
                 if snap.me.talents != self.me.talents {
                     self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
                 }
@@ -1511,6 +1515,20 @@ impl Game {
         if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
             let color = hud::reaction_color(&t.view, self.class);
             b.ground_ring(t.pos, render::model_radius(t.view.kind), 0.14, color);
+        }
+        // Marked ground: a red circle, filling in from the middle until it
+        // lands.
+        for h in &self.hazards {
+            let pulse = 0.75 + 0.25 * (self.time * 8.0).sin();
+            let edge = Color::new(1.0, 0.15, 0.1, 0.9 * pulse);
+            b.ground_ring(h.pos, h.radius, 0.3, edge);
+            let filled = (1.0 - h.remaining / h.total.max(0.01)).clamp(0.0, 1.0);
+            let fill = Color::new(1.0, 0.3, 0.1, 0.55);
+            let mut r = 0.35;
+            while r < h.radius * filled {
+                b.ground_ring(h.pos, r, 0.35, fill);
+                r += 0.7;
+            }
         }
         for e in self.entities.values() {
             let mine = Some(e.view.id) == self.my_id;

@@ -773,6 +773,9 @@ pub mod ids {
     pub const VENOM_STING: AbilityId = AbilityId(93);
     pub const WEB: AbilityId = AbilityId(94);
     pub const LIGHTNING_BOLT: AbilityId = AbilityId(95);
+    // The Sunken King's spells. Interrupt them!
+    pub const DROWNING_GRASP: AbilityId = AbilityId(96);
+    pub const CALL_OF_THE_DEEP: AbilityId = AbilityId(97);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2347,6 +2350,35 @@ pub static ABILITIES: &[Ability] = &[
             max: 15.0,
         }],
     )),
+    // 96-97: The Sunken King's interruptible spells
+    projectile(ab(
+        "Drowning Grasp",
+        "Floods the target's lungs with black water.",
+        S::Shadow,
+        T::Enemy,
+        40.0,
+        2.5,
+        0.0,
+        0.0,
+        &[E::Damage {
+            min: 28.0,
+            max: 34.0,
+        }],
+    )),
+    ab(
+        "Call of the Deep",
+        "Calls on the deep to mend the caster's wounds.",
+        S::Holy,
+        T::Caster,
+        0.0,
+        3.0,
+        0.0,
+        0.0,
+        &[E::Heal {
+            min: 140.0,
+            max: 145.0,
+        }],
+    ),
 ];
 
 // ---- Items ----
@@ -3289,6 +3321,8 @@ pub struct MobTemplate {
     /// Attacks players that come close. Otherwise only fights back.
     pub aggressive: bool,
     pub elite: bool,
+    /// A dungeon boss: an elite with its own mechanics, shown as "Boss".
+    pub boss: bool,
     /// Calls nearby mobs from its camp for help when attacked.
     pub social: bool,
     /// Rough radius, used for melee reach and drawing.
@@ -3366,6 +3400,7 @@ const fn hunter(
         speed: 7.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: false,
         size: 0.9,
         spell: Some((spell, 10.0)),
@@ -3407,6 +3442,7 @@ const fn grazer(name: &'static str, model: MobModel, colors: [(f32, f32, f32); 3
         speed: 6.5,
         aggressive: false,
         elite: false,
+        boss: false,
         social: false,
         size: 0.9,
         spell: None,
@@ -3430,6 +3466,7 @@ const fn fighter(
         speed: 6.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: true,
         size: 0.8,
         spell: None,
@@ -3454,6 +3491,7 @@ const fn caster(
         speed: 6.5,
         aggressive: true,
         elite: false,
+        boss: false,
         social: true,
         size: 0.8,
         spell: Some((spell, 5.0)),
@@ -3473,6 +3511,7 @@ const fn elite(name: &'static str, style: GiantStyle, colors: [(f32, f32, f32); 
         speed: 5.5,
         aggressive: true,
         elite: true,
+        boss: false,
         social: false,
         size: 2.2,
         spell: Some((ids::GROUND_SLAM, 12.0)),
@@ -3716,6 +3755,10 @@ const SUNKEN_KING: MobTemplate = MobTemplate {
     size: 2.6,
     respawn: 0.0,
     loot: BOSS_LOOT,
+    boss: true,
+    // The boss's own mechanics (server/src/world/boss.rs) replace the
+    // elite's Ground Slam.
+    spell: None,
     ..elite(
         "Morvane the Sunken King",
         GiantStyle::Bone,
@@ -3970,7 +4013,7 @@ mod tests {
 
     #[test]
     fn ability_ids_match_table() {
-        assert_eq!(ABILITIES.len(), 96);
+        assert_eq!(ABILITIES.len(), 98);
         for class in Class::ALL {
             for id in class.abilities() {
                 assert!((id.0 as usize) < ABILITIES.len());

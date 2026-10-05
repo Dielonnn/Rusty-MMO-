@@ -625,6 +625,7 @@ fn hp_color(frac: f32) -> Color {
 
 fn level_label(view: &EntityView) -> String {
     match view.kind {
+        EntityKind::Mob { kind, .. } if kind.template().boss => format!("{} Boss", view.level),
         EntityKind::Mob { elite: true, .. } => format!("{} Elite", view.level),
         _ => view.level.to_string(),
     }
