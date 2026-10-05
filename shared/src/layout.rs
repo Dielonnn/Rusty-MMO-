@@ -78,18 +78,18 @@ pub struct Layout {
 #[derive(Clone, Copy, Debug)]
 pub struct Shore {
     pub center: Vec2,
-    /// The levels of the nearest site, so they fit the area.
-    pub levels: (u8, u8),
 }
 
 /// Water mobs per shore, how far they wander, and at most how many shores a
 /// zone has.
 pub const SHORE_COUNT: usize = 4;
 pub const SHORE_RADIUS: f32 = 8.0;
+/// Water mobs' levels, wherever the lake is.
+pub const SHORE_LEVELS: (u8, u8) = (3, 5);
 const MAX_SHORES: usize = 3;
 
 /// Finds the shallowest, widest lake edges, away from town and the other
-/// sites, and gives each the levels of its nearest site.
+/// sites.
 fn shores(t: &Terrain, water: f32, sites: &[Site]) -> Vec<Shore> {
     const STEP: f32 = 3.0;
     let limit = WORLD_HALF_SIZE - 20.0;
@@ -131,12 +131,7 @@ fn shores(t: &Terrain, water: f32, sites: &[Site]) -> Vec<Shore> {
             break;
         }
         if out.iter().all(|s| s.center.distance(p) > 60.0) {
-            let nearest = sites
-                .iter()
-                .filter(|s| s.kind != SiteKind::Ruins)
-                .min_by(|a, b| a.center.distance(p).total_cmp(&b.center.distance(p)));
-            let levels = nearest.map_or((1, 2), |s| s.spawns[0].levels);
-            out.push(Shore { center: p, levels });
+            out.push(Shore { center: p });
         }
     }
     out

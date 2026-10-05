@@ -423,7 +423,7 @@ fn camps() -> Vec<Camp> {
                     center: zone.to_world(shore.center),
                     radius: shared::layout::SHORE_RADIUS,
                     kind,
-                    levels: shore.levels,
+                    levels: shared::layout::SHORE_LEVELS,
                     count: shared::layout::SHORE_COUNT,
                     group: camps.len(),
                     instance: None,
@@ -3885,6 +3885,7 @@ mod tests {
             assert_eq!(water.len(), lakes * shared::layout::SHORE_COUNT, "{zone:?}");
             assert_eq!(lakes > 0, MobKind::water(zone).is_some(), "{zone:?}");
             for e in water {
+                assert!((3..=5).contains(&e.level));
                 assert_eq!(Zone::at(e.pos), zone);
                 assert!(e.pos.y < zone.water_level() + 0.5, "{zone:?} {}", e.pos);
             }
