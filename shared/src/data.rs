@@ -2517,6 +2517,9 @@ pub const WEAPON_DROPS: [ItemId; 6] = {
 pub const WEAPON_DROP_CHANCE: f32 = 0.03;
 /// Chance an elite does.
 pub const ELITE_WEAPON_DROP_CHANCE: f32 = 0.3;
+/// The Sunken Vault's last boss always drops green armor, and often a weapon.
+pub const SUNKEN_KING_RARE_DROP_CHANCE: f32 = 1.0;
+pub const SUNKEN_KING_WEAPON_DROP_CHANCE: f32 = 0.5;
 
 const fn material(
     name: &'static str,
@@ -3091,6 +3094,13 @@ pub enum MobKind {
     Skeleton,
     Necromancer,
     BoneColossus,
+    // The Sunken Vault (dungeon)
+    VaultHound,
+    VaultCrawler,
+    DrownedEnforcer,
+    DrownedAdept,
+    StoneWarden,
+    SunkenKing,
 }
 
 /// What a mob is built from when drawn.
@@ -3183,6 +3193,13 @@ const FIGHTER_LOOT: LootTable = LootTable {
 const CASTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
     items: &[(items::LINEN_CLOTH, 0.75, 1, 3)],
+};
+const BOSS_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+    ],
 };
 const ELITE_LOOT: LootTable = LootTable {
     copper_per_level: (20, 40),
@@ -3474,6 +3491,75 @@ const BONE_COLOSSUS: MobTemplate = elite(
     [(0.86, 0.83, 0.74), (0.6, 0.56, 0.5), (0.5, 1.0, 0.4)],
 );
 
+// The Sunken Vault's mobs are tougher than their kin outside: they're
+// meant for a party.
+
+const VAULT_HOUND: MobTemplate = MobTemplate {
+    hp: 120.0,
+    damage: (6.0, 9.0),
+    respawn: 0.0,
+    ..hunter(
+        "Vault Hound",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.3, 0.36, 0.38), (0.18, 0.22, 0.24), (0.35, 0.95, 0.85)],
+    )
+};
+const VAULT_CRAWLER: MobTemplate = MobTemplate {
+    hp: 110.0,
+    damage: (6.0, 9.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Vault Crawler",
+        Mm::Spider,
+        ids::WEB,
+        [(0.2, 0.28, 0.27), (0.1, 0.15, 0.15), (0.3, 1.0, 0.75)],
+    )
+};
+const DROWNED_ENFORCER: MobTemplate = MobTemplate {
+    hp: 150.0,
+    damage: (8.0, 12.0),
+    respawn: 0.0,
+    ..fighter(
+        "Drowned Enforcer",
+        H::Raider,
+        [(0.25, 0.35, 0.4), (0.16, 0.2, 0.22), (0.2, 0.8, 0.75)],
+    )
+};
+const DROWNED_ADEPT: MobTemplate = MobTemplate {
+    hp: 120.0,
+    damage: (4.0, 7.0),
+    respawn: 0.0,
+    ..caster(
+        "Drowned Adept",
+        H::Mystic,
+        ids::SHADOW_BOLT,
+        [(0.12, 0.25, 0.3), (0.08, 0.15, 0.18), (0.3, 0.95, 0.9)],
+    )
+};
+const STONE_WARDEN: MobTemplate = MobTemplate {
+    hp: 520.0,
+    respawn: 0.0,
+    ..elite(
+        "Stone Warden",
+        GiantStyle::Stone,
+        [(0.36, 0.42, 0.38), (0.26, 0.3, 0.28), (0.3, 1.0, 0.8)],
+    )
+};
+const SUNKEN_KING: MobTemplate = MobTemplate {
+    hp: 800.0,
+    damage: (16.0, 22.0),
+    size: 2.6,
+    respawn: 0.0,
+    loot: BOSS_LOOT,
+    ..elite(
+        "Morvane the Sunken King",
+        GiantStyle::Bone,
+        [(0.55, 0.62, 0.6), (0.3, 0.36, 0.36), (0.25, 1.0, 0.85)],
+    )
+};
+
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
         use MobKind::*;
@@ -3508,11 +3594,39 @@ impl MobKind {
             Skeleton => &SKELETON,
             Necromancer => &NECROMANCER,
             BoneColossus => &BONE_COLOSSUS,
+            VaultHound => &VAULT_HOUND,
+            VaultCrawler => &VAULT_CRAWLER,
+            DrownedEnforcer => &DROWNED_ENFORCER,
+            DrownedAdept => &DROWNED_ADEPT,
+            StoneWarden => &STONE_WARDEN,
+            SunkenKing => &SUNKEN_KING,
         }
     }
 
     pub fn max_hp(self, level: u8) -> f32 {
         self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
+    }
+
+    /// The Sunken Vault's mobs, bosses last.
+    pub const DUNGEON: [MobKind; 6] = [
+        MobKind::VaultHound,
+        MobKind::VaultCrawler,
+        MobKind::DrownedEnforcer,
+        MobKind::DrownedAdept,
+        MobKind::StoneWarden,
+        MobKind::SunkenKing,
+    ];
+
+    /// Chances of a green armor piece (`RARE_DROPS`) and a green weapon
+    /// (`WEAPON_DROPS`) on its corpse.
+    pub fn drop_chances(self) -> (f32, f32) {
+        if self == MobKind::SunkenKing {
+            (SUNKEN_KING_RARE_DROP_CHANCE, SUNKEN_KING_WEAPON_DROP_CHANCE)
+        } else if self.template().elite {
+            (ELITE_RARE_DROP_CHANCE, ELITE_WEAPON_DROP_CHANCE)
+        } else {
+            (RARE_DROP_CHANCE, WEAPON_DROP_CHANCE)
+        }
     }
 
     /// A zone's five mobs: aggressive beast, neutral beast, fighter, caster

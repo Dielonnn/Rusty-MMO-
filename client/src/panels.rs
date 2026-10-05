@@ -4,8 +4,9 @@
 
 use macroquad::prelude::*;
 use shared::data::*;
+use shared::dungeon;
 use shared::props::{self, PropKind};
-use shared::protocol::{EntityKind, SandboxCmd};
+use shared::protocol::{Destination, EntityKind, SandboxCmd};
 use shared::talents::{self, TALENTS, TIER_RANKS, TIER_REQUIRES};
 use shared::world::*;
 
@@ -829,4 +830,177 @@ pub fn minimap_terrain(
         indices,
         texture: Some(tex.clone()),
     });
+}
+
+// ---- Waystones ----
+
+pub struct TravelLayout {
+    pub window: Rect,
+    pub close: Rect,
+    /// Each destination's button, and whether you can go there.
+    pub buttons: Vec<(Rect, Destination, bool)>,
+}
+
+/// Where the waystone window sits.
+pub fn travel_window() -> Rect {
+    let rows = Zone::ALL.len() + 1;
+    let h = 92.0 + rows as f32 * 40.0 + 30.0;
+    Rect::new(screen_width() / 2.0 - 190.0, 140.0, 380.0, h)
+}
+
+pub fn travel_layout(place: Place, level: u8) -> TravelLayout {
+    let window = travel_window();
+    let x = window.x + 16.0;
+    let w = window.w - 32.0;
+    let mut buttons = Vec::new();
+    let mut y = window.y + 62.0;
+    for z in Zone::ALL {
+        buttons.push((
+            Rect::new(x, y, w, 32.0),
+            Destination::Town(z),
+            place != Place::Zone(z),
+        ));
+        y += 40.0;
+    }
+    y += 26.0;
+    let vault = matches!(place, Place::Zone(_)) && level >= dungeon::MIN_LEVEL;
+    buttons.push((Rect::new(x, y, w, 32.0), Destination::Dungeon, vault));
+    TravelLayout {
+        window,
+        close: Rect::new(window.right() - 30.0, window.y + 6.0, 22.0, 22.0),
+        buttons,
+    }
+}
+
+pub fn draw_travel(game: &Game) {
+    let l = travel_layout(game.place, game.level());
+    let r = l.window;
+    panel(r);
+    text("Waystone (F)", r.x + 12.0, r.y + 26.0, 22.0, GOLD);
+    button(l.close, "x");
+    for (b, to, ok) in &l.buttons {
+        let label = match to {
+            Destination::Town(z) if game.place == Place::Zone(*z) => {
+                format!("{}  (you are here)", z.town_name())
+            }
+            Destination::Town(z) => format!("{}  -  {}", z.town_name(), z.name()),
+            Destination::Dungeon if game.in_dungeon() => {
+                format!("{}  (you are here)", dungeon::NAME)
+            }
+            Destination::Dungeon => {
+                format!("{}  (level {}+, party)", dungeon::NAME, dungeon::MIN_LEVEL)
+            }
+        };
+        button_ex(*b, &label, *ok);
+    }
+    if let Some((b, _, _)) = l.buttons.last() {
+        text(
+            "Dungeon",
+            b.x,
+            b.y - 8.0,
+            16.0,
+            Color::new(0.75, 0.85, 0.9, 1.0),
+        );
+    }
+    if let Some((b, _, _)) = l.buttons.first() {
+        text(
+            "Towns",
+            b.x,
+            b.y - 8.0,
+            16.0,
+            Color::new(0.75, 0.85, 0.9, 1.0),
+        );
+    }
+}
+
+// ---- The Sunken Vault's maps ----
+
+/// The vault's floor under the minimap, around you and turned with the
+/// camera.
+pub fn minimap_halls(center: Vec2, radius: f32, me: Vec3, cam_yaw: f32, range: f32) {
+    let f = vec2(cam_yaw.sin(), cam_yaw.cos());
+    let r = vec2(-f.y, f.x);
+    let scale = radius / range;
+    let step = 2.0;
+    let floor = Color::new(0.42, 0.5, 0.5, 0.9);
+    let n = (range / step) as i32;
+    for i in -n..=n {
+        for j in -n..=n {
+            let rel = vec2(i as f32, j as f32) * step;
+            let m = vec2(rel.dot(r), -rel.dot(f)) * scale;
+            if m.length() > radius - 2.0 {
+                continue;
+            }
+            let p = me + vec3(rel.x, 0.0, rel.y);
+            if dungeon::open(dungeon::to_local(p)) {
+                let s = step * scale + 0.6;
+                draw_rectangle(
+                    center.x + m.x - s / 2.0,
+                    center.y + m.y - s / 2.0,
+                    s,
+                    s,
+                    floor,
+                );
+            }
+        }
+    }
+}
+
+/// The vault's plan, with its rooms named and you on it.
+pub fn draw_dungeon_map(game: &Game) {
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::new(0.0, 0.0, 0.0, 0.55),
+    );
+    let r = map_rect();
+    panel(Rect::new(r.x - 18.0, r.y - 52.0, r.w + 36.0, r.h + 70.0));
+    text_centered(dungeon::NAME, r.x + r.w / 2.0, r.y - 20.0, 24.0, GOLD);
+    // Fit every hall in the square, entrance at the bottom.
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for h in &dungeon::HALLS {
+        lo = lo.min(h.center - h.half);
+        hi = hi.max(h.center + h.half);
+    }
+    let span = (hi - lo).max_element() + 12.0;
+    let mid = (lo + hi) / 2.0;
+    let scale = r.w / span;
+    // North (+Z) is up; +X is to the left, as on the world map.
+    let to_screen = |p: Vec2| {
+        vec2(
+            r.x + r.w / 2.0 - (p.x - mid.x) * scale,
+            r.y + r.h / 2.0 - (p.y - mid.y) * scale,
+        )
+    };
+    let floor = Color::new(0.35, 0.42, 0.42, 1.0);
+    for h in &dungeon::HALLS {
+        let a = to_screen(h.center + h.half);
+        let b = to_screen(h.center - h.half);
+        draw_rectangle(a.x, a.y, b.x - a.x, b.y - a.y, floor);
+    }
+    for h in dungeon::HALLS.iter().filter(|h| !h.name.is_empty()) {
+        let p = to_screen(h.center);
+        text_centered(h.name, p.x, p.y + 6.0, 18.0, WHITE);
+    }
+    let stone = to_screen(dungeon::EXIT_STONE);
+    draw_circle(stone.x, stone.y, 5.0, Color::new(0.45, 0.9, 1.0, 1.0));
+    // Your party, then you.
+    for e in game.entities.values() {
+        if e.view.kind.is_player() && Some(e.view.id) != game.my_id {
+            let p = to_screen(dungeon::to_local(e.pos));
+            draw_circle(p.x, p.y, 4.0, Color::new(0.3, 0.6, 1.0, 1.0));
+        }
+    }
+    let me = to_screen(dungeon::to_local(game.pos));
+    let d = game.yaw;
+    let dir = vec2(-d.sin(), -d.cos());
+    let side = vec2(-dir.y, dir.x);
+    draw_triangle(
+        me + dir * 9.0,
+        me - dir * 6.0 + side * 6.0,
+        me - dir * 6.0 - side * 6.0,
+        Color::new(1.0, 0.95, 0.4, 1.0),
+    );
 }

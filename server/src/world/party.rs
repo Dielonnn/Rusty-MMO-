@@ -176,6 +176,7 @@ impl World {
             let rest = self.parties.remove(&party).unwrap().members;
             for m in rest {
                 self.set_party(m, None);
+                self.party_disbanded(party, m);
                 self.send(
                     Audience::Only(m),
                     GameEvent::System("Your party has disbanded.".into()),

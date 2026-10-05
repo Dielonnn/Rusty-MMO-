@@ -13,10 +13,12 @@ use shared::talents::{self, Bonuses, Ranks};
 use shared::world::*;
 
 use crate::character::{Character, add_item, count_item, gear_stats, remove_item};
-use shared::props::{MERCHANT_SPOT, QUEST_SPOT};
+use shared::props::{ARRIVAL_SPOT, MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
+mod instance;
 mod party;
+pub use instance::{Instance, Owner};
 pub use party::{Party, PartyId};
 
 /// Who a message is for.
@@ -100,6 +102,8 @@ pub struct PlayerData {
     pub party: Option<PartyId>,
     /// A party invite: who from, and seconds left to answer it.
     pub invite: Option<(EntityId, f32)>,
+    /// The town they entered the Sunken Vault from, and go back to.
+    pub home_town: Zone,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,6 +390,12 @@ struct Camp {
     kind: MobKind,
     levels: (u8, u8),
     count: usize,
+    /// Camps with the same group help each other (a vault pack can mix
+    /// kinds). Ordinary camps are their own group.
+    group: usize,
+    /// The copy of the Sunken Vault this camp is in. Its mobs don't come
+    /// back when killed.
+    instance: Option<u32>,
 }
 
 /// Every zone's camps, in world coordinates, with that zone's mobs.
@@ -401,6 +411,8 @@ fn camps() -> Vec<Camp> {
                     kind: mobs[spawn.role],
                     levels: spawn.levels,
                     count: spawn.count,
+                    group: camps.len(),
+                    instance: None,
                 });
             }
         }
@@ -425,6 +437,10 @@ pub struct World {
     pub sandbox: bool,
     pub parties: HashMap<PartyId, Party>,
     next_party: PartyId,
+    /// Open copies of the Sunken Vault, by index.
+    pub instances: BTreeMap<u32, Instance>,
+    /// Camps of closed vault copies, to reuse.
+    free_camps: Vec<usize>,
 }
 
 impl World {
@@ -439,6 +455,8 @@ impl World {
             sandbox: false,
             parties: HashMap::new(),
             next_party: 1,
+            instances: BTreeMap::new(),
+            free_camps: Vec::new(),
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -582,7 +600,11 @@ impl World {
     /// Brings a saved character into the world and returns their entity id.
     pub fn add_player(&mut self, c: &Character) -> EntityId {
         let id = self.alloc_id();
-        let pos = clamp_to_world(Vec3::from(c.pos));
+        let mut pos = clamp_to_world(Vec3::from(c.pos));
+        // Vault copies don't outlast the server; wake up in town instead.
+        if matches!(Place::at(pos), Place::Dungeon(_)) {
+            pos = c.appearance.race.zone().graveyard();
+        }
         let stats = gear_stats(&c.gear, c.weapon);
         let ranks = talents::sanitize(&c.talents, c.level);
         let bonuses = Bonuses::new(c.class, &ranks);
@@ -630,6 +652,7 @@ impl World {
                     quests: c.quests.clone(),
                     party: None,
                     invite: None,
+                    home_town: Zone::at(pos),
                 }),
             },
         );
@@ -644,6 +667,12 @@ impl World {
     pub fn character(&self, id: EntityId) -> Option<Character> {
         let e = self.entities.get(&id)?;
         let p = e.player()?;
+        // Someone saved in the vault comes back by the waystone of the town
+        // they entered it from.
+        let pos = match Place::at(e.pos) {
+            Place::Zone(_) => e.pos,
+            Place::Dungeon(_) => p.home_town.ground_local(ARRIVAL_SPOT),
+        };
         Some(Character {
             account: p.account.clone(),
             name: e.name.clone(),
@@ -652,7 +681,7 @@ impl World {
             level: e.level,
             xp: p.xp,
             money: p.money,
-            pos: e.pos.to_array(),
+            pos: pos.to_array(),
             yaw: e.yaw,
             bags: p.bags.clone(),
             gear: p.gear,
@@ -874,6 +903,11 @@ impl World {
                     self.error(id, e);
                 }
             }
+            ClientMsg::Travel(to) => {
+                if let Err(e) = self.travel(id, to) {
+                    self.error(id, e);
+                }
+            }
             // Session messages are handled by the network layer.
             ClientMsg::Hello { .. }
             | ClientMsg::CreateCharacter { .. }
@@ -995,7 +1029,7 @@ impl World {
         {
             e.power = e.max_power * 0.5;
         }
-        e.pos = Zone::at(e.pos).graveyard();
+        e.pos = Place::at(e.pos).graveyard();
         e.yaw = 0.0;
         let (pos, yaw) = (e.pos, e.yaw);
         self.outbox
@@ -1222,16 +1256,8 @@ impl World {
             }
             SandboxCmd::Teleport(zone) => {
                 self.clear_spawns(id);
-                let pos = zone.graveyard();
-                let e = self.entities.get_mut(&id).unwrap();
-                e.pos = pos;
-                e.cast = None;
-                e.target = None;
-                e.player_mut().unwrap().auto_attack = false;
-                let yaw = e.yaw;
-                self.forget(id);
-                self.outbox
-                    .push((Audience::Only(id), ServerMsg::SetPosition { pos, yaw }));
+                let yaw = self.entities[&id].yaw;
+                self.teleport(id, zone.graveyard(), yaw);
             }
             SandboxCmd::ToggleGod => {
                 let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
@@ -1253,6 +1279,8 @@ impl World {
                     kind,
                     levels: (level, level),
                     count: 0,
+                    group: self.camps.len(),
+                    instance: None,
                 });
                 let camp = self.camps.len() - 1;
                 let mob = self.spawn_mob(camp);
@@ -1659,7 +1687,7 @@ impl World {
     fn relocate(&mut self, id: EntityId, pos: Vec3, yaw: f32) {
         let e = self.entities.get_mut(&id).unwrap();
         // Never jump into another zone.
-        let pos = if Zone::at(pos) == Zone::at(e.pos) {
+        let pos = if Place::at(pos) == Place::at(e.pos) {
             pos
         } else {
             e.pos
@@ -1940,10 +1968,10 @@ impl World {
 
     /// Social mobs (people) call nearby friends from the same camp into the fight.
     fn social_aggro(&mut self, mob: EntityId, enemy: EntityId) {
-        let (camp, pos, social) = {
+        let (group, pos, social) = {
             let e = &self.entities[&mob];
             let m = e.mob().unwrap();
-            (m.camp, e.pos, m.kind.template().social)
+            (self.camps[m.camp].group, e.pos, m.kind.template().social)
         };
         if !social {
             return;
@@ -1953,7 +1981,7 @@ impl World {
                 continue;
             }
             if let Some(m) = e.mob_mut()
-                && m.camp == camp
+                && self.camps[m.camp].group == group
                 && m.state == MobState::Idle
             {
                 add_threat(m, enemy, 1.0);
@@ -2092,20 +2120,11 @@ impl World {
             }
         }
         // Now and then, a piece of green gear.
-        let rare = if kind.template().elite {
-            ELITE_RARE_DROP_CHANCE
-        } else {
-            RARE_DROP_CHANCE
-        };
+        let (rare, weapon) = kind.drop_chances();
         if self.rng.chance(rare) {
             let pick = RARE_DROPS[self.rng.int(0, RARE_DROPS.len() as u32 - 1) as usize];
             items.push((pick, 1));
         }
-        let weapon = if kind.template().elite {
-            ELITE_WEAPON_DROP_CHANCE
-        } else {
-            WEAPON_DROP_CHANCE
-        };
         if self.rng.chance(weapon) {
             let pick = WEAPON_DROPS[self.rng.int(0, WEAPON_DROPS.len() as u32 - 1) as usize];
             items.push((pick, 1));
@@ -2214,6 +2233,7 @@ impl World {
     pub fn tick(&mut self, dt: f32) {
         self.tick += 1;
         self.tick_parties(dt);
+        self.tick_instances(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -2408,6 +2428,10 @@ impl World {
         let m = mob_of(&mut e.brain);
         let t = m.kind.template();
         if e.dead {
+            // Vault mobs stay dead until their copy closes.
+            if self.camps[m.camp].instance.is_some() {
+                return;
+            }
             m.respawn_timer -= dt;
             if m.respawn_timer <= 0.0 && m.summoner.is_some() {
                 self.entities.remove(&id);
@@ -3961,5 +3985,189 @@ mod tests {
             .collect();
         assert_eq!(to, vec![a, b]);
         assert!(!to.contains(&c));
+    }
+
+    // ---- Waystones and the Sunken Vault ----
+
+    use shared::dungeon;
+    use shared::props::WAYSTONE_SPOT;
+
+    /// Puts a player beside their zone's waystone.
+    fn at_waystone(w: &mut World, p: EntityId) {
+        let zone = Zone::at(w.entities[&p].pos);
+        w.entities.get_mut(&p).unwrap().pos = zone.ground_local(WAYSTONE_SPOT + vec2(0.0, -2.0));
+    }
+
+    fn place(w: &World, p: EntityId) -> Place {
+        Place::at(w.entities[&p].pos)
+    }
+
+    fn vault_mobs(w: &World, index: u32) -> Vec<EntityId> {
+        w.entities
+            .values()
+            .filter(|e| e.mob().is_some() && Place::at(e.pos) == Place::Dungeon(index))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    #[test]
+    fn waystones_carry_players_between_towns() {
+        let mut w = World::new(11);
+        let p = join(&mut w, "Wren", Class::Mage, 2);
+        // Only at a waystone.
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Frostcog)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
+        at_waystone(&mut w, p);
+        w.drain_outbox();
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Frostcog)));
+        let pos = w.entities[&p].pos;
+        assert_eq!(Place::at(pos), Place::Zone(Zone::Frostcog));
+        assert!(Zone::Frostcog.in_town(pos));
+        assert!(
+            w.drain_outbox()
+                .iter()
+                .any(|(to, m)| matches!(to, Audience::Only(i) if *i == p)
+                    && matches!(m, ServerMsg::SetPosition { pos: q, .. } if *q == pos))
+        );
+        // Not while fighting.
+        w.entities.get_mut(&p).unwrap().in_combat = true;
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Grubdeep)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Frostcog));
+    }
+
+    #[test]
+    fn a_party_shares_a_copy_of_the_vault_and_others_get_their_own() {
+        let mut w = World::new(12);
+        let (a, b) = party_of_two(&mut w);
+        let c = join(&mut w, "Cy", Class::Rogue, 9);
+        let low = join(&mut w, "Lo", Class::Rogue, dungeon::MIN_LEVEL - 1);
+        for p in [a, b] {
+            w.entities.get_mut(&p).unwrap().level = 9;
+        }
+        for p in [a, b, c, low] {
+            at_waystone(&mut w, p);
+            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        }
+        assert!(matches!(place(&w, low), Place::Zone(_)), "too low to enter");
+        let Place::Dungeon(ours) = place(&w, a) else {
+            panic!("not in the vault")
+        };
+        assert_eq!(place(&w, b), Place::Dungeon(ours));
+        let Place::Dungeon(theirs) = place(&w, c) else {
+            panic!("not in the vault")
+        };
+        assert_ne!(ours, theirs);
+        let per_copy: usize = dungeon::PACKS
+            .iter()
+            .flat_map(|p| p.mobs.iter().map(|m| m.2))
+            .sum();
+        assert_eq!(vault_mobs(&w, ours).len(), per_copy);
+        assert_eq!(vault_mobs(&w, theirs).len(), per_copy);
+        // Nobody sees into another copy.
+        let seen = w.snapshot_for(c).unwrap().entities;
+        assert!(seen.iter().all(|e| e.id != a && e.id != b));
+        // Entrances are clear of mobs, so a few seconds there are safe.
+        run(&mut w, 3.0);
+        assert!(!w.entities[&a].in_combat);
+    }
+
+    #[test]
+    fn vault_mobs_stay_dead_and_an_empty_copy_closes() {
+        let mut w = World::new(13);
+        let p = join(&mut w, "Vex", Class::Barbarian, 10);
+        at_waystone(&mut w, p);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let hound = engage(&mut w, p, MobKind::VaultHound);
+        w.kill(hound, Some(p));
+        run(&mut w, 200.0);
+        assert!(w.entities[&hound].dead, "vault mobs don't respawn");
+        // Dying in the vault brings you back at its entrance.
+        let e = w.entities.get_mut(&p).unwrap();
+        e.dead = true;
+        e.pos = dungeon::to_world(index, vec2(42.0, 84.0));
+        w.handle(p, ClientMsg::ReleaseSpirit);
+        assert_eq!(
+            w.entities[&p].pos,
+            dungeon::to_world(index, dungeon::ENTRANCE)
+        );
+        // Leave by the stone at the entrance, back to the town you came from.
+        w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        assert_eq!(place(&w, p), Place::Dungeon(index), "already inside");
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
+        run(&mut w, dungeon::EMPTY_RESET - 5.0);
+        assert!(w.instances.contains_key(&index));
+        run(&mut w, 10.0);
+        assert!(!w.instances.contains_key(&index));
+        assert!(vault_mobs(&w, index).is_empty());
+        assert!(!w.entities.contains_key(&hound));
+        // A fresh copy next time, with every mob back.
+        at_waystone(&mut w, p);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        let Place::Dungeon(again) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        assert!(vault_mobs(&w, again).iter().all(|m| !w.entities[m].dead));
+    }
+
+    #[test]
+    fn leaving_the_party_takes_you_out_of_its_vault() {
+        let mut w = World::new(14);
+        let (a, b) = party_of_two(&mut w);
+        let c = join(&mut w, "Cy", Class::Rogue, 9);
+        w.handle(a, ClientMsg::PartyInvite("cy".into()));
+        w.handle(c, ClientMsg::PartyAccept);
+        for p in [a, b, c] {
+            w.entities.get_mut(&p).unwrap().level = 9;
+            at_waystone(&mut w, p);
+            w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        }
+        let Place::Dungeon(index) = place(&w, a) else {
+            panic!("not in the vault")
+        };
+        w.handle(c, ClientMsg::PartyLeave);
+        run(&mut w, 0.2);
+        assert_eq!(place(&w, c), Place::Zone(Zone::Amberfall));
+        assert_eq!(place(&w, a), Place::Dungeon(index));
+        // When the party breaks up, the last one inside keeps the copy.
+        w.handle(b, ClientMsg::PartyLeave);
+        run(&mut w, 0.2);
+        assert_eq!(place(&w, a), Place::Dungeon(index));
+        assert_eq!(place(&w, b), Place::Zone(Zone::Amberfall));
+        assert_eq!(w.instances[&index].owner, Owner::Solo("Ann".into()));
+    }
+
+    #[test]
+    fn logging_out_in_the_vault_saves_you_in_town() {
+        let mut w = World::new(15);
+        let p = join(&mut w, "Ivo", Class::Mage, 9);
+        w.entities.get_mut(&p).unwrap().pos =
+            Zone::Grubdeep.ground_local(WAYSTONE_SPOT + vec2(1.0, 0.0));
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        assert!(matches!(place(&w, p), Place::Dungeon(_)));
+        let c = w.remove_player(p).unwrap();
+        let pos = Vec3::from(c.pos);
+        assert!(Zone::Grubdeep.in_town(pos));
+        // A save made inside (a crash) loads in town too.
+        let mut c = c;
+        c.pos = dungeon::to_world(3, dungeon::ENTRANCE).to_array();
+        let q = w.add_player(&c);
+        assert!(matches!(place(&w, q), Place::Zone(_)));
+    }
+
+    #[test]
+    fn the_sunken_king_always_drops_green_gear() {
+        let mut w = World::new(16);
+        for _ in 0..20 {
+            let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
+            assert!(loot.items.iter().any(|(i, _)| RARE_DROPS.contains(i)));
+            assert!(loot.items.contains(&(items::ANCIENT_CORE, 2)));
+        }
     }
 }
