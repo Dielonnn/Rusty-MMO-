@@ -37,30 +37,30 @@ pub(super) enum File {
     Skeletons,
 }
 
-/// The races with a body of their own so far. The rest borrow the human
-/// body, sized to their race (see `stand_in`), until they're sculpted.
-const SCULPTED: [Race; 3] = [Race::Human, Race::Orc, Race::Elf];
+/// How many files: a body per race and sex, the props and the skeletons.
+const FILES: usize = Race::ALL.len() * 2 + 2;
 
 impl File {
-    const ALL: [File; 8] = [
-        File::Person(Race::Human, false),
-        File::Person(Race::Human, true),
-        File::Person(Race::Orc, false),
-        File::Person(Race::Orc, true),
-        File::Person(Race::Elf, false),
-        File::Person(Race::Elf, true),
-        File::Props,
-        File::Skeletons,
-    ];
+    const ALL: [File; FILES] = {
+        let mut all = [File::Props; FILES];
+        let mut k = 0;
+        while k < Race::ALL.len() {
+            all[k * 2] = File::Person(Race::ALL[k], false);
+            all[k * 2 + 1] = File::Person(Race::ALL[k], true);
+            k += 1;
+        }
+        all[FILES - 1] = File::Skeletons;
+        all
+    };
 
     fn index(self) -> usize {
         match self {
             File::Person(race, female) => {
-                let k = SCULPTED.iter().position(|&r| r == race).unwrap_or(0);
+                let k = Race::ALL.iter().position(|&r| r == race).unwrap_or(0);
                 k * 2 + female as usize
             }
-            File::Props => 6,
-            File::Skeletons => 7,
+            File::Props => FILES - 2,
+            File::Skeletons => FILES - 1,
         }
     }
 
@@ -75,22 +75,20 @@ impl File {
             File::Person(Race::Orc, true) => file!("orc_female"),
             File::Person(Race::Elf, false) => file!("elf_male"),
             File::Person(Race::Elf, true) => file!("elf_female"),
-            File::Person(_, false) => file!("human_male"),
-            File::Person(_, true) => file!("human_female"),
+            File::Person(Race::Dwarf, false) => file!("dwarf_male"),
+            File::Person(Race::Dwarf, true) => file!("dwarf_female"),
+            File::Person(Race::Goblin, false) => file!("goblin_male"),
+            File::Person(Race::Goblin, true) => file!("goblin_female"),
+            File::Person(Race::Gnome, false) => file!("gnome_male"),
+            File::Person(Race::Gnome, true) => file!("gnome_female"),
+            File::Person(Race::Undead, false) => file!("undead_male"),
+            File::Person(Race::Undead, true) => file!("undead_female"),
+            File::Person(Race::Human, false) => file!("human_male"),
+            File::Person(Race::Human, true) => file!("human_female"),
             File::Props => file!("props"),
             File::Skeletons => file!("skeletons"),
         }
     }
-}
-
-/// How a race without its own body yet changes the human one: its size,
-/// head size, and ears (`None` for races with their own body).
-pub(super) fn stand_in(race: Race) -> Option<(f32, f32)> {
-    if SCULPTED.contains(&race) {
-        return None;
-    }
-    let shape = race_shape(race);
-    Some((shape.scale, shape.head.min(1.25)))
 }
 
 /// Whose body someone has.
@@ -107,8 +105,7 @@ pub(super) enum Body {
 impl Body {
     fn file(self) -> File {
         match self {
-            Body::Person(race, female) if SCULPTED.contains(&race) => File::Person(race, female),
-            Body::Person(_, female) => File::Person(Race::Human, female),
+            Body::Person(race, female) => File::Person(race, female),
             _ => File::Skeletons,
         }
     }
@@ -297,9 +294,6 @@ pub(super) struct Dress {
     /// slider).
     pub(super) girth: f32,
     pub(super) mohawk: bool,
-    /// For a race on the human body (see `stand_in`): the race and its
-    /// head size.
-    pub(super) stand_in: Option<(Race, f32)>,
     /// Shoulder guards: their color and size.
     pub(super) pauldrons: Option<(Color, f32)>,
     /// A long robe's skirt: its color and its hem's.
@@ -1137,15 +1131,8 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
         hair.clear();
     }
     let mohawk = person && style == 4 && !hatted && body.person();
-    let stand_in = match body {
-        Body::Person(race, _) if person => stand_in(race).map(|(size, head)| {
-            scale *= size;
-            (race, head)
-        }),
-        _ => None,
-    };
     // Dwarf men are bearded, whatever their hair.
-    if matches!(stand_in, Some((Race::Dwarf, _))) && !female && !hair.contains(&"Hair_Beard") {
+    if body == Body::Person(Race::Dwarf, false) && !hair.contains(&"Hair_Beard") {
         hair.push("Hair_Beard");
     }
     Dress {
@@ -1156,7 +1143,6 @@ pub(super) fn dress(outfit: Outfit, look: &Look) -> Dress {
         scale,
         girth,
         mohawk,
-        stand_in,
         pauldrons,
         robe,
     }
@@ -1383,8 +1369,7 @@ pub(super) fn stature(race: Race, female: bool) -> f32 {
     let lib = library();
     let file = Body::Person(race, female).file();
     let build = lib.file(file).build.expect("people have a build");
-    let size = stand_in(race).map_or(1.0, |s| s.0);
-    2.1 * build.height / lib.standard().height * size
+    2.1 * build.height / lib.standard().height
 }
 
 pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f32, pose: Pose) {
@@ -1393,11 +1378,7 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
     let style = style_of(outfit);
     let id = dress.body.file();
     let file = lib.file(id);
-    let mut skeleton = posed(lib, file, &layers(style, pose));
-    let head = dress.stand_in.map_or(1.0, |s| s.1);
-    if let Some(i) = lib.rig.node("Head") {
-        skeleton[i].scale *= head;
-    }
+    let skeleton = posed(lib, file, &layers(style, pose));
     let skeleton = lib.rig.world(&skeleton);
     let standard = lib.standard();
     let size = 2.1 / standard.height * dress.scale;
@@ -1515,20 +1496,6 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
     if let Some(colors) = dress.robe {
         robe_skirt(b, &frame, &build.skirt, dress.girth, colors);
     }
-    // Long ears on goblins and gnomes still on the human body.
-    if let Some((race @ (Race::Goblin | Race::Gnome), head_size)) = dress.stand_in {
-        let skin = skin_color(race, look.appearance.skin);
-        let head = rest("Head");
-        let (dir, radius) = match race {
-            Race::Goblin => (vec3(0.11, 0.025, -0.015), 0.028),
-            _ => (vec3(0.05, 0.02, -0.012), 0.022),
-        };
-        for side in [-1.0, 1.0] {
-            let base = at("Head", head + vec3(0.074 * side, 0.068, -0.012));
-            let tip = along("Head", dir * vec3(side, 1.0, 1.0));
-            b.cone(base, tip, radius * size * head_size, 0.0, 8, skin);
-        }
-    }
     // A mohawk is a crest of hair on a shaved head.
     if dress.mohawk {
         let k = build.crown / standard.crown;
@@ -1612,7 +1579,7 @@ mod tests {
             }
         }
         // Every race's bodies know where the clothes go.
-        for race in SCULPTED {
+        for race in Race::ALL {
             for female in [false, true] {
                 let file = File::Person(race, female);
                 let loaded = lib.file(file);
@@ -1647,23 +1614,19 @@ mod tests {
                 .unwrap()
                 .positions
         };
-        for race in SCULPTED {
+        for race in Race::ALL {
             let height = lib.file(File::Person(race, false)).build.unwrap().height;
-            assert!((1.5..2.2).contains(&height), "{race:?} is {height} m");
+            assert!((1.0..2.2).contains(&height), "{race:?} is {height} m");
             if race != Race::Human {
                 assert!(body(race) != body(Race::Human), "{race:?} is a human");
             }
+            assert_eq!(Body::Person(race, true).file(), File::Person(race, true));
         }
-        // Orcs and elves stand taller than humans.
+        // Orcs and elves stand taller than humans; the small folk well short.
         for race in [Race::Orc, Race::Elf] {
             assert!(stature(race, false) > stature(Race::Human, false));
         }
-        // The rest borrow the human body, at their own size.
         for race in [Race::Dwarf, Race::Gnome, Race::Goblin] {
-            assert_eq!(
-                Body::Person(race, true).file(),
-                File::Person(Race::Human, true)
-            );
             assert!(stature(race, false) < stature(Race::Human, false) * 0.85);
         }
     }

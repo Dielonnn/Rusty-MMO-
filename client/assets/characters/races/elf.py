@@ -225,15 +225,15 @@ def build(body):
     male = body.sex == "Male"
 
     # ---- Proportions: tall and slender ----
-    legs = 1.08 if male else 1.075
+    legs = 1.05 if male else 1.05
     body.proportions(
-        length={"thigh_*": legs, "calf_*": legs, "neck_01": 1.35, "spine_0*": 1.02,
-                "clavicle_*": 0.92, "upperarm_*": 1.03, "lowerarm_*": 1.05, "foot_*": 1.04,
+        length={"thigh_*": legs, "calf_*": legs, "neck_01": 1.2, "spine_0*": 1.02,
+                "clavicle_*": 1.0 if male else 0.94, "upperarm_*": 1.03, "lowerarm_*": 1.05, "foot_*": 1.04,
                 "index*": 1.08, "middle*": 1.08, "ring*": 1.08, "pinky*": 1.08},
-        girth={"upperarm_*": 0.82, "lowerarm_*": 0.86, "thigh_*": 0.86, "calf_*": 0.88,
+        girth={"upperarm_*": 0.88, "lowerarm_*": 0.9, "thigh_*": 0.92, "calf_*": 0.92,
                "spine_03": 0.9, "spine_02": 0.86, "spine_01": 0.86, "pelvis": 0.9,
                "neck_01": 0.82, "hand_*": 0.9, "foot_*": 0.93, "ball_*": 0.93},
-        size={"Head": 0.97},
+        size={"Head": 1.02},
     )
 
     # Less bodybuilder: relax the big muscle forms.
@@ -266,7 +266,10 @@ def build(body):
     body.scale(chin + np.array([0.055, 0.02, -0.06]), (0.035, 0.04, 0.05),
                (0.9 if male else 0.85, 1.0, 1.0))
     if male:
-        body.grab(chin, 0.03, (0, -0.006, 0.005), sym=False, bones=head)
+        # A firm chin on a slightly shorter, less gaunt lower face.
+        body.grab(chin, 0.03, (0, -0.001, 0.004), sym=False, bones=head)
+        body.grab(chin + np.array([0, 0.012, 0]), (0.05, 0.035, 0.05), (0, 0.004, 0.0),
+                  sym=False, bones=head)
     else:
         # A small fine chin and a shorter, softer lower face.
         body.grab(chin + np.array([0, 0.012, 0]), (0.05, 0.035, 0.05), (0, 0.004, 0.0),
@@ -279,7 +282,7 @@ def build(body):
     body.inflate(cheek, (0.03, 0.013, 0.03), 0.007 if male else 0.005, bones=head)
     body.grab(cheek, (0.03, 0.016, 0.03), (0.002, 0.002, 0.0), bones=head)
     body.inflate(eye + np.array([0.017, -0.056, -0.012]), (0.02, 0.018, 0.025),
-                 -0.006 if male else -0.003, bones=head)
+                 -0.002 if male else -0.001, bones=head)
     # Long thin straight nose.
     body.scale(tip + np.array([0, 0.02, -0.02]), (0.03, 0.045, 0.04),
                (0.72 if male else 0.68, 1.0, 1.0), sym=False, bones=head)
@@ -288,10 +291,10 @@ def build(body):
               sym=False, bones=head)
     body.scale(np.array([0, eye[1] - 0.006, tip[2] - 0.03]), (0.02, 0.03, 0.03),
                (0.8, 1.0, 1.0), sym=False, bones=head)
+    # Larger eyes (more so for women), a smaller mouth for women.
+    body.scale(eye + np.array([0.002, 0, -0.004]), (0.022, 0.018, 0.02),
+               (1.12, 1.1, 1.0) if not male else (1.07, 1.06, 1.0), parts=["Body", "Eyes"])
     if not male:
-        # Larger eyes, a smaller mouth.
-        body.scale(eye + np.array([0.002, 0, -0.004]), (0.022, 0.018, 0.02), (1.08, 1.06, 1.0),
-                   bones=head)
         body.scale(np.array([0, tip[1] - 0.035, tip[2] - 0.02]), (0.04, 0.015, 0.04),
                    (0.88, 1.0, 1.0), sym=False, bones=head)
     # Almond eyes slanting up at the outer corners, brows sweeping up.
@@ -309,10 +312,11 @@ def build(body):
     near = (np.abs(p[:, 1] - ear[1]) < 0.012) & (np.abs(p[:, 2] - ear[2]) < 0.012)
     skull = p[near, 0].max()
     root = np.array([skull - 0.016, ear[1] - 0.004, ear[2]])
-    reach = np.array([0.095, 0.075, -0.105]) * (1.0 if male else 0.95)
+    # Long and graceful, sweeping up and back past the crown.
+    reach = np.array([0.09, 0.105, -0.11]) * (1.0 if male else 0.95)
     for side, nm in ((1, "Extra_EarL"), (-1, "Extra_EarR")):
-        _ear(body, nm, root, root + reach, upper=0.016, lower=0.034 if male else 0.031,
-             thick=0.009, cup=0.006, face=(0.95, 0.1, 0.3), side=side)
+        _ear(body, nm, root, root + reach, upper=0.02, lower=0.036 if male else 0.033,
+             thick=0.02, cup=0.013, face=(0.95, 0.1, 0.3), side=side)
 
     # Slim, sloping trapezius: a long neck, not a bull neck.
     body.grab(body.at("neck_01", (0.075, -0.005, -0.02)), (0.06, 0.045, 0.07), (0, -0.01, 0),
