@@ -17,11 +17,14 @@ use shared::props::{ARRIVAL_SPOT, MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
 mod boss;
+mod duel;
 mod ground;
 mod instance;
 mod party;
 
 use boss::{BossTimers, Hazard};
+pub use duel::Duel;
+use duel::DuelEnd;
 use ground::GroundItem;
 pub use instance::{Instance, Owner};
 pub use party::{Party, PartyId};
@@ -110,6 +113,9 @@ pub struct PlayerData {
     pub party: Option<PartyId>,
     /// A party invite: who from, and seconds left to answer it.
     pub invite: Option<(EntityId, f32)>,
+    /// A duel challenge: who from, and seconds left to answer it.
+    pub duel_invite: Option<(EntityId, f32)>,
+    pub duel: Option<Duel>,
     /// The town they entered the Sunken Vault from, and go back to.
     pub home_town: Zone,
 }
@@ -745,6 +751,8 @@ impl World {
                     quests: c.quests.clone(),
                     party: None,
                     invite: None,
+                    duel_invite: None,
+                    duel: None,
                     home_town: Zone::at(pos),
                 }),
             },
@@ -792,6 +800,8 @@ impl World {
         self.clear_spawns(id);
         self.party_leave(id, "leaves");
         self.decline_invites_from(id);
+        self.withdraw_duels_from(id);
+        self.end_duel(id, DuelEnd::LoggedOut);
         // Logging out dead brings you back at the graveyard.
         if self.entities[&id].dead {
             c.pos = Zone::at(Vec3::from(c.pos)).graveyard().to_array();
@@ -879,6 +889,11 @@ impl World {
                     .and_then(|(from, _)| self.entities.get(&from))
                     .map(|e| e.name.clone()),
                 hotbar: p.hotbar.unwrap_or_else(|| p.class.default_hotbar()),
+                duel_invite: p
+                    .duel_invite
+                    .and_then(|(from, _)| self.entities.get(&from))
+                    .map(|e| e.name.clone()),
+                duel: p.duel.map(|d| d.view()),
             },
         })
     }
@@ -1021,6 +1036,17 @@ impl World {
                     self.error(id, &e);
                 }
             }
+            ClientMsg::DuelRequest(name) => {
+                if let Err(e) = self.duel_request(id, &name) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::DuelAccept => {
+                if let Err(e) = self.duel_accept(id) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::DuelDecline => self.duel_decline(id),
             // Session messages are handled by the network layer.
             ClientMsg::Hello { .. }
             | ClientMsg::CreateCharacter { .. }
@@ -1112,12 +1138,15 @@ impl World {
                 c if Emote::from_command(c).is_some() => {
                     self.emote(id, Emote::from_command(c).unwrap())
                 }
+                "duel" if !arg.is_empty() => self.duel_request(id, arg),
+                "forfeit" | "yield" => self.duel_forfeit(id),
                 _ => {
                     self.send(
                         Audience::Only(id),
                         GameEvent::System(
                             "Commands: /who, /invite NAME, /accept, /decline, /leave, \
-                             /kick NAME, /promote NAME, /p MESSAGE (party chat). \
+                             /kick NAME, /promote NAME, /p MESSAGE (party chat), \
+                             /duel NAME, /forfeit. \
                              Emotes: /kiss, /sit, /backflip, /wave, /flipoff, /no, /point \
                              (at your target, if you have one)."
                                 .into(),
@@ -1723,7 +1752,7 @@ impl World {
         let e = &self.entities[&id];
         let target = e.target.ok_or("You have no target.")?;
         let t = self.entities.get(&target).ok_or("You have no target.")?;
-        if !e.kind().hostile_to(t.kind()) {
+        if !self.hostile(id, target) {
             return Err("Invalid target.");
         }
         if t.dead {
@@ -1833,7 +1862,7 @@ impl World {
                 let friend = e
                     .target
                     .and_then(|t| self.entities.get(&t))
-                    .filter(|t| !t.dead && !e.kind().hostile_to(t.kind()));
+                    .filter(|t| !t.dead && !self.hostile(caster, t.id));
                 match friend {
                     Some(t) if t.id != caster => {
                         if !in_range(t) {
@@ -1974,7 +2003,7 @@ impl World {
                     .values()
                     .filter(|t| {
                         !t.dead
-                            && kind.hostile_to(t.kind())
+                            && (kind.hostile_to(t.kind()) || self.dueling(caster, t.id))
                             && t.pos.distance(pos) <= radius + t.reach()
                     })
                     .map(|t| t.id)
@@ -1990,7 +2019,7 @@ impl World {
                         .filter(|t| {
                             Some(t.id) != target
                                 && !t.dead
-                                && kind.hostile_to(t.kind())
+                                && (kind.hostile_to(t.kind()) || self.dueling(caster, t.id))
                                 && t.pos.distance(center) <= radius + t.reach()
                         })
                         .map(|t| t.id),
@@ -2230,6 +2259,17 @@ impl World {
                     self.send(Audience::Near(pos), GameEvent::Evade { target });
                     return;
                 }
+                // Players only hurt each other in a duel (a spell still in
+                // flight or a DoT when it ends does nothing).
+                let duel = self.dueling(source, target);
+                let both_players = t.player().is_some()
+                    && self
+                        .entities
+                        .get(&source)
+                        .is_some_and(|s| s.player().is_some());
+                if both_players && !duel {
+                    return;
+                }
                 // Buffs and curses on the attacker.
                 let amount = amount * self.entities.get(&source).map_or(1.0, |s| s.damage_done());
                 // Armor softens physical blows.
@@ -2263,6 +2303,11 @@ impl World {
                     }
                 }
                 t.auras.retain(|a| a.remaining > 0.0);
+                // A duel never kills: the loser is left on 1 health.
+                let beaten = duel && t.hp - left < 1.0;
+                if beaten {
+                    left = (t.hp - 1.0).max(0.0);
+                }
                 t.hp -= left;
                 let target_level = t.level;
                 if t.player()
@@ -2298,6 +2343,9 @@ impl World {
                 );
                 let mult = ability_id.map_or(1.0, |a| ability(a).threat);
                 self.provoke(source, target, amount * mult);
+                if beaten {
+                    self.end_duel(target, DuelEnd::Beaten);
+                }
                 if dead {
                     self.kill(target, Some(source));
                 }
@@ -2409,6 +2457,7 @@ impl World {
             }
             Brain::Npc(_) => {}
         }
+        self.end_duel(victim, DuelEnd::Died);
         self.send(Audience::Near(pos), GameEvent::Died { id: victim, killer });
         self.forget(victim);
         let Some(kind) = mob_kind else { return };
@@ -2489,6 +2538,7 @@ impl World {
     pub fn tick(&mut self, dt: f32) {
         self.tick += 1;
         self.tick_parties(dt);
+        self.tick_duels(dt);
         self.tick_instances(dt);
         self.tick_hazards(dt);
         self.tick_missiles(dt);
@@ -2510,6 +2560,13 @@ impl World {
         for e in self.entities.values() {
             if let Some(m) = e.mob().filter(|m| !e.dead && m.state == MobState::Combat) {
                 fighting.extend(m.threat.iter().map(|(id, _)| *id));
+            }
+            // So are duelists once the fighting starts.
+            if e.player()
+                .and_then(|p| p.duel)
+                .is_some_and(|d| d.countdown <= 0.0)
+            {
+                fighting.insert(e.id);
             }
         }
         for e in self.entities.values_mut() {
@@ -5239,5 +5296,119 @@ mod tests {
         assert!(hits >= 60, "{hits} hits");
         let rate = webs as f32 / hits as f32;
         assert!((0.12..0.4).contains(&rate), "{webs} webs in {hits} hits");
+    }
+
+    /// Two players standing face to face, a few steps apart.
+    fn duelists(w: &mut World) -> (EntityId, EntityId) {
+        let a = join(w, "Ann", Class::Barbarian, 10);
+        let b = join(w, "Bo", Class::Barbarian, 1);
+        let pos = w.entities[&a].pos;
+        w.entities.get_mut(&b).unwrap().pos = pos + Vec3::new(1.5, 0.0, 0.0);
+        face(w, a, b);
+        face(w, b, a);
+        w.entities.get_mut(&a).unwrap().target = Some(b);
+        w.entities.get_mut(&b).unwrap().target = Some(a);
+        (a, b)
+    }
+
+    fn duel(w: &mut World) -> (EntityId, EntityId) {
+        let (a, b) = duelists(w);
+        w.handle(a, ClientMsg::DuelRequest("bo".into()));
+        assert_eq!(
+            w.snapshot_for(b).unwrap().me.duel_invite.as_deref(),
+            Some("Ann")
+        );
+        w.handle(b, ClientMsg::DuelAccept);
+        assert!(w.snapshot_for(a).unwrap().me.duel.is_some());
+        (a, b)
+    }
+
+    #[test]
+    fn players_only_fight_each_other_in_a_duel() {
+        let mut w = World::new(41);
+        let (a, b) = duelists(&mut w);
+        assert!(w.hostile_target(a).is_err());
+        w.handle(a, ClientMsg::DuelRequest("Bo".into()));
+        w.handle(b, ClientMsg::DuelAccept);
+        // Not during the countdown.
+        assert!(w.hostile_target(a).is_err());
+        run(&mut w, DUEL_COUNTDOWN + 0.1);
+        assert!(w.hostile_target(a).is_ok());
+        assert!(w.hostile_target(b).is_ok());
+    }
+
+    #[test]
+    fn a_duel_ends_on_one_health_without_dying() {
+        let mut w = World::new(42);
+        let (a, b) = duel(&mut w);
+        run(&mut w, DUEL_COUNTDOWN + 0.1);
+        w.handle(a, ClientMsg::StartAttack);
+        for _ in 0..2000 {
+            w.tick(DT);
+            if w.entities[&b].player().unwrap().duel.is_none() {
+                break;
+            }
+        }
+        let loser = &w.entities[&b];
+        assert!(loser.player().unwrap().duel.is_none());
+        assert!(w.entities[&a].player().unwrap().duel.is_none());
+        assert!(!loser.dead);
+        assert_eq!(loser.hp, 1.0);
+        assert!(!w.entities[&a].player().unwrap().auto_attack);
+        // After the duel they can't hurt each other again.
+        assert!(w.hostile_target(a).is_err());
+        let hp = w.entities[&b].hp;
+        w.apply_hit(a, b, Hit::Damage(50.0, false), None);
+        assert_eq!(w.entities[&b].hp, hp);
+    }
+
+    #[test]
+    fn duel_challenges_can_be_declined_and_run_out() {
+        let mut w = World::new(43);
+        let (a, b) = duelists(&mut w);
+        w.handle(a, ClientMsg::DuelRequest("Bo".into()));
+        w.handle(b, ClientMsg::DuelDecline);
+        assert!(w.entities[&b].player().unwrap().duel_invite.is_none());
+        assert!(w.entities[&a].player().unwrap().duel.is_none());
+        w.handle(a, ClientMsg::Chat("/duel Bo".into()));
+        run(&mut w, DUEL_REQUEST_TIME + 1.0);
+        assert!(w.entities[&b].player().unwrap().duel_invite.is_none());
+        w.handle(b, ClientMsg::DuelAccept);
+        assert!(w.entities[&b].player().unwrap().duel.is_none());
+    }
+
+    #[test]
+    fn duels_need_you_close_by_and_out_of_dungeons() {
+        let mut w = World::new(44);
+        let (a, b) = duelists(&mut w);
+        let near = w.entities[&a].pos;
+        w.entities.get_mut(&b).unwrap().pos = near + Vec3::new(DUEL_REQUEST_RANGE + 5.0, 0.0, 0.0);
+        assert!(w.duel_request(a, "Bo").is_err());
+        let vault = shared::dungeon::to_world(0, shared::dungeon::ENTRANCE);
+        w.entities.get_mut(&a).unwrap().pos = vault;
+        w.entities.get_mut(&b).unwrap().pos = vault + Vec3::new(1.0, 0.0, 0.0);
+        assert_eq!(w.duel_request(a, "Bo"), Err("You can't duel in a dungeon."));
+        assert!(w.duel_request(a, "Ann").is_err());
+    }
+
+    #[test]
+    fn leaving_the_area_or_the_world_ends_a_duel() {
+        let mut w = World::new(45);
+        let (a, b) = duel(&mut w);
+        run(&mut w, DUEL_COUNTDOWN + 0.1);
+        let flag = w.entities[&a].player().unwrap().duel.unwrap().flag;
+        w.entities.get_mut(&b).unwrap().pos = flag + Vec3::new(DUEL_AREA + 5.0, 0.0, 0.0);
+        run(&mut w, DUEL_LEAVE_TIME - 1.0);
+        assert!(w.entities[&b].player().unwrap().duel.is_some());
+        assert!(w.snapshot_for(b).unwrap().me.duel.unwrap().away > 0.0);
+        run(&mut w, 1.5);
+        assert!(w.entities[&b].player().unwrap().duel.is_none());
+        assert!(w.entities[&a].player().unwrap().duel.is_none());
+
+        let mut w = World::new(46);
+        let (a, b) = duel(&mut w);
+        w.remove_player(b);
+        assert!(w.entities[&a].player().unwrap().duel.is_none());
+        w.handle(a, ClientMsg::Chat("/forfeit".into()));
     }
 }

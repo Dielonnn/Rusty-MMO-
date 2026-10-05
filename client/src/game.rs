@@ -829,7 +829,15 @@ impl Game {
     }
 
     pub fn is_hostile(&self, e: &EntityView) -> bool {
-        e.kind.hostile_to(EntityKind::Player(self.class))
+        e.kind.hostile_to(EntityKind::Player(self.class)) || self.duel_foe() == Some(e.id)
+    }
+
+    /// Who you're fighting a duel with, once the countdown is over.
+    pub fn duel_foe(&self) -> Option<EntityId> {
+        self.me
+            .duel
+            .filter(|d| d.countdown <= 0.0)
+            .map(|d| d.opponent)
     }
 
     /// Standing still and attacking? Turn to face the target first.
@@ -1403,6 +1411,16 @@ impl Game {
                 return true;
             }
         }
+        if let Some((_, accept, decline)) = party.duel_popup {
+            if accept.contains(mouse) {
+                self.send(ClientMsg::DuelAccept);
+                return true;
+            }
+            if decline.contains(mouse) {
+                self.send(ClientMsg::DuelDecline);
+                return true;
+            }
+        }
         // Open windows cover the party frames.
         if layout.over_window(mouse) {
             return false;
@@ -1419,6 +1437,12 @@ impl Game {
             .filter(|(r, _)| r.contains(mouse))
         {
             self.send(ClientMsg::PartyInvite(name.clone()));
+        } else if let Some((_, name)) = party
+            .duel_target
+            .as_ref()
+            .filter(|(r, _)| r.contains(mouse))
+        {
+            self.send(ClientMsg::DuelRequest(name.clone()));
         } else {
             return false;
         }
@@ -1658,11 +1682,14 @@ impl Game {
             Place::Dungeon(i) => scene.draw_dungeon(i),
             Place::Zone(z) => scene.draw(z),
         }
+        let ring = self
+            .target
+            .and_then(|t| self.entities.get(&t))
+            .map(|t| (t.pos, t.view.kind, hud::reaction_color(&t.view, self)));
         let b = &mut self.batch;
 
-        if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
-            let color = hud::reaction_color(&t.view, self.class);
-            b.ground_ring(t.pos, render::model_radius(t.view.kind), 0.14, color);
+        if let Some((pos, kind, color)) = ring {
+            b.ground_ring(pos, render::model_radius(kind), 0.14, color);
         }
         // Marked ground: a red circle, filling in from the middle until it
         // lands.

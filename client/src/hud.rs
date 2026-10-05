@@ -73,6 +73,10 @@ pub struct PartyLayout {
     pub popup: Option<(Rect, Rect, Rect)>,
     /// Invite whoever you've targeted.
     pub invite_target: Option<(Rect, String)>,
+    /// The duel challenge popup, with its Accept and Decline buttons.
+    pub duel_popup: Option<(Rect, Rect, Rect)>,
+    /// Challenge whoever you've targeted to a duel.
+    pub duel_target: Option<(Rect, String)>,
 }
 
 impl PartyLayout {
@@ -105,6 +109,17 @@ impl PartyLayout {
                 Rect::new(r.right() - 155.0, r.y + 52.0, 125.0, 34.0),
             ));
         }
+        if game.me.duel_invite.is_some() {
+            let (w, h) = (340.0, 100.0);
+            // Below the party invite, if there is one.
+            let y = screen_height() * 0.42 + if l.popup.is_some() { h + 10.0 } else { 0.0 };
+            let r = Rect::new((screen_width() - w) / 2.0, y, w, h);
+            l.duel_popup = Some((
+                r,
+                Rect::new(r.x + 30.0, r.y + 52.0, 125.0, 34.0),
+                Rect::new(r.right() - 155.0, r.y + 52.0, 125.0, 34.0),
+            ));
+        }
         let full = party.is_some_and(|p| p.members.len() >= MAX_PARTY_SIZE);
         if let Some(t) = game.target_ent()
             && t.view.kind.is_player()
@@ -123,6 +138,23 @@ impl PartyLayout {
                 t.view.name.clone(),
             ));
         }
+        // Duel sits under Invite, whether or not Invite is showing.
+        if let Some(t) = game.target_ent()
+            && t.view.kind.is_player()
+            && Some(t.view.id) != me
+            && !t.view.dead
+            && game.me.duel.is_none()
+        {
+            l.duel_target = Some((
+                Rect::new(
+                    target_frame.right() + 16.0,
+                    target_frame.bottom() + 26.0,
+                    120.0,
+                    26.0,
+                ),
+                t.view.name.clone(),
+            ));
+        }
         l
     }
 
@@ -133,6 +165,32 @@ impl PartyLayout {
             .chain(self.leave)
             .chain(self.popup.map(|p| p.0))
             .chain(self.invite_target.as_ref().map(|(r, _)| *r))
+            .chain(self.duel_popup.map(|p| p.0))
+            .chain(self.duel_target.as_ref().map(|(r, _)| *r))
+    }
+}
+
+/// The duel countdown, "Fight!", and a warning when you wander out of the
+/// duel area.
+fn duel_banner(game: &Game) {
+    let Some(d) = game.me.duel else { return };
+    let cx = screen_width() / 2.0;
+    let y = screen_height() * 0.3;
+    if d.countdown > 0.0 {
+        let n = d.countdown.ceil() as u32;
+        text_centered(&n.to_string(), cx, y, 64.0, GOLD);
+    } else if d.countdown > -1.0 {
+        text_centered("Fight!", cx, y, 64.0, Color::new(1.0, 0.3, 0.25, 1.0));
+    }
+    if d.away > 0.0 {
+        let left = (DUEL_LEAVE_TIME - d.away).max(0.0).ceil() as u32;
+        text_centered(
+            &format!("Go back to the duel area or you forfeit in {left}"),
+            cx,
+            y + 44.0,
+            24.0,
+            Color::new(1.0, 0.5, 0.3, 1.0),
+        );
     }
 }
 
@@ -399,9 +457,13 @@ pub fn quality_color(q: Quality) -> Color {
 
 /// Name color: red for enemies that attack on sight, yellow for ones that
 /// don't, green for friends, grey for the dead.
-pub fn reaction_color(view: &EntityView, my_class: Class) -> Color {
+pub fn reaction_color(view: &EntityView, game: &Game) -> Color {
+    let my_class = game.class;
     if view.dead {
         return Color::new(0.6, 0.6, 0.6, 1.0);
+    }
+    if game.duel_foe() == Some(view.id) {
+        return Color::new(1.0, 0.3, 0.25, 1.0);
     }
     match view.kind {
         EntityKind::Mob { aggressive, .. }
@@ -662,7 +724,7 @@ fn unit_frame(r: Rect, view: &EntityView, game: &Game) {
     panel(r);
     let name_color = match view.kind {
         EntityKind::Player(c) => class_color(c),
-        _ => reaction_color(view, game.class),
+        _ => reaction_color(view, game),
     };
     text(&view.name, r.x + 8.0, r.y + 19.0, 20.0, name_color);
     let lvl = level_label(view);
@@ -833,7 +895,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
             panel(r);
             let color = match tot.view.kind {
                 EntityKind::Player(c) => class_color(c),
-                _ => reaction_color(&tot.view, game.class),
+                _ => reaction_color(&tot.view, game),
             };
             text(&tot.view.name, r.x + 6.0, r.y + 15.0, 15.0, color);
             let frac = tot.view.hp / tot.view.max_hp.max(1.0);
@@ -856,6 +918,9 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         }
         if let Some((r, _)) = &layout.party.invite_target {
             button(*r, "Invite");
+        }
+        if let Some((r, _)) = &layout.party.duel_target {
+            button(*r, "Duel");
         }
         if t.view.lootable {
             text(
@@ -994,7 +1059,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         help();
     }
     let level = me.level;
-    let tracker_top = if game.show_help { 810.0 } else { 240.0 };
+    let tracker_top = if game.show_help { 830.0 } else { 240.0 };
     crate::quests_ui::draw_tracker(&game.me.quests, level, &game.me.bags, tracker_top);
     if let Some((msg, t)) = &game.quest_flash {
         let alpha = (3.0 - t).min(1.0);
@@ -1037,6 +1102,21 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         button(accept, "Accept");
         button(decline, "Decline");
     }
+    if let Some((r, accept, decline)) = layout.party.duel_popup
+        && let Some(from) = &game.me.duel_invite
+    {
+        panel(r);
+        text_centered(
+            &format!("{from} challenges you to a duel."),
+            r.x + r.w / 2.0,
+            r.y + 32.0,
+            20.0,
+            WHITE,
+        );
+        button(accept, "Accept");
+        button(decline, "Decline");
+    }
+    duel_banner(game);
     if game.menu_open {
         let w = 280.0;
         let r = Rect::new((screen_width() - w) / 2.0, screen_height() * 0.35, w, 220.0);
@@ -1663,7 +1743,7 @@ fn nameplates(game: &Game, cam: &Camera3D) {
         };
         let color = match v.kind {
             EntityKind::Player(c) if !v.dead => class_color(c),
-            _ => reaction_color(v, game.class),
+            _ => reaction_color(v, game),
         };
         let label = if v.kind.is_player() {
             v.name.clone()
@@ -1877,7 +1957,7 @@ fn minimap(game: &Game, layout: &Layout) {
         } else if e.view.kind.is_player() {
             Color::new(0.3, 0.6, 1.0, 1.0)
         } else {
-            reaction_color(&e.view, game.class)
+            reaction_color(&e.view, game)
         };
         let size = if game.target == Some(e.view.id) {
             4.0
@@ -1991,6 +2071,7 @@ fn help() {
         ("/invite NAME", "Party up (or target, Invite)"),
         ("/p MESSAGE", "Talk to your party"),
         ("/wave /sit /kiss ...", "Emotes (/help lists them)"),
+        ("/duel NAME", "Duel (or target, Duel)"),
         ("H", "Hide this help"),
     ];
     let w = 410.0;
