@@ -4,6 +4,7 @@
 
 use macroquad::prelude::*;
 use shared::data::*;
+use shared::dungeon;
 use shared::protocol::*;
 use shared::world::Zone;
 
@@ -47,6 +48,7 @@ pub struct Layout {
     pub vendor_buttons: Vec<Rect>,
     pub talents: Option<Rect>,
     pub sandbox: Option<Rect>,
+    pub travel: Option<Rect>,
     pub map: bool,
     pub quest_window: Option<Rect>,
     pub party: PartyLayout,
@@ -248,6 +250,7 @@ impl Layout {
             sandbox: windows
                 .sandbox
                 .then(|| crate::panels::sandbox_layout(Zone::Amberfall).window),
+            travel: windows.travel.then(crate::panels::travel_window),
             map: windows.map,
             quest_window: None,
             party: PartyLayout::default(),
@@ -264,6 +267,7 @@ impl Layout {
                 self.vendor,
                 self.talents,
                 self.sandbox,
+                self.travel,
                 self.quest_window,
             ]
             .iter()
@@ -287,6 +291,7 @@ impl Layout {
                 self.vendor,
                 self.talents,
                 self.sandbox,
+                self.travel,
                 self.quest_window,
             ]
             .iter()
@@ -852,6 +857,18 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
     if let Some(r) = layout.vendor {
         vendor(game, layout, r);
     }
+    if layout.travel.is_some() {
+        crate::panels::draw_travel(game);
+    }
+    if !me.dead && !game.windows.travel && game.near_waystone() {
+        text_centered(
+            "Press F to use the waystone",
+            screen_width() / 2.0,
+            layout.castbar.y - 14.0,
+            20.0,
+            Color::new(0.6, 0.95, 1.0, 1.0),
+        );
+    }
     if layout.sandbox.is_some() {
         crate::panels::draw_sandbox(game, me.level);
     }
@@ -970,7 +987,9 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         }
     }
     item_tooltips(game, layout);
-    if layout.map
+    if layout.map && game.in_dungeon() {
+        crate::panels::draw_dungeon_map(game);
+    } else if layout.map
         && let Some((_, tex)) = &game.map_texture
     {
         crate::panels::draw_map(game, tex);
@@ -1601,14 +1620,26 @@ fn floating_text(game: &Game, cam: &Camera3D) {
 fn minimap(game: &Game, layout: &Layout) {
     let (c, radius) = layout.minimap;
     let range = 90.0;
-    let zone = Zone::at(game.pos);
-    let place = if zone.in_town(game.pos) {
+    let zone = game.zone;
+    let dungeon = game.in_dungeon();
+    let local = if dungeon {
+        dungeon::to_local(game.pos)
+    } else {
+        zone.to_local(vec2(game.pos.x, game.pos.z))
+    };
+    let place = if dungeon {
+        dungeon::room_at(local).unwrap_or(dungeon::NAME)
+    } else if zone.in_town(game.pos) {
         zone.town_name()
     } else {
         zone.name()
     };
     text_centered(place, c.x, c.y - radius - 8.0, 18.0, GOLD);
-    let t = render::theme(zone);
+    let t = if dungeon {
+        render::dungeon_theme()
+    } else {
+        render::theme(zone)
+    };
     let ground = render::mix(t.fog, Color::new(0.1, 0.1, 0.1, 1.0), 0.45);
     // A gold-trimmed frame, like the classic MMO minimaps.
     draw_circle(c.x, c.y, radius + 7.0, Color::new(0.2, 0.15, 0.08, 1.0));
@@ -1620,7 +1651,9 @@ fn minimap(game: &Game, layout: &Layout) {
         radius,
         Color::new(ground.r, ground.g, ground.b, 0.92),
     );
-    if let Some((z, tex)) = &game.map_texture
+    if dungeon {
+        crate::panels::minimap_halls(c, radius, game.pos, game.cam_yaw, range);
+    } else if let Some((z, tex)) = &game.map_texture
         && *z == zone
     {
         crate::panels::minimap_terrain(tex, zone, c, radius, game.pos, game.cam_yaw, range);
@@ -1688,7 +1721,6 @@ fn minimap(game: &Game, layout: &Layout) {
         c - dir * 5.0 - side * 5.0,
         Color::new(1.0, 0.95, 0.4, 1.0),
     );
-    let local = zone.to_local(vec2(game.pos.x, game.pos.z));
     crate::panels::minimap_compass(c, radius, game.cam_yaw);
     let label = format!("{:.0}, {:.0}", local.x, local.y);
     text_centered(
@@ -1774,6 +1806,7 @@ fn help() {
         ("T  /  F1", "Toggle attack / target self"),
         ("B  C  K", "Bags, character, crafting"),
         ("N  M", "Talents, world map"),
+        ("F", "Use a waystone (travel)"),
         ("P", "Sandbox panel (sandbox mode)"),
         ("Esc", "Close / clear target / menu"),
         ("Enter", "Chat (/help lists commands)"),

@@ -2,6 +2,7 @@
 //! mobs), the network protocol, message framing, the terrain and scenery.
 
 pub mod data;
+pub mod dungeon;
 pub mod layout;
 pub mod net;
 pub mod props;

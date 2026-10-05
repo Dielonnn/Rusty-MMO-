@@ -2,6 +2,7 @@
 //! trees, buildings and props, and each zone's colors and light.
 
 mod buildings;
+mod dungeon;
 mod foliage;
 mod paint;
 mod props;
@@ -10,7 +11,7 @@ mod sky;
 mod terrain;
 mod theme;
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
 use macroquad::models::{Mesh, draw_mesh};
 use macroquad::prelude::*;
@@ -18,6 +19,7 @@ use shared::world::*;
 
 use crate::gfx::{Batch, Fog, Frame, GroundPaint, Shading, c, dark, mix};
 
+pub use dungeon::dungeon_theme;
 use props::{draw_prop, flag};
 pub use sky::draw_sky;
 use sky::weather;
@@ -54,10 +56,11 @@ struct Flag {
     color: Color,
 }
 
-/// Static scenery for every zone (built the first time it's seen) and the
-/// shader that lights and fogs it.
+/// Static scenery for every zone (built the first time it's seen), the copy
+/// of the Sunken Vault you're in, and the shader that lights and fogs it.
 pub struct Scene {
     zones: [OnceCell<ZoneScene>; 6],
+    dungeon: RefCell<Option<dungeon::DungeonScene>>,
     shading: Shading,
     /// The cut-out cards trees, bushes and grass are made of.
     foliage: OnceCell<Texture2D>,
@@ -67,6 +70,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             zones: Default::default(),
+            dungeon: RefCell::new(None),
             shading: Shading::new(),
             foliage: OnceCell::new(),
         }
@@ -90,6 +94,38 @@ impl Scene {
             },
             mix(t.sky_horizon, t.sky_mid, 0.4),
         );
+    }
+
+    /// Like `begin_3d`, for the Sunken Vault.
+    pub fn begin_dungeon(&self) {
+        let t = dungeon_theme();
+        self.shading.begin(
+            &t.light,
+            Fog {
+                color: t.fog,
+                near: t.fog_near,
+                far: t.fog_far,
+            },
+            t.fog,
+        );
+    }
+
+    /// Draws copy `index` of the Sunken Vault (building it if it's new).
+    pub fn draw_dungeon(&self, index: u32) {
+        let mut d = self.dungeon.borrow_mut();
+        if d.as_ref().is_none_or(|d| d.index != index) {
+            *d = Some(dungeon::build(index));
+        }
+        for m in &d.as_ref().unwrap().meshes {
+            draw_mesh(m);
+        }
+    }
+
+    /// The vault's flickering torches and glowing waystone.
+    pub fn draw_dungeon_effects(&self, b: &mut Batch, time: f32) {
+        if let Some(d) = self.dungeon.borrow().as_ref() {
+            glows(b, &d.lamps, &d.fires, time);
+        }
     }
 
     pub fn end_3d(&self) {
@@ -127,33 +163,38 @@ impl Scene {
                 );
             }
         }
-        for l in &z.lamps {
-            let flicker = 0.9 + (time * 9.0 + l.pos.x).sin() * 0.05;
-            b.glow_sphere(l.pos, 0.22 * flicker, l.color);
-            b.glow_sphere(
-                l.pos,
-                0.45 * flicker,
-                Color::new(l.color.r, l.color.g, l.color.b, 0.25),
-            );
-        }
-        for f in &z.fires {
-            for k in 0..4 {
-                let t = (time * 1.5 + k as f32 * 0.25) % 1.0;
-                let p = f.pos + vec3((time * 5.0 + k as f32).sin() * 0.08, 0.3 + t * 1.0, 0.0);
-                let fade = Color::new(f.color.r, f.color.g, f.color.b, 0.0);
-                b.glow_sphere(
-                    p,
-                    0.3 * (1.0 - t * 0.6),
-                    mix(Color::new(1.0, 0.95, 0.7, 0.95), fade, t),
-                );
-            }
-        }
+        glows(b, &z.lamps, &z.fires, time);
     }
 
     /// Draw last: it's see-through.
     pub fn draw_water(&self, zone: Zone) {
         self.shading
             .draw_water(&self.get(zone).water, get_time() as f32);
+    }
+}
+
+/// Lamps that glow and fires that flicker.
+fn glows(b: &mut Batch, lamps: &[Glow], fires: &[Glow], time: f32) {
+    for l in lamps {
+        let flicker = 0.9 + (time * 9.0 + l.pos.x).sin() * 0.05;
+        b.glow_sphere(l.pos, 0.22 * flicker, l.color);
+        b.glow_sphere(
+            l.pos,
+            0.45 * flicker,
+            Color::new(l.color.r, l.color.g, l.color.b, 0.25),
+        );
+    }
+    for f in fires {
+        for k in 0..4 {
+            let t = (time * 1.5 + k as f32 * 0.25) % 1.0;
+            let p = f.pos + vec3((time * 5.0 + k as f32).sin() * 0.08, 0.3 + t * 1.0, 0.0);
+            let fade = Color::new(f.color.r, f.color.g, f.color.b, 0.0);
+            b.glow_sphere(
+                p,
+                0.3 * (1.0 - t * 0.6),
+                mix(Color::new(1.0, 0.95, 0.7, 0.95), fade, t),
+            );
+        }
     }
 }
 

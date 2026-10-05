@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 
-use shared::props::Colliders;
+use shared::dungeon;
+use shared::props::{Colliders, WAYSTONE_RANGE, WAYSTONE_SPOT};
 
 use macroquad::prelude::*;
 use shared::data::*;
@@ -84,6 +85,8 @@ pub struct Windows {
     /// The quest giver whose quests are shown.
     pub quest_giver: Option<EntityId>,
     pub quest_log: bool,
+    /// Where the waystone you're at can take you.
+    pub travel: bool,
 }
 
 impl Windows {
@@ -97,6 +100,7 @@ impl Windows {
             || self.map
             || self.quest_giver.is_some()
             || self.quest_log
+            || self.travel
     }
 }
 
@@ -141,8 +145,11 @@ pub struct Game {
     pub menu_open: bool,
     pub time: f32,
     batch: Batch,
-    /// The starting area you're in, and what you can bump into there.
+    /// The starting area you're in (or came from, in the Sunken Vault),
+    /// and what you can bump into there.
     pub zone: Zone,
+    /// Where you are: a starting area or a copy of the vault.
+    pub place: Place,
     colliders: Colliders,
     /// Show the zone name once we know where we are.
     banner_due: bool,
@@ -200,6 +207,7 @@ impl Game {
             time: 0.0,
             batch: Batch::new(),
             zone: Zone::Amberfall,
+            place: Place::Zone(Zone::Amberfall),
             colliders: Colliders::for_zone(Zone::Amberfall),
             banner_due: true,
             map_texture: None,
@@ -290,6 +298,7 @@ impl Game {
         self.update_zone();
         // The map picture also backs the minimap, so make it once we're in.
         if self.my_id.is_some()
+            && !self.in_dungeon()
             && self
                 .map_texture
                 .as_ref()
@@ -298,9 +307,18 @@ impl Game {
             self.map_texture = Some((self.zone, crate::panels::map_texture(self.zone)));
         }
         let cam = self.camera();
-        render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
+        if self.in_dungeon() {
+            clear_background(render::dungeon_theme().fog);
+        } else {
+            render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
+        }
         set_camera(&cam);
-        scene.begin_3d(self.zone);
+        if self.in_dungeon() {
+            scene.begin_dungeon();
+        } else {
+            scene.begin_3d(self.zone);
+        }
+        self.vfx.begin(cam.position);
         self.draw_world(scene);
         scene.end_3d();
         set_default_camera();
@@ -313,13 +331,53 @@ impl Game {
         if self.my_id.is_none_or(|id| !self.entities.contains_key(&id)) {
             return;
         }
-        let zone = Zone::at(self.pos);
-        if zone != self.zone || self.banner_due {
-            self.banner_due = false;
-            self.zone = zone;
-            self.colliders = Colliders::for_zone(zone);
-            self.banner = Some((zone.name().into(), zone.subtitle(), 0.0));
+        let place = Place::at(self.pos);
+        let arrived = place != self.place;
+        self.place = place;
+        match place {
+            Place::Dungeon(_) => {
+                if arrived || self.banner_due {
+                    self.banner_due = false;
+                    self.banner = Some((dungeon::NAME.into(), "Dungeon".into(), 0.0));
+                }
+            }
+            Place::Zone(zone) => {
+                if zone != self.zone {
+                    self.zone = zone;
+                    self.colliders = Colliders::for_zone(zone);
+                }
+                if arrived || self.banner_due {
+                    self.banner_due = false;
+                    self.banner = Some((zone.name().into(), zone.subtitle(), 0.0));
+                }
+            }
         }
+        // Walking away from a waystone closes its window.
+        if self.windows.travel && !self.near_waystone() {
+            self.windows.travel = false;
+        }
+    }
+
+    pub fn in_dungeon(&self) -> bool {
+        matches!(self.place, Place::Dungeon(_))
+    }
+
+    /// The waystone where you are: in your town, or by the vault's entrance.
+    pub fn waystone(&self) -> Vec3 {
+        match self.place {
+            Place::Zone(z) => z.ground_local(WAYSTONE_SPOT),
+            Place::Dungeon(i) => dungeon::to_world(i, dungeon::EXIT_STONE),
+        }
+    }
+
+    pub fn near_waystone(&self) -> bool {
+        flat_distance(self.pos, self.waystone()) <= WAYSTONE_RANGE
+    }
+
+    /// Asks to go somewhere from the waystone you're at.
+    pub fn travel(&mut self, to: Destination) {
+        self.windows.travel = false;
+        self.send(ClientMsg::Travel(to));
     }
 
     // ---- Network ----
@@ -964,6 +1022,13 @@ impl Game {
         if is_key_pressed(KeyCode::M) {
             self.windows.map = !self.windows.map;
         }
+        if is_key_pressed(KeyCode::F) {
+            if self.near_waystone() {
+                self.windows.travel = !self.windows.travel;
+            } else {
+                self.error("There's no waystone nearby.");
+            }
+        }
         if is_key_pressed(KeyCode::L) {
             self.windows.quest_log = !self.windows.quest_log;
         }
@@ -1051,6 +1116,20 @@ impl Game {
             let l = crate::quests_ui::log_layout(&self.me.quests);
             if let Some((_, action)) = l.buttons.iter().find(|(r, _)| r.contains(mouse)) {
                 self.quest_action(*action, 0);
+                return;
+            }
+            if l.window.contains(mouse) {
+                return;
+            }
+        }
+        if self.windows.travel && left {
+            let l = crate::panels::travel_layout(self.place, level);
+            if l.close.contains(mouse) {
+                self.windows.travel = false;
+                return;
+            }
+            if let Some((_, to, _)) = l.buttons.iter().find(|(r, _, ok)| *ok && r.contains(mouse)) {
+                self.travel(*to);
                 return;
             }
             if l.window.contains(mouse) {
@@ -1240,9 +1319,14 @@ impl Game {
         } * factor;
         self.moving = dir != Vec3::ZERO && factor > 0.0;
         if self.moving {
-            // Houses, trees, rocks and the like are solid.
+            // Houses, trees, rocks and the like are solid, and so are the
+            // vault's walls.
             let next = self.pos + dir * speed * dt;
-            self.pos = self.colliders.resolve(next, 0.45);
+            self.pos = if self.in_dungeon() {
+                dungeon::resolve(next, 0.45)
+            } else {
+                self.colliders.resolve(next, 0.45)
+            };
         }
         if key(KeyCode::Space) && self.grounded && factor > 0.0 {
             self.vel_y = JUMP_SPEED;
@@ -1364,6 +1448,15 @@ impl Game {
         let (sp, cp) = self.cam_pitch.sin_cos();
         let dir = vec3(self.cam_yaw.sin() * cp, -sp, self.cam_yaw.cos() * cp);
         let mut eye = head - dir * self.cam_dist;
+        if self.in_dungeon() {
+            // Stay under the ceiling and on this side of the walls.
+            let mut d = 0.0;
+            while d < self.cam_dist && !dungeon::blocked(head - dir * (d + 0.25), 0.3) {
+                d += 0.25;
+            }
+            eye = head - dir * d;
+            eye.y = eye.y.min(dungeon::WALL_HEIGHT - 0.4);
+        }
         let floor = terrain_height(eye.x, eye.z) + 0.4;
         eye.y = eye.y.max(floor);
         Camera3D {
@@ -1378,7 +1471,10 @@ impl Game {
     }
 
     fn draw_world(&mut self, scene: &Scene) {
-        scene.draw(self.zone);
+        match self.place {
+            Place::Dungeon(i) => scene.draw_dungeon(i),
+            Place::Zone(z) => scene.draw(z),
+        }
         let b = &mut self.batch;
 
         if let Some(t) = self.target.and_then(|t| self.entities.get(&t)) {
@@ -1439,10 +1535,9 @@ impl Game {
             if e.view.dead {
                 continue;
             }
-            crate::vfx::draw_auras(b, a, &e.view.auras, self.time);
+            self.vfx.draw_auras(b, a, &e.view.auras, self.time);
             if let Some(cast) = &e.view.cast {
-                crate::vfx::draw_casting(
-                    b,
+                self.vfx.draw_casting(
                     a,
                     cast.ability,
                     cast.elapsed / cast.total.max(0.01),
@@ -1451,9 +1546,15 @@ impl Game {
             }
         }
         self.vfx.draw(b, self.time, |id| anchors.get(&id).copied());
-        scene.draw_effects(self.zone, b, self.time, self.pos);
-        b.flush();
-        scene.draw_water(self.zone);
+        if matches!(self.place, Place::Dungeon(_)) {
+            scene.draw_dungeon_effects(b, self.time);
+            b.flush();
+        } else {
+            scene.draw_effects(self.zone, b, self.time, self.pos);
+            b.flush();
+            scene.draw_water(self.zone);
+        }
+        self.vfx.draw_glows();
     }
 }
 

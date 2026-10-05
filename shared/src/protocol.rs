@@ -16,7 +16,7 @@ use crate::talents::Ranks;
 use crate::world::Zone;
 
 /// Bump whenever a message changes shape.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const DEFAULT_PORT: u16 = 7878;
 
 pub type EntityId = u32;
@@ -110,6 +110,17 @@ pub enum ClientMsg {
     PartyKick(String),
     /// Make another member (by name) the leader. Leader only.
     PartyPromote(String),
+    /// Use the waystone you're standing at.
+    Travel(Destination),
+}
+
+/// Where a waystone can take you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Destination {
+    /// Another starting area's town (or back out of the vault).
+    Town(Zone),
+    /// Your party's copy of the Sunken Vault.
+    Dungeon,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,6 +151,8 @@ pub struct CharacterSummary {
     pub level: u8,
     pub appearance: Appearance,
     pub gear: [Option<ItemId>; 5],
+    /// Held weapon.
+    pub weapon: Option<ItemId>,
 }
 
 /// What you can do in sandbox mode.

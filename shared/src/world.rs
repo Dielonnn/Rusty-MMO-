@@ -2,7 +2,8 @@
 //! terrain, bounds and a few geometry helpers.
 //!
 //! The zones sit side by side along X, `ZONE_SPACING` apart, and nobody can
-//! walk between them. Each zone has its own layout (see `layout`), and is
+//! walk between them: the waystones in each town carry players across (see
+//! `dungeon`, which also places the Sunken Vault's copies far from them all). Each zone has its own layout (see `layout`), and is
 //! also turned and mirrored differently. "Local" coordinates are in that shared layout, with the town at the
 //! origin; "world" coordinates are where things really are.
 //!
@@ -15,6 +16,7 @@ use glam::{Vec2, Vec3, vec2, vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::data::Race;
+use crate::dungeon;
 
 /// Each zone spans `-WORLD_HALF_SIZE..WORLD_HALF_SIZE` around its center.
 pub const WORLD_HALF_SIZE: f32 = 220.0;
@@ -259,6 +261,10 @@ pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 
 /// Height of the ground at world `(x, z)`.
 pub fn terrain_height(x: f32, z: f32) -> f32 {
+    if dungeon::instance_at(vec3(x, 0.0, z)).is_some() {
+        // The Sunken Vault has a flat stone floor.
+        return 0.0;
+    }
     let zone = Zone::at(vec3(x, 0.0, z));
     let l = zone.to_local(vec2(x, z));
     let mut h = crate::layout::terrain(zone).height(l.x, l.y);
@@ -276,14 +282,43 @@ pub fn ground(x: f32, z: f32) -> Vec3 {
     vec3(x, terrain_height(x, z), z)
 }
 
-/// Keeps a position inside its zone and not below the ground.
+/// Keeps a position inside its zone (or copy of the Sunken Vault) and not
+/// below the ground.
 pub fn clamp_to_world(pos: Vec3) -> Vec3 {
+    if dungeon::instance_at(pos).is_some() {
+        return dungeon::clamp(pos);
+    }
     let zone = Zone::at(pos);
     let c = zone.center();
     let limit = WORLD_HALF_SIZE - 2.0;
     let x = pos.x.clamp(c.x - limit, c.x + limit);
     let z = pos.z.clamp(c.y - limit, c.y + limit);
     vec3(x, pos.y.max(terrain_height(x, z)), z)
+}
+
+/// A region you can't walk or leap out of: a starting area, or one copy of
+/// the Sunken Vault.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    Zone(Zone),
+    Dungeon(u32),
+}
+
+impl Place {
+    pub fn at(p: Vec3) -> Place {
+        match dungeon::instance_at(p) {
+            Some(i) => Place::Dungeon(i),
+            None => Place::Zone(Zone::at(p)),
+        }
+    }
+
+    /// Where the dead come back to life.
+    pub fn graveyard(self) -> Vec3 {
+        match self {
+            Place::Zone(z) => z.graveyard(),
+            Place::Dungeon(i) => dungeon::to_world(i, dungeon::ENTRANCE),
+        }
+    }
 }
 
 pub fn forward(yaw: f32) -> Vec3 {
@@ -393,5 +428,16 @@ mod tests {
         let q = clamp_to_world(vec3(ZONE_SPACING * 2.0 + 300.0, 0.0, -400.0));
         assert_eq!(Zone::at(q), Zone::Silverbough);
         assert!(q.x < ZONE_SPACING * 2.0 + WORLD_HALF_SIZE);
+        // In the vault, you stay in your own copy, on its floor.
+        let inside = dungeon::to_world(5, vec2(240.0, 30.0));
+        let p = clamp_to_world(inside + vec3(0.0, -3.0, 0.0));
+        assert_eq!(Place::at(p), Place::Dungeon(5));
+        assert_eq!(p.y, 0.0);
+        assert!(p.x < dungeon::center(5).x + dungeon::HALF_SIZE);
+        assert_eq!(terrain_height(p.x, p.z), 0.0);
+        assert_eq!(
+            Place::at(Zone::Frostcog.graveyard()),
+            Place::Zone(Zone::Frostcog)
+        );
     }
 }

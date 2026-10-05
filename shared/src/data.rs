@@ -2477,6 +2477,8 @@ pub mod items {
     pub const ASHWOOD_LONGBOW: ItemId = ItemId(34);
     pub const EMBERWAND: ItemId = ItemId(35);
     pub const MOONWHISPER_STAFF: ItemId = ItemId(36);
+    // The Sunken Vault.
+    pub const CROWN_OF_THE_SUNKEN_KING: ItemId = ItemId(37);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2517,6 +2519,9 @@ pub const WEAPON_DROPS: [ItemId; 6] = {
 pub const WEAPON_DROP_CHANCE: f32 = 0.03;
 /// Chance an elite does.
 pub const ELITE_WEAPON_DROP_CHANCE: f32 = 0.3;
+/// The Sunken Vault's last boss always drops green armor, and often a weapon.
+pub const SUNKEN_KING_RARE_DROP_CHANCE: f32 = 1.0;
+pub const SUNKEN_KING_WEAPON_DROP_CHANCE: f32 = 0.5;
 
 const fn material(
     name: &'static str,
@@ -2611,7 +2616,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 37] = [
+pub static ITEMS: [Item; 38] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2966,6 +2971,19 @@ pub static ITEMS: [Item; 37] = [
         (0.6, 0.7, 0.95),
         900,
     ),
+    Item {
+        description: "Morvane's drowned crown, still cold from the deep.",
+        ..armor(
+            "Crown of the Sunken King",
+            Slot::Head,
+            14.0,
+            6.0,
+            5.0,
+            Quality::Rare,
+            (0.3, 0.85, 0.8),
+            4000,
+        )
+    },
 ];
 
 /// What every merchant sells.
@@ -3091,6 +3109,13 @@ pub enum MobKind {
     Skeleton,
     Necromancer,
     BoneColossus,
+    // The Sunken Vault (dungeon)
+    VaultHound,
+    VaultCrawler,
+    DrownedEnforcer,
+    DrownedAdept,
+    StoneWarden,
+    SunkenKing,
 }
 
 /// What a mob is built from when drawn.
@@ -3183,6 +3208,14 @@ const FIGHTER_LOOT: LootTable = LootTable {
 const CASTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
     items: &[(items::LINEN_CLOTH, 0.75, 1, 3)],
+};
+const BOSS_LOOT: LootTable = LootTable {
+    copper_per_level: (40, 80),
+    items: &[
+        (items::CROWN_OF_THE_SUNKEN_KING, 0.25, 1, 1),
+        (items::ANCIENT_CORE, 1.0, 2, 2),
+        (items::LINEN_CLOTH, 1.0, 3, 5),
+    ],
 };
 const ELITE_LOOT: LootTable = LootTable {
     copper_per_level: (20, 40),
@@ -3474,6 +3507,75 @@ const BONE_COLOSSUS: MobTemplate = elite(
     [(0.86, 0.83, 0.74), (0.6, 0.56, 0.5), (0.5, 1.0, 0.4)],
 );
 
+// The Sunken Vault's mobs are tougher than their kin outside: they're
+// meant for a party.
+
+const VAULT_HOUND: MobTemplate = MobTemplate {
+    hp: 120.0,
+    damage: (6.0, 9.0),
+    respawn: 0.0,
+    ..hunter(
+        "Vault Hound",
+        Mm::Wolf,
+        ids::SAVAGE_BITE,
+        [(0.3, 0.36, 0.38), (0.18, 0.22, 0.24), (0.35, 0.95, 0.85)],
+    )
+};
+const VAULT_CRAWLER: MobTemplate = MobTemplate {
+    hp: 110.0,
+    damage: (6.0, 9.0),
+    social: true,
+    respawn: 0.0,
+    ..hunter(
+        "Vault Crawler",
+        Mm::Spider,
+        ids::WEB,
+        [(0.2, 0.28, 0.27), (0.1, 0.15, 0.15), (0.3, 1.0, 0.75)],
+    )
+};
+const DROWNED_ENFORCER: MobTemplate = MobTemplate {
+    hp: 150.0,
+    damage: (8.0, 12.0),
+    respawn: 0.0,
+    ..fighter(
+        "Drowned Enforcer",
+        H::Raider,
+        [(0.25, 0.35, 0.4), (0.16, 0.2, 0.22), (0.2, 0.8, 0.75)],
+    )
+};
+const DROWNED_ADEPT: MobTemplate = MobTemplate {
+    hp: 120.0,
+    damage: (4.0, 7.0),
+    respawn: 0.0,
+    ..caster(
+        "Drowned Adept",
+        H::Mystic,
+        ids::SHADOW_BOLT,
+        [(0.12, 0.25, 0.3), (0.08, 0.15, 0.18), (0.3, 0.95, 0.9)],
+    )
+};
+const STONE_WARDEN: MobTemplate = MobTemplate {
+    hp: 520.0,
+    respawn: 0.0,
+    ..elite(
+        "Stone Warden",
+        GiantStyle::Stone,
+        [(0.36, 0.42, 0.38), (0.26, 0.3, 0.28), (0.3, 1.0, 0.8)],
+    )
+};
+const SUNKEN_KING: MobTemplate = MobTemplate {
+    hp: 800.0,
+    damage: (16.0, 22.0),
+    size: 2.6,
+    respawn: 0.0,
+    loot: BOSS_LOOT,
+    ..elite(
+        "Morvane the Sunken King",
+        GiantStyle::Bone,
+        [(0.55, 0.62, 0.6), (0.3, 0.36, 0.36), (0.25, 1.0, 0.85)],
+    )
+};
+
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
         use MobKind::*;
@@ -3508,11 +3610,39 @@ impl MobKind {
             Skeleton => &SKELETON,
             Necromancer => &NECROMANCER,
             BoneColossus => &BONE_COLOSSUS,
+            VaultHound => &VAULT_HOUND,
+            VaultCrawler => &VAULT_CRAWLER,
+            DrownedEnforcer => &DROWNED_ENFORCER,
+            DrownedAdept => &DROWNED_ADEPT,
+            StoneWarden => &STONE_WARDEN,
+            SunkenKing => &SUNKEN_KING,
         }
     }
 
     pub fn max_hp(self, level: u8) -> f32 {
         self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
+    }
+
+    /// The Sunken Vault's mobs, bosses last.
+    pub const DUNGEON: [MobKind; 6] = [
+        MobKind::VaultHound,
+        MobKind::VaultCrawler,
+        MobKind::DrownedEnforcer,
+        MobKind::DrownedAdept,
+        MobKind::StoneWarden,
+        MobKind::SunkenKing,
+    ];
+
+    /// Chances of a green armor piece (`RARE_DROPS`) and a green weapon
+    /// (`WEAPON_DROPS`) on its corpse.
+    pub fn drop_chances(self) -> (f32, f32) {
+        if self == MobKind::SunkenKing {
+            (SUNKEN_KING_RARE_DROP_CHANCE, SUNKEN_KING_WEAPON_DROP_CHANCE)
+        } else if self.template().elite {
+            (ELITE_RARE_DROP_CHANCE, ELITE_WEAPON_DROP_CHANCE)
+        } else {
+            (RARE_DROP_CHANCE, WEAPON_DROP_CHANCE)
+        }
     }
 
     /// A zone's five mobs: aggressive beast, neutral beast, fighter, caster
@@ -3545,7 +3675,7 @@ impl MobKind {
 // ---- Appearance ----
 
 /// How a character looks, chosen at character creation.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Appearance {
     /// Characters made before races existed are human.
     #[serde(default)]
@@ -3555,10 +3685,41 @@ pub struct Appearance {
     pub skin: u8,
     pub hair_style: u8,
     pub hair_color: u8,
+    /// Height slider, 0 (shortest) to `SLIDER_MAX` (tallest). Characters
+    /// made before the slider existed are in the middle.
+    #[serde(default = "slider_middle")]
+    pub height: u8,
+    /// Weight (plumpness) slider, 0 (thinnest) to `SLIDER_MAX` (heaviest).
+    #[serde(default = "slider_middle")]
+    pub weight: u8,
+}
+
+fn slider_middle() -> u8 {
+    Appearance::SLIDER_MAX / 2
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            race: Race::default(),
+            body: 0,
+            skin: 0,
+            hair_style: 0,
+            hair_color: 0,
+            height: slider_middle(),
+            weight: slider_middle(),
+        }
+    }
 }
 
 impl Appearance {
     pub const BODIES: u8 = 2;
+    /// The top of the height and weight sliders.
+    pub const SLIDER_MAX: u8 = 100;
+    /// How far the height slider stretches the race's usual height, each way.
+    pub const HEIGHT_RANGE: f32 = 0.1;
+    /// How far the weight slider widens or narrows the body, each way.
+    pub const WEIGHT_RANGE: f32 = 0.2;
     pub const SKINS: u8 = 5;
     pub const HAIR_STYLES: u8 = 5;
     pub const HAIR_COLORS: u8 = 6;
@@ -3575,13 +3736,56 @@ impl Appearance {
             skin: self.skin % Self::SKINS,
             hair_style: self.hair_style % Self::HAIR_STYLES,
             hair_color: self.hair_color % Self::HAIR_COLORS,
+            height: self.height.min(Self::SLIDER_MAX),
+            weight: self.weight.min(Self::SLIDER_MAX),
         }
+    }
+
+    /// The height slider as a multiplier on the race's usual height: 1.0 in
+    /// the middle, `1 - HEIGHT_RANGE` to `1 + HEIGHT_RANGE` at the ends.
+    pub fn height_scale(self) -> f32 {
+        1.0 + Self::slider(self.height) * Self::HEIGHT_RANGE
+    }
+
+    /// The weight slider as a multiplier on body width: 1.0 in the middle,
+    /// `1 - WEIGHT_RANGE` to `1 + WEIGHT_RANGE` at the ends.
+    pub fn weight_scale(self) -> f32 {
+        1.0 + Self::slider(self.weight) * Self::WEIGHT_RANGE
+    }
+
+    /// A slider value from -1 (bottom) to 1 (top).
+    fn slider(value: u8) -> f32 {
+        let max = Self::SLIDER_MAX as f32;
+        (value.min(Self::SLIDER_MAX) as f32 - max / 2.0) / (max / 2.0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_appearance_loads_with_middle_sliders() {
+        let old = r#"{"race":"Orc","body":1,"skin":2,"hair_style":3,"hair_color":4}"#;
+        let a: Appearance = serde_json::from_str(old).unwrap();
+        assert_eq!(a.race, Race::Orc);
+        assert_eq!((a.height, a.weight), (50, 50));
+        assert_eq!(a.height_scale(), 1.0);
+        assert_eq!(a.weight_scale(), 1.0);
+        assert_eq!(Appearance::default().height, 50);
+    }
+
+    #[test]
+    fn sliders_clamp_and_scale() {
+        let a = Appearance {
+            height: 250,
+            weight: 0,
+            ..Default::default()
+        };
+        assert_eq!(a.clamped().height, Appearance::SLIDER_MAX);
+        assert!((a.height_scale() - (1.0 + Appearance::HEIGHT_RANGE)).abs() < 1e-6);
+        assert!((a.weight_scale() - (1.0 - Appearance::WEIGHT_RANGE)).abs() < 1e-6);
+    }
 
     #[test]
     fn ability_ids_match_table() {
@@ -3760,6 +3964,7 @@ mod tests {
             (IRON_SWORD, "Iron Sword"),
             (HEARTSTONE_GREATSWORD, "Heartstone Greatsword"),
             (MOONWHISPER_STAFF, "Moonwhisper Staff"),
+            (CROWN_OF_THE_SUNKEN_KING, "Crown of the Sunken King"),
         ] {
             assert_eq!(item(id).name, name);
         }

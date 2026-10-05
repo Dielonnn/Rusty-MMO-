@@ -97,6 +97,7 @@ title and on the login screen.
 | `N` | Talents |
 | `L` | Quest log |
 | `M` | World map |
+| `F` | Use a waystone (travel to another town or the Sunken Vault) |
 | `P` | Sandbox panel (sandbox mode only) |
 | `Esc` | Close windows, clear target, or open the game menu |
 | `Enter` | Chat (`/help` lists the chat commands, `/who` lists who's online) |
@@ -114,6 +115,18 @@ anyone in the party kills a mob, every member alive and within 60 yards gets
 full experience for their level and quest credit, and members take turns
 looting (10 seconds each, then it's open to the party). `/p MESSAGE` is party
 chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
+
+### Waystones and the Sunken Vault
+
+Every town has a waystone beside its square. Stand next to it and press `F`
+to travel to any other starting area's town, or, from level 8, into the
+Sunken Vault: a dungeon of flooded halls, packs of hounds, crawlers and
+drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King,
+who sometimes drops the Crown of the Sunken King, a blue helm.
+Your party shares one copy of the vault; anyone else gets their own. Mobs you
+kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
+inside and you come back at the vault's entrance; the waystone there takes you
+back to town. Leaving your party sends you out of its vault.
 
 ### Combat
 

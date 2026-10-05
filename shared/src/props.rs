@@ -59,6 +59,12 @@ pub enum PropKind {
     /// `size` is its height.
     Pillar,
     RuneTile,
+    // Travel
+    /// A tall rune stone that carries you to the other towns and the
+    /// Sunken Vault.
+    Waystone,
+    /// A run of the Sunken Vault's stone wall: `size` is half its length.
+    VaultWall,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,6 +117,8 @@ impl Prop {
             Cart => Shape::Box(0.9, 1.6),
             Signpost | Banner => Shape::Circle(0.2),
             Log => Shape::Box(0.4, 1.6 * s),
+            Waystone => Shape::Circle(0.8),
+            VaultWall => Shape::Box(crate::dungeon::WALL_THICKNESS * 0.5, s),
             Shrub | Mushrooms | Bones | Crop | RuneTile | Flowers => return None,
         })
     }
@@ -120,6 +128,12 @@ impl Prop {
 pub const MERCHANT_SPOT: Vec2 = Vec2::new(6.4, 4.8);
 /// Where the quest giver stands.
 pub const QUEST_SPOT: Vec2 = Vec2::new(-5.0, -4.5);
+/// Where the waystone stands in every town.
+pub const WAYSTONE_SPOT: Vec2 = Vec2::new(0.0, 13.0);
+/// Where travelers arrive in a town, beside its waystone.
+pub const ARRIVAL_SPOT: Vec2 = Vec2::new(0.0, 10.5);
+/// How close you have to be to a waystone to use it.
+pub const WAYSTONE_RANGE: f32 = 6.0;
 
 /// A tiny deterministic random number generator for placing scenery.
 pub struct Scatter(pub u32);
@@ -194,6 +208,7 @@ pub fn props(zone: Zone) -> Vec<Prop> {
     b.add(Centerpiece, Vec2::ZERO, 0.0, 1.0, 0);
     b.add(Well, layout.well, 0.3, 1.0, 0);
     b.add(Cart, vec2(-10.5, 9.5), 0.9, 1.0, 0);
+    b.add(Waystone, WAYSTONE_SPOT, std::f32::consts::PI, 1.0, 0);
     // Signposts and banners where the roads leave town.
     for (k, (x, z)) in [(0.0, 31.0), (31.0, 0.0), (0.0, -31.0), (-31.0, 0.0)]
         .into_iter()
@@ -574,6 +589,17 @@ mod tests {
                 !colliders.blocked(zone.ground_local(QUEST_SPOT), 0.4),
                 "{zone:?} quest giver"
             );
+            assert!(
+                !colliders.blocked(zone.ground_local(ARRIVAL_SPOT), 0.4),
+                "{zone:?} waystone arrival"
+            );
+            // Nothing else crowds the waystone.
+            let stone = zone.ground_local(WAYSTONE_SPOT);
+            let crowded = props(zone)
+                .iter()
+                .filter(|p| p.kind != PropKind::Waystone && p.footprint().is_some())
+                .any(|p| flat_distance(p.pos, stone) < 3.0);
+            assert!(!crowded, "{zone:?} waystone");
         }
     }
 

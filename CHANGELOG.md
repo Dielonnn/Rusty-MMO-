@@ -37,6 +37,66 @@ Commit: the one titled "v8.0: Relaxed idle stances".
   KayKit skeletons rebuilt on the same skeleton, as warriors, rogues, mages
   and minions with their own gear. Beasts and giants are still built from
   shapes until v9.0
+## v7.6
+
+Commit: the one titled "v7.6: Waystones and the Sunken Vault".
+
+- **Waystones**: every town has a rune stone beside its square. Stand next to
+  it and press `F` to travel to any other starting area's town, so all six
+  areas are now linked. Travel is free, but not while you're in combat
+- **The Sunken Vault**, the first dungeon, for level 8 and up: flooded stone
+  halls with Vault Hounds, Vault Crawlers, Drowned Enforcers and Drowned
+  Adepts (levels 9 and 10), the Stone Warden halfway through, and Morvane the
+  Sunken King at the end. Enter from any town's waystone
+- **Your own copy**: your party shares one copy of the vault, and everyone else
+  (another party, or a player on their own) gets their own. Mobs you kill stay
+  dead, and the copy resets once nobody has been inside for 5 minutes.
+  Leaving the party sends you back out of its vault; when a party breaks up,
+  whoever's left keeps it
+- Dying in the vault brings you back at its entrance, whose waystone takes you
+  back to the town you came from. Logging out inside puts you by that town's
+  waystone next time
+- **Crown of the Sunken King**: a new blue helm (14 armor, +6 stamina, +5
+  power) that Morvane drops a quarter of the time
+- **Loot**: Morvane also always drops a green armor piece and 2 Ancient Cores,
+  and half the time a green weapon. The Stone Warden drops like other elites
+- The minimap and the world map (`M`) show the vault's halls and room names
+- Older games can't join a v7.6 server (protocol 10)
+
+## v7.5
+
+Commit: the one titled "v7.5: Textured spell effects".
+
+- **Glowing spell effects**: spells are now drawn with soft, textured light
+  that brightens whatever is behind it, instead of flat colored balls. Each
+  school keeps its colors
+- **Missiles**: fireballs trail licking flames and smoke, frostbolts carry an
+  ice crystal and shed snowflakes, shadow bolts swirl with dark mist, arcane
+  missiles spin with stars, holy bolts flare gold, nature bolts trail green
+  mist, and arrows and bullets leave faint tracer streaks
+- **Impacts**: hits flash with a star-shaped burst and a puff of light, with
+  sparks streaking out; area spells send a glowing ring across the ground
+- **Heals and beams**: healing pillars are columns of light with motes
+  drifting down, healing spirals rise in sparkles, and drain spells pull a
+  flickering ribbon of light from the target
+- **Casting**: a turning circle of runes glows under anyone casting, with a
+  ring closing in as the cast fills
+- **Auras**: burning targets have real flames, poison and curses wreathe them
+  in mist, stuns spin stars over the head, slows spread frost underfoot,
+  shields glint, and empowered characters have red flames at their feet
+
+## v7.3
+
+Commit: the one titled "v7.3: Height and weight sliders".
+
+- **Height and weight sliders** in character creation: drag them to make a
+  character shorter or taller, thinner or heavier. The choice is saved with
+  the character and sent to everyone who sees them. Characters don't change
+  shape yet: the models catch up in a later release
+- Characters made before v7.3 start with both sliders in the middle
+- Other players and the character list now know which weapon each character
+  holds, ready for the models to draw it
+- Protocol version 9: clients and servers must both be v7.3
 
 ## v7.2
 
