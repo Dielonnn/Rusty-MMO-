@@ -3218,6 +3218,8 @@ const BOSS_LOOT: LootTable = LootTable {
         (items::CROWN_OF_THE_SUNKEN_KING, 0.25, 1, 1),
         (items::ANCIENT_CORE, 1.0, 2, 2),
         (items::LINEN_CLOTH, 1.0, 3, 5),
+        (items::IRON_SCRAP, 1.0, 3, 5),
+        (items::LIGHT_LEATHER, 1.0, 3, 5),
     ],
 };
 const ELITE_LOOT: LootTable = LootTable {

@@ -7,12 +7,14 @@ built from that commit.
 
 ## v7.7
 
-Commit: the one titled "v7.7: casters drop potions, elites drop iron scrap".
+Commit: the one titled "v7.7: casters drop potions, elites and the Sunken King drop materials".
 
 - **Casters drop potions**: mystics, shamans, tricksters, necromancers and
   the Drowned Adept drop a Healing Potion 35% of the time
 - **Elites drop Iron Scrap**: every zone elite and the Stone Warden always
   drop 5 Iron Scrap, on top of their Ancient Core and Linen Cloth
+- **The Sunken King drops materials**: Morvane always drops 3 to 5 Iron
+  Scrap and 3 to 5 Light Leather, on top of the rest of his loot
 
 ## v7.6
 

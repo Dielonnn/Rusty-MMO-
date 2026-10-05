@@ -3833,6 +3833,13 @@ mod tests {
             let loot = w.roll_loot(kind, 5, vec![1]).unwrap();
             assert!(loot.items.contains(&(items::IRON_SCRAP, 5)), "{kind:?}");
         }
+        for _ in 0..20 {
+            let loot = w.roll_loot(MobKind::SunkenKing, 10, vec![1]).unwrap();
+            for mat in [items::IRON_SCRAP, items::LIGHT_LEATHER] {
+                let n = loot.items.iter().find(|(i, _)| *i == mat).unwrap().1;
+                assert!((3..=5).contains(&n));
+            }
+        }
     }
 
     #[test]
