@@ -1294,6 +1294,145 @@ fn posed(lib: &Library, body: &Loaded, layers: &[Layer]) -> Vec<Transform> {
     pose
 }
 
+/// Whether a model's node hangs off the right hand.
+fn in_right_hand(model: &ModelFile, mut node: usize) -> bool {
+    loop {
+        if model.nodes[node].name == "hand_r" {
+            return true;
+        }
+        match model.nodes[node].parent {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+}
+
+/// The fingers of a hand, each from the knuckle out.
+const FINGERS: [&str; 5] = ["thumb", "index", "middle", "ring", "pinky"];
+
+/// Poses the right arm, hand and fingers for an emote `t` seconds in, over
+/// whatever else is playing: waving, pointing, blowing a kiss, wagging a
+/// finger or flipping someone off. Directions are in the skeleton's own
+/// space: +z is forward, +y up and +x the character's left.
+fn gesture(lib: &Library, pose: &mut [Transform], emote: shared::emote::Emote, t: f32) {
+    use shared::emote::Emote as E;
+    let length = emote.duration().unwrap_or(2.0);
+    // Ease into the pose and back out of it at the end.
+    let w = ((t / 0.25).min(1.0) * ((length - t) / 0.3).min(1.0)).clamp(0.0, 1.0);
+    let w = w * w * (3.0 - 2.0 * w);
+    if w <= 0.0 {
+        return;
+    }
+    let wobble = |speed: f32| (t * speed).sin();
+    // Upper arm, forearm, hand (the fingers' way) and the hand's thumb
+    // side, and which fingers stay straight while the rest make a fist.
+    let (upper, fore, hand, side, straight): (Vec3, Vec3, Vec3, Vec3, &[&str]) = match emote {
+        E::Wave => (
+            vec3(-0.75, 0.55, 0.2),
+            vec3(-0.2 + 0.45 * wobble(9.0), 1.0, 0.15),
+            vec3(-0.2 + 0.6 * wobble(9.0), 1.0, 0.1),
+            vec3(1.0, 0.0, 0.0),
+            &FINGERS,
+        ),
+        E::Point => (
+            vec3(-0.25, 0.25, 1.0),
+            vec3(-0.1, 0.25, 1.0),
+            vec3(-0.05, 0.2, 1.0),
+            vec3(0.6, 1.0, 0.0),
+            &["index"],
+        ),
+        E::FlipOff => (
+            vec3(-0.55, -0.3, 0.75),
+            vec3(-0.1, 1.0, 0.3),
+            vec3(0.0, 1.0, 0.15 + 0.15 * wobble(14.0).max(0.0)),
+            vec3(-1.0, 0.0, 0.0),
+            &["middle"],
+        ),
+        E::No => (
+            vec3(-0.55, -0.45, 0.7),
+            vec3(-0.05, 1.0, 0.3),
+            vec3(0.55 * wobble(13.0), 1.0, 0.1),
+            vec3(1.0, 0.0, 0.0),
+            &["index"],
+        ),
+        E::Kiss => {
+            // Fingers to the lips, then the arm sweeps out with the kiss.
+            let k = ((t - 0.7) / 0.45).clamp(0.0, 1.0);
+            let k = k * k * (3.0 - 2.0 * k);
+            (
+                vec3(-0.2, -0.6, 0.75).lerp(vec3(-0.35, 0.35, 0.9), k),
+                vec3(0.6, 0.7, 0.4).lerp(vec3(-0.25, 0.4, 1.0), k),
+                vec3(0.25, 1.0, 0.05).lerp(vec3(-0.2, 0.55, 1.0), k),
+                vec3(-1.0, 0.0, 0.0).lerp(vec3(-1.0, 0.3, 0.0), k),
+                &FINGERS,
+            )
+        }
+        E::Sit | E::Backflip => return,
+    };
+
+    // Curl the fingers into a fist (as in a punch), but for the straight ones.
+    if let Some(fist) = lib.rig.clip("Punch_Jab") {
+        let mut punch = pose.to_vec();
+        fist.apply(fist.duration * 0.3, &mut punch);
+        for finger in FINGERS {
+            for joint in 1..=3 {
+                let Some(i) = lib.rig.node(&format!("{finger}_0{joint}_r")) else {
+                    continue;
+                };
+                let goal = if straight.contains(&finger) {
+                    lib.rig.nodes[i].rest.rotation
+                } else {
+                    punch[i].rotation
+                };
+                pose[i].rotation = pose[i].rotation.slerp(goal, w);
+            }
+        }
+    }
+
+    let at = |pose: &[Transform], bone: &str| {
+        lib.rig
+            .node(bone)
+            .map_or(Vec3::ZERO, |i| lib.rig.world(pose)[i].w_axis.truncate())
+    };
+    // Turns a bone by `turn` in the skeleton's space, as much as the emote
+    // has eased in.
+    let turn = |pose: &mut [Transform], bone: &str, turn: Quat| {
+        let Some(i) = lib.rig.node(bone) else {
+            return;
+        };
+        let parent = lib.rig.nodes[i].parent.map_or(Quat::IDENTITY, |p| {
+            lib.rig.world(pose)[p].to_scale_rotation_translation().1
+        });
+        let turn = Quat::IDENTITY.slerp(turn, w);
+        pose[i].rotation = (parent.inverse() * turn * parent * pose[i].rotation).normalize();
+    };
+    // Points a bone the way of `dir`, from it to the next joint.
+    let aim = |pose: &mut [Transform], bone: &str, next: &str, dir: Vec3| {
+        let now = (at(pose, next) - at(pose, bone)).normalize_or_zero();
+        if now != Vec3::ZERO {
+            turn(pose, bone, Quat::from_rotation_arc(now, dir.normalize()));
+        }
+    };
+    aim(pose, "upperarm_r", "lowerarm_r", upper);
+    aim(pose, "lowerarm_r", "hand_r", fore);
+    // The hand both points and turns its thumb side the right way.
+    let frame = |dir: Vec3, side: Vec3| {
+        let dir = dir.normalize();
+        let side = (side - dir * side.dot(dir)).normalize_or_zero();
+        Mat3::from_cols(dir, side, dir.cross(side))
+    };
+    let now = frame(
+        at(pose, "middle_01_r") - at(pose, "hand_r"),
+        at(pose, "index_01_r") - at(pose, "pinky_01_r"),
+    );
+    let goal = frame(hand, side);
+    turn(
+        pose,
+        "hand_r",
+        Quat::from_mat3(&(goal * now.transpose())).normalize(),
+    );
+}
+
 /// A long robe's skirt: rings of cloth from the waist to the ankles (see
 /// `Build::skirt`), each spot following the hips and the leg on its side.
 fn robe_skirt(
@@ -1378,7 +1517,10 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
     let style = style_of(outfit);
     let id = dress.body.file();
     let file = lib.file(id);
-    let skeleton = posed(lib, file, &layers(style, pose));
+    let mut skeleton = posed(lib, file, &layers(style, pose));
+    if let Some((emote, t)) = pose.emote.filter(|_| !pose.dead) {
+        gesture(lib, &mut skeleton, emote, t);
+    }
     let skeleton = lib.rig.world(&skeleton);
     let standard = lib.standard();
     let size = 2.1 / standard.height * dress.scale;
@@ -1394,11 +1536,15 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
     let joints = file
         .model
         .joint_matrices(transform, &world, adjust.as_deref());
+    // An emote needs the right hand free: what it holds is put away.
+    let gesturing = pose.emote.is_some() && !pose.dead;
+    let away = |model: &ModelFile, part: &ModelPart| gesturing && in_right_hand(model, part.node);
     let held = |part: &ModelPart| {
         dress
             .props
             .iter()
             .any(|&(from, name)| from == id && name == part.name)
+            && !away(&file.model, part)
     };
     let dressed = dress
         .body
@@ -1452,8 +1598,10 @@ pub(super) fn draw(b: &mut Batch, look: &Look, outfit: Outfit, pos: Vec3, yaw: f
         let world = other.model.world_on(&skeleton, &other.binding);
         b.textured(&painted(from, None), |b| {
             other.model.draw_posed(b, transform, &world, |part| {
-                (part.skin.is_none() && dress.props.contains(&(from, part.name.as_str())))
-                    .then_some(tint)
+                (part.skin.is_none()
+                    && dress.props.contains(&(from, part.name.as_str()))
+                    && !away(&other.model, part))
+                .then_some(tint)
             });
         });
     }
@@ -1919,5 +2067,35 @@ mod tests {
         let tall = dress(Outfit::Class(Class::Fighter), &l);
         assert_eq!(tall.body, crowned.body);
         assert!(tall.scale > crowned.scale && tall.girth < crowned.girth);
+    }
+
+    #[test]
+    fn emotes_raise_the_right_hand_and_free_it() {
+        use shared::emote::Emote;
+        let lib = library();
+        let body = lib.file(HUMAN);
+        let still = posed(lib, body, &layers(Style::Staff, Pose::default()));
+        let hand = lib.rig.node("hand_r").unwrap();
+        let height = |pose: &[Transform]| lib.rig.world(pose)[hand].w_axis.y;
+        for emote in [
+            Emote::Wave,
+            Emote::Point,
+            Emote::FlipOff,
+            Emote::No,
+            Emote::Kiss,
+        ] {
+            let mut pose = still.clone();
+            gesture(lib, &mut pose, emote, 1.0);
+            assert!(height(&pose) > height(&still) + 0.2, "{emote:?}");
+        }
+        // Whole-body emotes are the game's to draw.
+        let mut sit = still.clone();
+        gesture(lib, &mut sit, Emote::Sit, 1.0);
+        assert_eq!(sit, still);
+        // A staff hangs off the right hand, a spellbook off the left.
+        let props = &lib.file(File::Props).model;
+        let part = |name: &str| props.parts.iter().find(|p| p.name == name).unwrap().node;
+        assert!(in_right_hand(props, part("2H_Staff")));
+        assert!(!in_right_hand(props, part("Spellbook")));
     }
 }
