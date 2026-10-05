@@ -5,6 +5,16 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.9
+
+Commit: the one titled "v8.9: sandbox item tabs".
+
+- **Sandbox item tabs**: the sandbox panel no longer lists every item in
+  the game at once. Items are split into tabs: Weapons, Head, Chest,
+  Hands, Legs, Feet and Other (potions, food and materials). Click a tab
+  to see its items; the panel remembers the last tab until you close the
+  game. The panel is now much shorter.
+
 ## v8.8
 
 Commit: the one titled "v8.8: dwarf, goblin, gnome and undead bodies, elf rework".

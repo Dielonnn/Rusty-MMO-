@@ -1513,9 +1513,11 @@ impl Game {
         }
         if self.windows.sandbox
             && left
-            && let Some(cmd) = crate::panels::sandbox_click(self.zone, level, mouse)
+            && let Some(click) = crate::panels::sandbox_click(self.zone, level, mouse)
         {
-            self.send(ClientMsg::Sandbox(cmd));
+            if let crate::panels::SandboxClick::Send(cmd) = click {
+                self.send(ClientMsg::Sandbox(cmd));
+            }
             return;
         }
         if self.windows.talents && layout.talents.is_some_and(|r| r.contains(mouse)) {

@@ -602,6 +602,68 @@ pub enum SandboxAction {
     Command(SandboxCmd),
     LevelDown,
     LevelUp,
+    Tab(ItemTab),
+}
+
+/// The sandbox's item tabs. Every item is on exactly one of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemTab {
+    Weapons,
+    Armor(Slot),
+    Other,
+}
+
+impl ItemTab {
+    pub const ALL: [ItemTab; 7] = [
+        ItemTab::Weapons,
+        ItemTab::Armor(Slot::Head),
+        ItemTab::Armor(Slot::Chest),
+        ItemTab::Armor(Slot::Hands),
+        ItemTab::Armor(Slot::Legs),
+        ItemTab::Armor(Slot::Feet),
+        ItemTab::Other,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ItemTab::Weapons => "Weapons",
+            ItemTab::Armor(slot) => slot.name(),
+            ItemTab::Other => "Other",
+        }
+    }
+
+    /// Which tab an item is listed on: potions, food and materials are Other.
+    pub fn of(item: &Item) -> ItemTab {
+        match item.kind {
+            ItemKind::Weapon { .. } => ItemTab::Weapons,
+            ItemKind::Armor { slot, .. } => ItemTab::Armor(slot),
+            ItemKind::Material | ItemKind::Potion { .. } | ItemKind::Food { .. } => ItemTab::Other,
+        }
+    }
+
+    /// The items on this tab, in the game's item order.
+    pub fn items(self) -> impl Iterator<Item = ItemId> {
+        (0..ITEMS.len())
+            .filter(move |&i| ItemTab::of(&ITEMS[i]) == self)
+            .map(|i| ItemId(i as u16))
+    }
+}
+
+thread_local! {
+    /// The sandbox item tab that's open. Kept until the game closes.
+    static SANDBOX_TAB: std::cell::Cell<ItemTab> = const { std::cell::Cell::new(ItemTab::Weapons) };
+}
+
+pub fn sandbox_tab() -> ItemTab {
+    SANDBOX_TAB.with(|t| t.get())
+}
+
+/// What a click on the sandbox panel did.
+pub enum SandboxClick {
+    /// Ask the server for this.
+    Send(SandboxCmd),
+    /// Handled here (an item tab was picked).
+    Handled,
 }
 
 pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
@@ -672,9 +734,23 @@ pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
         cells += 1;
     }
     y += cells.div_ceil(2) as f32 * 36.0 + 26.0;
+    // Item tabs, four to a row.
+    let tab_w = (iw - 3.0 * 4.0) / 4.0;
+    for (i, tab) in ItemTab::ALL.into_iter().enumerate() {
+        buttons.push((
+            Rect::new(
+                x + (i % 4) as f32 * (tab_w + 4.0),
+                y + (i / 4) as f32 * 28.0,
+                tab_w,
+                24.0,
+            ),
+            SandboxAction::Tab(tab),
+        ));
+    }
+    y += ItemTab::ALL.len().div_ceil(4) as f32 * 28.0 + 6.0;
     let per_row = 5;
     let size = (iw - (per_row - 1) as f32 * 6.0) / per_row as f32;
-    for i in 0..ITEMS.len() {
+    for (i, id) in sandbox_tab().items().enumerate() {
         buttons.push((
             Rect::new(
                 x + (i % per_row) as f32 * (size + 6.0),
@@ -682,10 +758,17 @@ pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
                 size,
                 size,
             ),
-            SandboxAction::Command(SandboxCmd::GiveItem(ItemId(i as u16))),
+            SandboxAction::Command(SandboxCmd::GiveItem(id)),
         ));
     }
-    let rows = ITEMS.len().div_ceil(per_row);
+    // Tall enough for the fullest tab, so the window doesn't jump around
+    // when you switch tabs.
+    let most = ItemTab::ALL
+        .iter()
+        .map(|t| t.items().count())
+        .max()
+        .unwrap_or(0);
+    let rows = most.div_ceil(per_row).max(1);
     let bottom = y + rows as f32 * (size + 6.0) + 10.0;
     SandboxLayout {
         window: Rect::new(window.x, window.y, window.w, bottom - window.y),
@@ -730,6 +813,25 @@ pub fn draw_sandbox(game: &Game, level: u8) {
         match action {
             SandboxAction::LevelDown => button_ex(*b, "-", level > 1),
             SandboxAction::LevelUp => button_ex(*b, "+", level < MAX_LEVEL),
+            SandboxAction::Tab(tab) => {
+                let open = *tab == sandbox_tab();
+                let bg = if open {
+                    Color::new(0.2, 0.42, 0.5, 1.0)
+                } else if b.contains(mouse) {
+                    Color::new(0.16, 0.22, 0.28, 1.0)
+                } else {
+                    Color::new(0.1, 0.13, 0.17, 1.0)
+                };
+                draw_rectangle(b.x, b.y, b.w, b.h, bg);
+                draw_rectangle_lines(b.x, b.y, b.w, b.h, 1.5, if open { GOLD } else { BORDER });
+                text_centered(
+                    tab.name(),
+                    b.x + b.w / 2.0,
+                    b.y + 17.0,
+                    15.0,
+                    if open { GOLD } else { WHITE },
+                );
+            }
             SandboxAction::Command(cmd) => match cmd {
                 SandboxCmd::AddMoney(c) => button(*b, &format!("+{}", format_money(*c))),
                 SandboxCmd::ToggleGod => {
@@ -771,7 +873,7 @@ pub fn draw_sandbox(game: &Game, level: u8) {
     if let Some(y) = first(|a| matches!(a, SandboxAction::Command(SandboxCmd::SpawnMob { .. }))) {
         label("Summon (at your level)", y - 8.0);
     }
-    if let Some(y) = first(|a| matches!(a, SandboxAction::Command(SandboxCmd::GiveItem(_)))) {
+    if let Some(y) = first(|a| matches!(a, SandboxAction::Tab(_))) {
         label("Give yourself an item", y - 8.0);
     }
     if let Some(name) = item_tip {
@@ -780,17 +882,21 @@ pub fn draw_sandbox(game: &Game, level: u8) {
 }
 
 /// What a click on the sandbox panel asks the server for.
-pub fn sandbox_click(zone: Zone, level: u8, mouse: Vec2) -> Option<SandboxCmd> {
+pub fn sandbox_click(zone: Zone, level: u8, mouse: Vec2) -> Option<SandboxClick> {
     let l = sandbox_layout(zone);
     let (_, action) = l.buttons.iter().find(|(r, _)| r.contains(mouse))?;
-    Some(match *action {
+    Some(SandboxClick::Send(match *action {
+        SandboxAction::Tab(tab) => {
+            SANDBOX_TAB.with(|t| t.set(tab));
+            return Some(SandboxClick::Handled);
+        }
         SandboxAction::LevelDown => SandboxCmd::SetLevel(level.saturating_sub(1).max(1)),
         SandboxAction::LevelUp => SandboxCmd::SetLevel((level + 1).min(MAX_LEVEL)),
         SandboxAction::Command(SandboxCmd::SpawnMob { kind, .. }) => {
             SandboxCmd::SpawnMob { kind, level }
         }
         SandboxAction::Command(cmd) => cmd,
-    })
+    }))
 }
 
 /// The compass letters around the minimap, which turns with the camera.
@@ -1048,4 +1154,18 @@ pub fn draw_dungeon_map(game: &Game) {
         me - dir * 6.0 - side * 6.0,
         Color::new(1.0, 0.95, 0.4, 1.0),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_item_is_on_one_sandbox_tab() {
+        let listed: usize = ItemTab::ALL.iter().map(|t| t.items().count()).sum();
+        assert_eq!(listed, ITEMS.len());
+        for tab in ItemTab::ALL {
+            assert!(tab.items().next().is_some(), "{tab:?} is empty");
+        }
+    }
 }
