@@ -834,7 +834,7 @@ impl World {
         std::mem::take(&mut self.outbox)
     }
 
-    fn send(&mut self, to: Audience, event: GameEvent) {
+    pub(crate) fn send(&mut self, to: Audience, event: GameEvent) {
         self.outbox.push((to, ServerMsg::Event(event)));
     }
 
@@ -1408,30 +1408,35 @@ impl World {
         self.refresh_stats(id);
     }
 
+    /// Sets a player's level (clamped to 1..=MAX_LEVEL), starting it with no
+    /// XP and full health. Used by the sandbox cheat and the server host's
+    /// `level` command.
+    pub fn set_level(&mut self, id: EntityId, level: u8) {
+        let level = level.clamp(1, MAX_LEVEL);
+        let e = self.entities.get_mut(&id).unwrap();
+        let class = e.player().unwrap().class;
+        let old = e.level;
+        e.level = level;
+        e.player_mut().unwrap().xp = 0;
+        e.max_power = class.max_power(level);
+        e.power = class.starting_power(level).max(e.power.min(e.max_power));
+        let ranks = e.player().unwrap().talents;
+        self.set_talents(id, ranks);
+        let e = self.entities.get_mut(&id).unwrap();
+        e.hp = e.max_hp;
+        let pos = e.pos;
+        if level != old {
+            self.send(Audience::Near(pos), GameEvent::LevelUp { id, level });
+        }
+    }
+
     /// Sandbox cheats.
     fn sandbox(&mut self, id: EntityId, cmd: SandboxCmd) -> Result<(), &'static str> {
         if !self.sandbox {
             return Err("Sandbox commands only work in sandbox mode.");
         }
         match cmd {
-            SandboxCmd::SetLevel(level) => {
-                let level = level.clamp(1, MAX_LEVEL);
-                let e = self.entities.get_mut(&id).unwrap();
-                let class = e.player().unwrap().class;
-                let old = e.level;
-                e.level = level;
-                e.player_mut().unwrap().xp = 0;
-                e.max_power = class.max_power(level);
-                e.power = class.starting_power(level).max(e.power.min(e.max_power));
-                let ranks = e.player().unwrap().talents;
-                self.set_talents(id, ranks);
-                let e = self.entities.get_mut(&id).unwrap();
-                e.hp = e.max_hp;
-                let pos = e.pos;
-                if level != old {
-                    self.send(Audience::Near(pos), GameEvent::LevelUp { id, level });
-                }
-            }
+            SandboxCmd::SetLevel(level) => self.set_level(id, level),
             SandboxCmd::AddMoney(copper) => {
                 let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
                 p.money = p.money.saturating_add(copper);

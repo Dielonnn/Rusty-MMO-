@@ -148,6 +148,19 @@ impl Store {
         Ok(())
     }
 
+    /// Sets a saved character's level and clears its XP. Returns the name as
+    /// saved, or `None` if there's no such character.
+    pub fn set_level(&mut self, name: &str, level: u8) -> Option<String> {
+        let c = self
+            .characters
+            .iter_mut()
+            .find(|c| c.name.eq_ignore_ascii_case(name))?;
+        c.level = level;
+        c.xp = 0;
+        c.sanitize();
+        Some(c.name.clone())
+    }
+
     /// Stores a character's latest state.
     pub fn update(&mut self, c: Character) {
         match self.characters.iter_mut().find(|old| old.name == c.name) {
@@ -158,6 +171,13 @@ impl Store {
 
     /// Writes the save file if anything changed.
     pub fn save(&mut self) -> io::Result<()> {
+        self.write().map_err(|e| match &self.path {
+            Some(path) => io::Error::new(e.kind(), format!("{}: {e}", path.display())),
+            None => e,
+        })
+    }
+
+    fn write(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };

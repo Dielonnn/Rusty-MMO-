@@ -9,6 +9,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use shared::data::MAX_LEVEL;
 use shared::net::Connection;
 use shared::protocol::*;
 use shared::world::VIEW_DISTANCE;
@@ -45,6 +46,8 @@ struct Client {
     connected_at: Instant,
 }
 
+const HELP: &str = "Commands: level NAME LEVEL (sets a character's level, online or not), help";
+
 pub struct Server {
     listener: TcpListener,
     clients: HashMap<u64, Client>,
@@ -57,6 +60,8 @@ pub struct Server {
     /// Accounts need passwords. Off for the solo and sandbox servers,
     /// which only this computer can reach.
     pub passwords: bool,
+    /// Commands typed into the server's window, if it reads them.
+    console: Option<Receiver<String>>,
 }
 
 impl Server {
@@ -75,6 +80,7 @@ impl Server {
             since_save: 0.0,
             verbose: true,
             passwords: true,
+            console: None,
         })
     }
 
@@ -100,8 +106,75 @@ impl Server {
         }
     }
 
+    /// Reads commands typed into the server's window (see [`Server::command`]).
+    pub fn read_console(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("console".into())
+            .spawn(move || {
+                for line in io::stdin().lines() {
+                    let Ok(line) = line else { break };
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+        if spawned.is_ok() {
+            self.console = Some(rx);
+        }
+    }
+
+    /// Runs one host command and returns what to print.
+    pub fn command(&mut self, line: &str) -> String {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words.as_slice() {
+            [] => String::new(),
+            ["level", name, level] => {
+                let Ok(level) = level.parse::<u8>() else {
+                    return format!("Levels are 1 to {MAX_LEVEL}.");
+                };
+                if !(1..=MAX_LEVEL).contains(&level) {
+                    return format!("Levels are 1 to {MAX_LEVEL}.");
+                }
+                if let Some(id) = self.world.player_named(name) {
+                    self.world.set_level(id, level);
+                    self.world.send(
+                        Audience::Only(id),
+                        GameEvent::System(format!("The server host set your level to {level}.")),
+                    );
+                    let name = self.world.entities[&id].name.clone();
+                    self.save();
+                    format!("{name} is now level {level}.")
+                } else if let Some(name) = self.store.set_level(name, level) {
+                    self.save();
+                    format!("{name} (offline) is now level {level}.")
+                } else {
+                    format!("There's no character named {name}.")
+                }
+            }
+            ["help"] => HELP.to_string(),
+            _ => format!("Unknown command. {HELP}"),
+        }
+    }
+
+    fn console_commands(&mut self) {
+        let mut lines = Vec::new();
+        if let Some(rx) = &self.console {
+            while let Ok(line) = rx.try_recv() {
+                lines.push(line);
+            }
+        }
+        for line in lines {
+            let out = self.command(&line);
+            if !out.is_empty() {
+                println!("{out}");
+            }
+        }
+    }
+
     /// One server tick: network in, simulate, network out, maybe save.
     pub fn step(&mut self, dt: f32) {
+        self.console_commands();
         self.accept();
         self.receive();
         self.world.tick(dt);
@@ -621,6 +694,51 @@ mod tests {
         });
         assert!(matches!(got.last(), Some(ServerMsg::Characters(list)) if list[0].level == 2));
         assert!(server.world.entities.values().all(|e| e.player().is_none()));
+    }
+
+    #[test]
+    fn host_sets_levels_online_and_offline() {
+        let mut server = Server::bind("127.0.0.1:0", Store::in_memory()).unwrap();
+        server.verbose = false;
+        server
+            .store
+            .create("bob", "Brom", Class::Fighter, Appearance::default())
+            .unwrap();
+        let mut conn = connect(&server, "Ann");
+        pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        conn.send(&ClientMsg::CreateCharacter {
+            name: "aria".into(),
+            class: Class::Mage,
+            appearance: Appearance::default(),
+        })
+        .unwrap();
+        pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        conn.send(&ClientMsg::EnterWorld("Aria".into())).unwrap();
+        pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Snapshot(_))
+        });
+
+        assert_eq!(server.command("level aria 12"), "Aria is now level 12.");
+        let id = server.world.player_named("Aria").unwrap();
+        assert_eq!(server.world.entities[&id].level, 12);
+        assert_eq!(
+            server.command("level brom 7"),
+            "Brom (offline) is now level 7."
+        );
+        assert_eq!(server.store.get("bob", "Brom").unwrap().level, 7);
+        assert!(server.command("level brom 99").starts_with("Levels are"));
+        assert!(server.command("level nobody 3").starts_with("There's no"));
+        assert!(server.command("dance").starts_with("Unknown command"));
+
+        conn.send(&ClientMsg::Logout).unwrap();
+        let got = pump(&mut server, &mut conn, |m| {
+            matches!(m, ServerMsg::Characters(_))
+        });
+        assert!(matches!(got.last(), Some(ServerMsg::Characters(list)) if list[0].level == 12));
     }
 
     #[test]
