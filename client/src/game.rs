@@ -137,6 +137,8 @@ pub struct Game {
     pub errors: Vec<(String, f32)>,
     /// Ground a boss has marked, about to be hit.
     hazards: Vec<HazardView>,
+    /// The vault's teleporter out, once its boss is dead.
+    portal: Option<Vec3>,
     pub floats: Vec<FloatText>,
     pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
@@ -201,6 +203,7 @@ impl Game {
             chat_input: None,
             errors: Vec::new(),
             hazards: Vec::new(),
+            portal: None,
             floats: Vec::new(),
             banner: None,
             cast_flash: None,
@@ -282,7 +285,7 @@ impl Game {
         if self.windows.quest_giver.is_some() {
             let level = self.level();
             let giver =
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags)
+                crate::quests_ui::giver_layout(self.place, &self.me.quests, level, &self.me.bags)
                     .window;
             layout.quest_window = Some(giver);
             draggable.push((crate::drag::Win::QuestGiver, giver));
@@ -378,8 +381,10 @@ impl Game {
         }
     }
 
+    /// Next to the waystone, or the vault's teleporter once it's open.
     pub fn near_waystone(&self) -> bool {
-        flat_distance(self.pos, self.waystone()) <= WAYSTONE_RANGE
+        let near = |at: Vec3| flat_distance(self.pos, at) <= WAYSTONE_RANGE;
+        near(self.waystone()) || self.portal.is_some_and(near)
     }
 
     /// Asks to go somewhere from the waystone you're at.
@@ -445,6 +450,7 @@ impl Game {
                 }
                 self.entities.retain(|id, _| seen.contains(id));
                 self.hazards = std::mem::take(&mut snap.hazards);
+                self.portal = snap.portal;
                 if snap.me.talents != self.me.talents {
                     self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
                 }
@@ -1127,7 +1133,7 @@ impl Game {
             && left
         {
             let l =
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags);
+                crate::quests_ui::giver_layout(self.place, &self.me.quests, level, &self.me.bags);
             if l.close.contains(mouse) {
                 self.windows.quest_giver = None;
                 return;
@@ -1529,6 +1535,18 @@ impl Game {
                 b.ground_ring(h.pos, r, 0.35, fill);
                 r += 0.7;
             }
+        }
+        // The teleporter: a glowing blue swirl over a ring on the floor.
+        if let Some(at) = self.portal {
+            let blue = Color::new(0.35, 0.7, 1.0, 0.9);
+            b.ground_ring(at, 1.6, 0.25, blue);
+            for i in 0..6 {
+                let k = (self.time * 0.6 + i as f32 / 6.0).fract();
+                let ring = Color::new(0.45, 0.8, 1.0, 0.8 * (1.0 - k));
+                b.air_ring(at + Vec3::Y * (0.2 + k * 3.0), 1.4 - k * 0.6, 0.12, ring);
+            }
+            let bob = 1.6 + 0.15 * (self.time * 2.0).sin();
+            b.glow_sphere(at + Vec3::Y * bob, 0.35, Color::new(0.7, 0.9, 1.0, 1.0));
         }
         for e in self.entities.values() {
             let mine = Some(e.view.id) == self.my_id;

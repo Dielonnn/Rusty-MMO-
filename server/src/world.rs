@@ -477,6 +477,28 @@ pub struct World {
     free_camps: Vec<usize>,
     /// Ground marked by bosses, about to be hit.
     hazards: Vec<Hazard>,
+    /// Spells in flight.
+    missiles: Vec<Missile>,
+}
+
+/// How hard an ability hits, fixed when it's used.
+#[derive(Clone, Copy, Debug)]
+struct Power {
+    scale: f32,
+    harm: f32,
+    heal: f32,
+    crit: f32,
+}
+
+/// A spell or shot on its way to its target.
+#[derive(Clone, Copy, Debug)]
+struct Missile {
+    caster: EntityId,
+    ability: AbilityId,
+    target: EntityId,
+    /// Seconds until it arrives.
+    eta: f32,
+    power: Power,
 }
 
 impl World {
@@ -494,6 +516,7 @@ impl World {
             instances: BTreeMap::new(),
             free_camps: Vec::new(),
             hazards: Vec::new(),
+            missiles: Vec::new(),
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -514,14 +537,25 @@ impl World {
 
     /// A townsperson standing at their spot in a zone's town.
     fn spawn_npc(&mut self, zone: Zone, role: NpcRole) -> EntityId {
-        let id = self.alloc_id();
         let (spot, name) = match role {
             NpcRole::Merchant => (MERCHANT_SPOT, zone.merchant_name()),
             NpcRole::QuestGiver => (QUEST_SPOT, quests::quest_giver_name(zone)),
         };
         let pos = zone.ground_local(spot);
         let center = zone.ground_local(Vec2::ZERO);
-        let yaw = yaw_towards(pos, center);
+        self.spawn_npc_at(zone, role, name, pos, yaw_towards(pos, center))
+    }
+
+    /// Puts an NPC of `zone`'s race at `pos`.
+    fn spawn_npc_at(
+        &mut self,
+        zone: Zone,
+        role: NpcRole,
+        name: &str,
+        pos: Vec3,
+        yaw: f32,
+    ) -> EntityId {
+        let id = self.alloc_id();
         self.entities.insert(
             id,
             Entity {
@@ -795,6 +829,7 @@ impl World {
         Some(Snapshot {
             tick: self.tick,
             hazards: self.hazards_near(me.pos),
+            portal: self.portal_at(me.pos),
             entities,
             me: SelfView {
                 xp: p.xp,
@@ -1397,7 +1432,8 @@ impl World {
         let Brain::Npc(n) = &g.brain else {
             return Err("They have no quests for you.");
         };
-        if n.role != NpcRole::QuestGiver || quests::quest(quest).zone != n.zone {
+        let theirs = quests::offered(Place::at(g.pos));
+        if n.role != NpcRole::QuestGiver || !theirs.iter().any(|q| q.id == quest) {
             return Err("They have no quests for you.");
         }
         if g.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
@@ -1805,7 +1841,62 @@ impl World {
                 ability: id,
             },
         );
+        let power = Power {
+            scale,
+            harm: harm_scale,
+            heal: heal_scale,
+            crit,
+        };
+        // A missile hits when it gets there, not when it's thrown.
+        if a.projectile
+            && let Some(t) = target.filter(|&t| t != caster)
+        {
+            let class = match self.entities[&caster].kind() {
+                EntityKind::Player(c) => Some(c),
+                _ => None,
+            };
+            let eta = pos.distance(self.pos_of(t)) / a.missile_speed(class);
+            self.missiles.push(Missile {
+                caster,
+                ability: id,
+                target: t,
+                eta,
+                power,
+            });
+            return;
+        }
+        self.land(caster, id, target, power);
+    }
 
+    /// Missiles fly on; those that arrive land their ability's effects.
+    fn tick_missiles(&mut self, dt: f32) {
+        let mut arrived = Vec::new();
+        self.missiles.retain_mut(|m| {
+            m.eta -= dt;
+            if m.eta > 0.0 {
+                return true;
+            }
+            arrived.push(*m);
+            false
+        });
+        for m in arrived {
+            let alive = |id| self.entities.get(&id).is_some_and(|e: &Entity| !e.dead);
+            if self.entities.contains_key(&m.caster) && alive(m.target) {
+                self.land(m.caster, m.ability, Some(m.target), m.power);
+            }
+        }
+    }
+
+    /// An ability's effects reach their targets.
+    fn land(&mut self, caster: EntityId, id: AbilityId, target: Option<EntityId>, power: Power) {
+        let a = ability(id);
+        let pos = self.pos_of(caster);
+        let Power {
+            scale,
+            harm: harm_scale,
+            heal: heal_scale,
+            crit,
+        } = power;
         let targets: Vec<EntityId> = match a.targeting {
             Targeting::Enemy | Targeting::Friendly => target.into_iter().collect(),
             Targeting::Caster => vec![caster],
@@ -2254,6 +2345,9 @@ impl World {
         self.forget(victim);
         let Some(kind) = mob_kind else { return };
         let t = kind.template();
+        if t.boss {
+            self.open_portal(pos);
+        }
         // Everyone who fought the mob, and their party members nearby, share
         // the kill and may loot it.
         let fighters: Vec<EntityId> = fighters
@@ -2321,6 +2415,7 @@ impl World {
         self.tick_parties(dt);
         self.tick_instances(dt);
         self.tick_hazards(dt);
+        self.tick_missiles(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -3006,7 +3101,7 @@ mod tests {
         let p = join(&mut w, "Pyro", Class::Mage, 1);
         let boar = engage(&mut w, p, MobKind::Boar);
         w.try_use(p, ids::FIREBALL).unwrap();
-        run(&mut w, 2.6);
+        run(&mut w, 3.2);
         assert!(
             w.entities[&boar]
                 .auras
@@ -3100,7 +3195,7 @@ mod tests {
             e.power = e.max_power;
             face(&mut w, p, boar);
             w.try_use(p, ability_id).unwrap();
-            run(&mut w, 3.0);
+            run(&mut w, 4.0);
             let b = &w.entities[&boar];
             assert_eq!(
                 b.mob().unwrap().state,
@@ -3256,7 +3351,7 @@ mod tests {
         run(&mut w, 1.6);
         face(&mut w, p, boar);
         w.try_use(p, ids::FIREBALL).unwrap();
-        run(&mut w, 2.6);
+        run(&mut w, 3.2);
         assert!(w.entities[&boar].hp < hp);
         assert!(w.entities[&boar].mob().unwrap().state == MobState::Combat);
     }
@@ -3523,6 +3618,9 @@ mod tests {
         e.yaw = yaw_towards(e.pos, bpos);
         w.try_use(p, ids::MULTI_SHOT).unwrap();
         let hurt = |w: &World, id| w.entities[&id].hp < w.entities[&id].max_hp;
+        // It lands when the arrows get there, not when they're loosed.
+        assert!(!hurt(&w, boar));
+        run(&mut w, 1.0);
         assert!(hurt(&w, boar) && hurt(&w, other));
         assert!(!hurt(&w, far));
     }
@@ -3647,7 +3745,7 @@ mod tests {
         w.entities.get_mut(&p).unwrap().pos = ground(spos.x + 15.0, spos.z);
         w.entities.get_mut(&shaman).unwrap().target = Some(p);
         assert_eq!(w.try_use(shaman, ids::FROSTBOLT), Ok(()));
-        run(&mut w, 2.1);
+        run(&mut w, 2.8);
         assert!(
             w.entities[&p]
                 .auras
@@ -3844,6 +3942,52 @@ mod tests {
         assert!(w.buy(p, giver, items::HEALING_POTION).is_err());
         w.handle(p, ClientMsg::AbandonQuest(elite));
         assert_eq!(w.entities[&p].player().unwrap().quests.active.len(), 0);
+    }
+
+    #[test]
+    fn dungeon_master_joe_sends_you_after_the_sunken_king() {
+        let mut w = World::new(45);
+        let p = join(&mut w, "Hero", Class::Mage, 10);
+        let ours = quests::vault_quest().id;
+        // The town quest givers don't offer it.
+        let giver = visit_giver(&mut w, p, Zone::Amberfall);
+        assert!(w.accept_quest(p, giver, ours).is_err());
+        at_waystone(&mut w, p);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let joe = w
+            .entities
+            .values()
+            .find(|e| e.name == quests::VAULT_GIVER && Place::at(e.pos) == Place::Dungeon(index))
+            .unwrap()
+            .id;
+        assert_eq!(w.entities[&joe].kind(), EntityKind::QuestGiver(Race::Human));
+        assert!(
+            w.accept_quest(p, joe, quests::zone_quests(Zone::Amberfall)[0].id)
+                .is_err()
+        );
+        assert_eq!(w.accept_quest(p, joe, ours), Ok(()));
+        // Kill the King, come back to Joe, and the trident is yours.
+        let king = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
+            .unwrap();
+        w.provoke(p, king, 10.0);
+        w.kill(king, Some(p));
+        assert_eq!(
+            w.entities[&p].player().unwrap().quests.progress(ours),
+            Some(1)
+        );
+        assert_eq!(w.turn_in_quest(p, joe, ours), Ok(()));
+        let bags = &w.entities[&p].player().unwrap().bags;
+        assert!(bags.contains(&Some((items::TIDEBREAKER_TRIDENT, 1))));
+        // Joe goes when the vault closes.
+        w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        run(&mut w, dungeon::EMPTY_RESET + 5.0);
+        assert!(!w.entities.contains_key(&joe));
     }
 
     #[test]
@@ -4104,23 +4248,31 @@ mod tests {
             let at = marked.expect("no Tidal Crash");
             assert!(at.distance(w.entities[&p].pos) < 0.5);
             assert!(!w.snapshot_for(p).unwrap().hazards.is_empty());
-            if dodge {
-                let e = w.entities.get_mut(&p).unwrap();
-                e.pos = ground(e.pos.x + 8.0, e.pos.z);
-            }
-            // Keep the boss from swinging, so only the crash can hurt.
+            // It comes down twice in a row, the second time wherever you are
+            // when the first lands.
             let hp = w.entities[&p].hp;
-            for _ in 0..(boss::CRASH_WARNING / DT) as usize + 2 {
-                w.entities.get_mut(&boss).unwrap().swing_timer = 10.0;
-                w.entities.get_mut(&boss).unwrap().cast = None;
-                w.tick(DT);
+            for crash in 0..boss::CRASH_TIMES {
+                if dodge {
+                    let e = w.entities.get_mut(&p).unwrap();
+                    e.pos = ground(e.pos.x + 8.0, e.pos.z);
+                }
+                // Keep the boss from swinging, so only the crash can hurt.
+                for _ in 0..(boss::CRASH_WARNING / DT) as usize + 2 {
+                    w.entities.get_mut(&boss).unwrap().swing_timer = 10.0;
+                    w.entities.get_mut(&boss).unwrap().cast = None;
+                    w.tick(DT);
+                }
+                if crash + 1 < boss::CRASH_TIMES {
+                    let next = w.hazards.first().expect("no second Tidal Crash");
+                    assert!(next.pos.distance(w.entities[&p].pos) < 0.5);
+                }
             }
             assert!(w.hazards.is_empty());
             let lost = hp - w.entities[&p].hp;
             if dodge {
                 assert_eq!(lost, 0.0, "dodged but lost {lost}");
             } else {
-                assert!(lost > 30.0, "stood in it and lost only {lost}");
+                assert!(lost > 60.0, "stood in both and lost only {lost}");
             }
         }
     }
@@ -4362,6 +4514,30 @@ mod tests {
             .filter(|e| e.mob().is_some() && Place::at(e.pos) == Place::Dungeon(index))
             .map(|e| e.id)
             .collect()
+    }
+
+    #[test]
+    fn killing_the_boss_opens_a_teleporter_out() {
+        let mut w = World::new(12);
+        let p = join(&mut w, "Wren", Class::Mage, 10);
+        at_waystone(&mut w, p);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let king = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
+            .unwrap();
+        let portal = dungeon::to_world(index, dungeon::PORTAL);
+        w.entities.get_mut(&p).unwrap().pos = portal;
+        assert!(w.snapshot_for(p).unwrap().portal.is_none());
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Dungeon(index), "no teleporter yet");
+        w.kill(king, Some(p));
+        assert_eq!(w.snapshot_for(p).unwrap().portal, Some(portal));
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        assert_eq!(place(&w, p), Place::Zone(Zone::Amberfall));
     }
 
     #[test]

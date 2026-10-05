@@ -37,6 +37,11 @@ pub const WALL_THICKNESS: f32 = 1.0;
 pub const ENTRANCE: Vec2 = Vec2::new(0.0, -2.0);
 /// The waystone that takes you back out.
 pub const EXIT_STONE: Vec2 = Vec2::new(0.0, -6.0);
+/// Where the vault's quest giver stands, beside the way in.
+pub const QUEST_GIVER: Vec2 = Vec2::new(4.0, -3.0);
+/// The teleporter that opens in the throne room once the boss is dead. It
+/// works like the waystone at the entrance.
+pub const PORTAL: Vec2 = Vec2::new(-10.0, 128.0);
 
 /// You must be this level to enter.
 pub const MIN_LEVEL: u8 = 8;
@@ -98,35 +103,35 @@ use MobKind::*;
 /// Every mob in a fresh instance. Pull them one pack at a time.
 pub const PACKS: [Pack; 10] = [
     // Kennels
-    pack(-6.0, 32.0, 3.0, &[(VaultHound, (9, 9), 2)]),
-    pack(6.0, 42.0, 3.0, &[(VaultHound, (9, 9), 2)]),
+    pack(-6.0, 32.0, 3.0, &[(VaultHound, (10, 10), 2)]),
+    pack(6.0, 42.0, 3.0, &[(VaultHound, (10, 10), 2)]),
     pack(
         0.0,
         44.0,
         2.0,
-        &[(DrownedEnforcer, (9, 9), 1), (DrownedAdept, (9, 9), 1)],
+        &[(DrownedEnforcer, (10, 10), 1), (DrownedAdept, (10, 10), 1)],
     ),
     // Crawler Nest
-    pack(36.0, 30.0, 4.0, &[(VaultCrawler, (9, 10), 3)]),
-    pack(48.0, 42.0, 4.0, &[(VaultCrawler, (9, 10), 3)]),
+    pack(36.0, 30.0, 4.0, &[(VaultCrawler, (10, 11), 3)]),
+    pack(48.0, 42.0, 4.0, &[(VaultCrawler, (10, 11), 3)]),
     // Warden's Hall
     pack(
         38.0,
         78.0,
         2.0,
-        &[(DrownedEnforcer, (9, 10), 1), (DrownedAdept, (9, 10), 1)],
+        &[(DrownedEnforcer, (10, 11), 1), (DrownedAdept, (10, 11), 1)],
     ),
-    pack(42.0, 90.0, 1.0, &[(StoneWarden, (10, 10), 1)]),
+    pack(42.0, 90.0, 1.0, &[(StoneWarden, (11, 11), 1)]),
     // Drowned Chapel
     pack(
         -10.0,
         80.0,
         3.0,
-        &[(DrownedEnforcer, (10, 10), 2), (DrownedAdept, (10, 10), 1)],
+        &[(DrownedEnforcer, (11, 11), 2), (DrownedAdept, (11, 11), 1)],
     ),
-    pack(-16.0, 92.0, 2.0, &[(DrownedAdept, (10, 10), 2)]),
+    pack(-16.0, 92.0, 2.0, &[(DrownedAdept, (11, 11), 2)]),
     // Throne of the Deep
-    pack(-10.0, 142.0, 1.0, &[(SunkenKing, (10, 10), 1)]),
+    pack(-10.0, 142.0, 1.0, &[(SunkenKing, (11, 11), 1)]),
 ];
 
 /// Where instance `index`'s entrance really is, on the XZ plane.
@@ -449,7 +454,7 @@ mod tests {
 
     #[test]
     fn entrance_packs_and_stone_are_on_open_floor() {
-        assert!(open(ENTRANCE) && open(EXIT_STONE));
+        assert!(open(ENTRANCE) && open(EXIT_STONE) && open(PORTAL) && open(QUEST_GIVER));
         assert!(!blocked(to_world(0, ENTRANCE), 0.45));
         for p in &PACKS {
             assert!(open(p.center), "pack at {}", p.center);

@@ -6,7 +6,7 @@ use macroquad::prelude::*;
 use shared::data::*;
 use shared::dungeon;
 use shared::protocol::*;
-use shared::world::Zone;
+use shared::world::{Place, Zone};
 
 use crate::drag::{self, Win};
 use crate::game::{Game, Windows, wrap_angle};
@@ -997,7 +997,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         .and_then(|id| game.entities.get(&id))
         && let Some((icon, id)) = crate::quests_ui::draw_giver(
             &giver.view.name,
-            game.zone,
+            game.place,
             &game.me.quests,
             level,
             &game.me.bags,
@@ -1644,7 +1644,7 @@ fn nameplates(game: &Game, cam: &Camera3D) {
             if matches!(v.kind, EntityKind::QuestGiver(_))
                 && let Some(m) = crate::quests_ui::marker(
                     &game.me.quests,
-                    Zone::at(e.pos),
+                    Place::at(e.pos),
                     my_level,
                     &game.me.bags,
                 )
@@ -1762,7 +1762,7 @@ fn minimap(game: &Game, layout: &Layout) {
         }
         if matches!(e.view.kind, EntityKind::QuestGiver(_))
             && let Some(mk) =
-                crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
+                crate::quests_ui::marker(&game.me.quests, game.place, game.level(), &game.me.bags)
         {
             let s = if mk == crate::quests_ui::Marker::Ready {
                 "?"

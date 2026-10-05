@@ -1,11 +1,12 @@
 //! Quests: every starting area's quest giver offers three. Hunt a number of
 //! the area's beasts, craft a piece of armor and hand it over, and slay the
-//! area's elite.
+//! area's elite. A quest giver at the Sunken Vault's entrance sends you
+//! after its king.
 
 use serde::{Deserialize, Serialize};
 
 use crate::data::{ItemId, MobKind, items};
-use crate::world::Zone;
+use crate::world::{Place, Zone};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QuestId(pub u16);
@@ -35,6 +36,8 @@ pub struct Quest {
     /// In copper.
     pub money: u32,
     pub reward: Option<ItemId>,
+    /// Offered at the Sunken Vault's entrance instead of in `zone`.
+    pub vault: bool,
 }
 
 /// Quests you can have at once.
@@ -106,13 +109,41 @@ pub fn zone_quests(zone: Zone) -> &'static [Quest] {
     &QUESTS[i..i + 3]
 }
 
+/// The quest the giver at the Sunken Vault's entrance offers.
+pub fn vault_quest() -> &'static Quest {
+    &QUESTS[18]
+}
+
+/// The quests offered by the quest giver at `place`: a town's three, or the
+/// vault's own.
+pub fn offered(place: Place) -> &'static [Quest] {
+    match place {
+        Place::Zone(zone) => zone_quests(zone),
+        Place::Dungeon(_) => std::slice::from_ref(vault_quest()),
+    }
+}
+
+/// The quest giver at the Sunken Vault's entrance.
+pub const VAULT_GIVER: &str = "Dungeon Master Joe";
+
+impl Quest {
+    /// Who gives the quest (and takes it back), and where they are.
+    pub fn giver(&self) -> (&'static str, &'static str) {
+        if self.vault {
+            (VAULT_GIVER, crate::dungeon::NAME)
+        } else {
+            (quest_giver_name(self.zone), self.zone.town_name())
+        }
+    }
+}
+
 /// The quest giver in each town.
 pub fn quest_giver_name(zone: Zone) -> &'static str {
     match zone {
         Zone::Amberfall => "Marshal Edda Vane",
         Zone::Scorchsand => "Warchief Ruk",
         Zone::Silverbough => "Ranger Lyssara",
-        Zone::Grubdeep => "Foreman Skizzle",
+        Zone::Grubdeep => "Issagoblin",
         Zone::Frostcog => "Tinker Pip Gearwhistle",
         Zone::Witherwood => "Deathguard Morrow",
     }
@@ -140,6 +171,7 @@ const fn hunt(
         xp: 250,
         money: 150,
         reward: Some(reward),
+        vault: false,
     }
 }
 
@@ -163,6 +195,7 @@ const fn craft(
         xp: 350,
         money: 300,
         reward: Some(reward),
+        vault: false,
     }
 }
 
@@ -186,12 +219,13 @@ const fn elite(
         xp: 600,
         money: 2000,
         reward: Some(reward),
+        vault: false,
     }
 }
 
 use items::*;
 
-pub static QUESTS: [Quest; 18] = [
+pub static QUESTS: [Quest; 19] = [
     // Amberfall Vale
     hunt(
         0,
@@ -366,6 +400,23 @@ pub static QUESTS: [Quest; 18] = [
         "The colossus is dust. Gravenhold stands because of you.",
         IRONBARK_JERKIN,
     ),
+    // The Sunken Vault, from the quest giver at its entrance.
+    Quest {
+        id: QuestId(18),
+        zone: Zone::Amberfall,
+        name: "The Sunken King",
+        text: "Morvane the Sunken King sits on a drowned throne at the bottom of this vault, calling the dead to serve him. Fight your way down through the halls and end his reign. Bring friends.",
+        done_text: "His call has gone quiet. The tide is turning. Take his trident; you've earned it more than he ever did.",
+        goal: Goal::Kill {
+            kind: MobKind::SunkenKing,
+            count: 1,
+        },
+        min_level: 8,
+        xp: 1200,
+        money: 5000,
+        reward: Some(TIDEBREAKER_TRIDENT),
+        vault: true,
+    },
 ];
 
 #[cfg(test)]
@@ -398,6 +449,27 @@ mod tests {
             assert!(matches!(qs[2].goal, Goal::Kill { kind, count: 1 } if kind == mobs[4]));
             assert!(mobs[4].template().elite);
         }
+    }
+
+    #[test]
+    fn the_vault_has_its_own_quest() {
+        for zone in Zone::ALL {
+            assert!(offered(Place::Zone(zone)).iter().all(|q| !q.vault));
+        }
+        let vault = offered(Place::Dungeon(3));
+        assert_eq!(vault.len(), 1);
+        let q = &vault[0];
+        assert!(q.vault);
+        assert!(matches!(
+            q.goal,
+            Goal::Kill {
+                kind: MobKind::SunkenKing,
+                count: 1
+            }
+        ));
+        let reward = item(q.reward.unwrap());
+        assert!(matches!(reward.kind, ItemKind::Weapon { .. }));
+        assert_eq!(reward.quality, crate::data::Quality::Rare);
     }
 
     #[test]

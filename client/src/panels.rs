@@ -325,9 +325,12 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
             EntityKind::Player(class) => class_color(class),
             EntityKind::Merchant(_) => GOLD,
             EntityKind::QuestGiver(_) => {
-                if let Some(m) =
-                    crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
-                {
+                if let Some(m) = crate::quests_ui::marker(
+                    &game.me.quests,
+                    Place::Zone(zone),
+                    game.level(),
+                    &game.me.bags,
+                ) {
                     let s = if m == crate::quests_ui::Marker::Ready {
                         "?"
                     } else {

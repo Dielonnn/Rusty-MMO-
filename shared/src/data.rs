@@ -640,7 +640,23 @@ pub struct Ability {
     pub from_behind: bool,
 }
 
+/// How fast a spell's missile flies, in yards per second.
+pub const MISSILE_SPEED: f32 = 32.0;
+
 impl Ability {
+    /// How fast this ability's missile flies when `class` (`None` for a mob)
+    /// uses it. Arrows and bullets are quicker than spells; its damage lands
+    /// when the missile does.
+    pub fn missile_speed(&self, class: Option<Class>) -> f32 {
+        let fast = self.school == School::Physical
+            && matches!(class, Some(Class::Ranger | Class::Artificer) | None);
+        if fast {
+            MISSILE_SPEED * 1.6
+        } else {
+            MISSILE_SPEED
+        }
+    }
+
     pub fn needs_combo_points(&self) -> bool {
         self.effects
             .iter()
@@ -2518,6 +2534,8 @@ pub mod items {
     pub const BOAR_MEAT: ItemId = ItemId(39);
     pub const COOKED_FISH: ItemId = ItemId(40);
     pub const ROASTED_BOAR: ItemId = ItemId(41);
+    // The Sunken Vault quest.
+    pub const TIDEBREAKER_TRIDENT: ItemId = ItemId(42);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2672,7 +2690,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 42] = [
+pub static ITEMS: [Item; 43] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -3065,6 +3083,16 @@ pub static ITEMS: [Item; 42] = [
         "Charred on the outside, juicy within.",
         FOOD_HEALTH,
         (0.55, 0.3, 0.18),
+    ),
+    weapon(
+        "Tidebreaker Trident",
+        "Taken from the Sunken King's throne. Seawater still drips from its tines.",
+        8.0,
+        7.0,
+        4.0,
+        Quality::Rare,
+        (0.2, 0.7, 0.75),
+        4500,
     ),
 ];
 
@@ -4205,6 +4233,7 @@ mod tests {
             (HEARTSTONE_GREATSWORD, "Heartstone Greatsword"),
             (MOONWHISPER_STAFF, "Moonwhisper Staff"),
             (CROWN_OF_THE_SUNKEN_KING, "Crown of the Sunken King"),
+            (TIDEBREAKER_TRIDENT, "Tidebreaker Trident"),
         ] {
             assert_eq!(item(id).name, name);
         }

@@ -22,6 +22,8 @@ pub struct Instance {
     camps: Vec<usize>,
     /// Seconds since anyone was inside.
     empty_for: f32,
+    /// The boss is dead and the teleporter out is open.
+    pub portal: bool,
 }
 
 impl World {
@@ -78,18 +80,30 @@ impl World {
                 }
             }
         }
+        // A human quest giver waits by the way in.
+        let pos = dungeon::to_world(index, dungeon::QUEST_GIVER);
+        let entrance = dungeon::to_world(index, dungeon::ENTRANCE);
+        self.spawn_npc_at(
+            Zone::Amberfall,
+            NpcRole::QuestGiver,
+            quests::VAULT_GIVER,
+            pos,
+            yaw_towards(pos, entrance),
+        );
         self.instances.insert(
             index,
             Instance {
                 owner,
                 camps,
                 empty_for: 0.0,
+                portal: false,
             },
         );
         Ok(index)
     }
 
-    /// Closes a copy of the vault: its mobs and corpses are gone.
+    /// Closes a copy of the vault: its mobs, corpses and quest giver are
+    /// gone.
     fn close_instance(&mut self, index: u32) {
         let Some(inst) = self.instances.remove(&index) else {
             return;
@@ -97,7 +111,11 @@ impl World {
         let gone: Vec<EntityId> = self
             .entities
             .values()
-            .filter(|e| e.mob().is_some_and(|m| inst.camps.contains(&m.camp)))
+            .filter(|e| {
+                e.mob().is_some_and(|m| inst.camps.contains(&m.camp))
+                    || (matches!(e.brain, Brain::Npc(_))
+                        && Place::at(e.pos) == Place::Dungeon(index))
+            })
             .map(|e| e.id)
             .collect();
         for id in gone {
@@ -124,7 +142,8 @@ impl World {
             .push((Audience::Only(id), ServerMsg::SetPosition { pos, yaw }));
     }
 
-    /// The waystone `id` is standing at, if any: the place it's in.
+    /// The waystone (or the vault's teleporter) `id` is standing at, if
+    /// any: the place it's in.
     fn waystone_near(&self, id: EntityId) -> Option<Place> {
         let pos = self.entities[&id].pos;
         let place = Place::at(pos);
@@ -132,7 +151,35 @@ impl World {
             Place::Zone(z) => z.ground_local(WAYSTONE_SPOT),
             Place::Dungeon(i) => dungeon::to_world(i, dungeon::EXIT_STONE),
         };
-        (flat_distance(pos, stone) <= WAYSTONE_RANGE).then_some(place)
+        let near = |at: Vec3| flat_distance(pos, at) <= WAYSTONE_RANGE;
+        (near(stone) || self.portal_at(pos).is_some_and(near)).then_some(place)
+    }
+
+    /// The open teleporter in the copy of the vault at `pos`, if any.
+    pub(super) fn portal_at(&self, pos: Vec3) -> Option<Vec3> {
+        let Place::Dungeon(i) = Place::at(pos) else {
+            return None;
+        };
+        self.instances
+            .get(&i)
+            .filter(|inst| inst.portal)
+            .map(|_| dungeon::to_world(i, dungeon::PORTAL))
+    }
+
+    /// A boss died: open its vault's teleporter.
+    pub(super) fn open_portal(&mut self, at: Vec3) {
+        let Place::Dungeon(i) = Place::at(at) else {
+            return;
+        };
+        if let Some(inst) = self.instances.get_mut(&i)
+            && !inst.portal
+        {
+            inst.portal = true;
+            self.send(
+                Audience::Near(at),
+                GameEvent::System("A teleporter opens in the throne room.".into()),
+            );
+        }
     }
 
     /// Where travelers to a town arrive, and which way they face.

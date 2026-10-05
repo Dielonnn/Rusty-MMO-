@@ -1,14 +1,20 @@
 //! Dungeon boss mechanics. Morvane the Sunken King marks the ground under
-//! everyone fighting him with Tidal Crash (get out before it lands), and
+//! everyone fighting him with Tidal Crash (get out before it lands, then
+//! again, since it comes twice in a row), and
 //! casts two spells worth interrupting: Drowning Grasp, a heavy hit on his
 //! target, and Call of the Deep, which heals him.
 
 use super::*;
 
-/// Seconds between Tidal Crashes, how long the warning lasts, how wide each
-/// circle is, and what it hits for (before scaling with the boss's level).
-pub const CRASH_INTERVAL: f32 = 12.0;
-pub const CRASH_WARNING: f32 = 2.5;
+/// How much faster Tidal Crash comes than it first did (12 seconds apart
+/// with 2.5 seconds' warning).
+const CRASH_SPEED: f32 = 1.15;
+/// Seconds between Tidal Crashes, how long the warning lasts, how many land
+/// in a row, how wide each circle is, and what it hits for (before scaling
+/// with the boss's level).
+pub const CRASH_INTERVAL: f32 = 12.0 / CRASH_SPEED;
+pub const CRASH_WARNING: f32 = 2.5 / CRASH_SPEED;
+pub const CRASH_TIMES: u8 = 2;
 pub const CRASH_RADIUS: f32 = 4.0;
 pub const CRASH_DAMAGE: f32 = 30.0;
 /// Seconds between Drowning Grasps, and between Calls of the Deep (which
@@ -45,6 +51,10 @@ pub struct Hazard {
     pub damage: f32,
     /// The boss that made it; its hazards vanish when it dies or resets.
     pub source: EntityId,
+    /// The player it was aimed at, and how many more times it comes down
+    /// on them after this.
+    pub aimed_at: EntityId,
+    pub again: u8,
 }
 
 impl World {
@@ -54,7 +64,6 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         let level = e.level;
         let hurt = e.hp < e.max_hp * DEEP_BELOW_HEALTH;
-        let pos = e.pos;
         let m = mob_of(&mut e.brain);
         let fighting: Vec<EntityId> = m.threat.iter().map(|(t, _)| *t).collect();
         let timers = &mut m.boss;
@@ -76,23 +85,33 @@ impl World {
         if crash {
             let damage = CRASH_DAMAGE * level_scale(level);
             for t in fighting {
-                let at = self.pos_of(t);
-                if at.distance(pos) < 60.0 {
-                    self.hazards.push(Hazard {
-                        pos: at,
-                        radius: CRASH_RADIUS,
-                        remaining: CRASH_WARNING,
-                        total: CRASH_WARNING,
-                        damage,
-                        source: id,
-                    });
-                }
+                self.mark(id, t, damage, CRASH_TIMES - 1);
             }
         }
         if deep && self.try_use(id, ids::CALL_OF_THE_DEEP).is_ok() {
             return true;
         }
         grasp && self.try_use(id, ids::DROWNING_GRASP).is_ok()
+    }
+
+    /// Marks the ground under `target` for a Tidal Crash, if it's near
+    /// enough to the boss.
+    fn mark(&mut self, boss: EntityId, target: EntityId, damage: f32, again: u8) {
+        let Some(t) = self.entities.get(&target).filter(|t| !t.dead) else {
+            return;
+        };
+        if t.pos.distance(self.pos_of(boss)) < 60.0 {
+            self.hazards.push(Hazard {
+                pos: t.pos,
+                radius: CRASH_RADIUS,
+                remaining: CRASH_WARNING,
+                total: CRASH_WARNING,
+                damage,
+                source: boss,
+                aimed_at: target,
+                again,
+            });
+        }
     }
 
     /// Counts down marked ground, and hits every player still standing in
@@ -107,13 +126,13 @@ impl World {
         self.hazards.retain_mut(|h| {
             h.remaining -= dt;
             if h.remaining <= 0.0 {
-                landed.push((h.pos, h.radius, h.damage, h.source));
+                landed.push((h.pos, h.radius, h.damage, h.source, h.aimed_at, h.again));
                 false
             } else {
                 true
             }
         });
-        for (pos, radius, damage, source) in landed {
+        for (pos, radius, damage, source, aimed_at, again) in landed {
             let hit: Vec<EntityId> = self
                 .entities
                 .values()
@@ -123,6 +142,10 @@ impl World {
                 .collect();
             for p in hit {
                 self.apply_hit(source, p, Hit::Damage(damage, false), None);
+            }
+            // Straight away, the next one comes down where they are now.
+            if again > 0 {
+                self.mark(source, aimed_at, damage, again - 1);
             }
         }
     }
