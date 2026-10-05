@@ -11,6 +11,6 @@ path = "src/main.rs"
 macroquad.workspace = true
 server.workspace = true
 shared.workspace = true
-# Loads 3D models (.glb). Only the binary-glTF reader, no image decoding:
-# macroquad already decodes textures.
-gltf = { version = "1", default-features = false, features = ["utils"] }
+# Loads 3D models (.glb) with their skeletons, animations and node names.
+# Only the binary-glTF reader, no image decoding: macroquad decodes textures.
+gltf = { version = "1", default-features = false, features = ["utils", "names"] }

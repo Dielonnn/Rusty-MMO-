@@ -779,22 +779,22 @@ impl Characters {
         let inner = p.x + 20.0;
         let iw = p.w - 40.0;
         let name_box = Rect::new(inner, p.y + 92.0, iw, 36.0);
-        // A grid of buttons, three to a row.
-        let grid = |count: usize, top: f32, height: f32| -> Vec<Rect> {
-            let cw = (iw - 12.0) / 3.0;
+        // A grid of buttons, `across` to a row.
+        let grid = |count: usize, across: usize, top: f32, height: f32| -> Vec<Rect> {
+            let cw = (iw - 6.0 * (across - 1) as f32) / across as f32;
             (0..count)
                 .map(|i| {
                     Rect::new(
-                        inner + (i % 3) as f32 * (cw + 6.0),
-                        top + (i / 3) as f32 * (height + 4.0),
+                        inner + (i % across) as f32 * (cw + 6.0),
+                        top + (i / across) as f32 * (height + 4.0),
                         cw,
                         height,
                     )
                 })
                 .collect()
         };
-        let races = grid(Race::ALL.len(), p.y + 160.0, 30.0);
-        let classes = grid(Class::ALL.len(), p.y + 252.0, 28.0);
+        let races = grid(Race::ALL.len(), 4, p.y + 160.0, 30.0);
+        let classes = grid(Class::ALL.len(), 3, p.y + 252.0, 28.0);
         let options_y = p.y + 428.0;
         let option_rows: Vec<(Rect, Rect)> = (0..4)
             .map(|i| {
@@ -954,9 +954,9 @@ impl Characters {
             (
                 "Body",
                 if appearance.body == 0 {
-                    "Broad".to_string()
+                    "Male".to_string()
                 } else {
-                    "Slender".to_string()
+                    "Female".to_string()
                 },
             ),
             ("Skin", format!("{}", appearance.skin + 1)),

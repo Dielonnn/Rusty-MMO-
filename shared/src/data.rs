@@ -82,13 +82,15 @@ pub enum Race {
     Goblin,
     Gnome,
     Undead,
+    Dwarf,
 }
 
 impl Race {
-    pub const ALL: [Race; 6] = [
+    pub const ALL: [Race; 7] = [
         Race::Human,
         Race::Orc,
         Race::Elf,
+        Race::Dwarf,
         Race::Goblin,
         Race::Gnome,
         Race::Undead,
@@ -102,6 +104,7 @@ impl Race {
             Race::Goblin => "Goblin",
             Race::Gnome => "Gnome",
             Race::Undead => "Undead",
+            Race::Dwarf => "Dwarf",
         }
     }
 
@@ -119,6 +122,9 @@ impl Race {
             Race::Goblin => "Clever and greedy, goblins begin in the glowing Grubdeep Caverns.",
             Race::Gnome => "Tiny tinkerers, gnomes begin among the snowy Frostcog Peaks.",
             Race::Undead => "Risen from the grave, the undead begin in the dying Witherwood.",
+            Race::Dwarf => {
+                "Stout and stubborn, dwarves begin beside the gnomes in the snowy Frostcog Peaks."
+            }
         }
     }
 }
@@ -193,6 +199,90 @@ const fn ranged(range: f32, interval: f32, min: f32, max: f32) -> AutoAttack {
 }
 
 impl Class {
+    /// The clothes a new character of this class starts in, by gear slot
+    /// (head, chest, hands, legs, feet).
+    pub fn starter_gear(self) -> [Option<ItemId>; 5] {
+        use items::*;
+        let (chest, hands, legs, feet) = match self {
+            Class::Fighter => (
+                Some(SQUIRES_HAUBERK),
+                Some(SQUIRES_GAUNTLETS),
+                SQUIRES_LEGPLATES,
+                Some(SQUIRES_SABATONS),
+            ),
+            Class::Paladin => (
+                Some(ACOLYTES_BREASTPLATE),
+                Some(SQUIRES_GAUNTLETS),
+                SQUIRES_LEGPLATES,
+                Some(SQUIRES_SABATONS),
+            ),
+            // Barbarians go bare-chested.
+            Class::Barbarian => (None, Some(HIDE_BRACERS), HIDE_BREECHES, Some(FUR_BOOTS)),
+            // Monks go barefoot.
+            Class::Monk => (
+                Some(INITIATES_WRAP),
+                Some(HAND_WRAPS),
+                INITIATES_TROUSERS,
+                None,
+            ),
+            Class::Rogue => (
+                Some(CUTPURSES_JERKIN),
+                Some(SCOUTS_GLOVES),
+                TRAVELERS_TROUSERS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Ranger => (
+                Some(TRACKERS_JERKIN),
+                Some(SCOUTS_GLOVES),
+                TRAVELERS_TROUSERS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Artificer => (
+                Some(TINKERS_COAT),
+                Some(SCOUTS_GLOVES),
+                TRAVELERS_TROUSERS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Bard => (
+                Some(MINSTRELS_DOUBLET),
+                None,
+                TRAVELERS_TROUSERS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Cleric => (
+                Some(NOVICES_VESTMENTS),
+                None,
+                NOVICES_LEGGINGS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Druid => (
+                Some(GROVEKEEPERS_ROBE),
+                None,
+                NOVICES_LEGGINGS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Mage => (
+                Some(APPRENTICES_ROBE),
+                None,
+                NOVICES_LEGGINGS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Sorcerer => (
+                Some(EMBERSPUN_ROBE),
+                None,
+                NOVICES_LEGGINGS,
+                Some(WORN_BOOTS),
+            ),
+            Class::Warlock => (
+                Some(SHADOWSPUN_ROBE),
+                None,
+                NOVICES_LEGGINGS,
+                Some(WORN_BOOTS),
+            ),
+        };
+        [None, chest, hands, Some(legs), feet]
+    }
+
     pub const ALL: [Class; 13] = [
         Class::Barbarian,
         Class::Fighter,
@@ -2758,6 +2848,31 @@ pub mod items {
     pub const EMBERFALL_GREATAXE: ItemId = ItemId(44);
     pub const RIMEHEART_CHESTGUARD: ItemId = ItemId(45);
     pub const HRIMFANG_GLAIVE: ItemId = ItemId(46);
+    // Starting clothes (see `Class::starter_gear`): worn for looks, no stats.
+    pub const SQUIRES_HAUBERK: ItemId = ItemId(47);
+    pub const ACOLYTES_BREASTPLATE: ItemId = ItemId(48);
+    pub const INITIATES_WRAP: ItemId = ItemId(49);
+    pub const CUTPURSES_JERKIN: ItemId = ItemId(50);
+    pub const TRACKERS_JERKIN: ItemId = ItemId(51);
+    pub const TINKERS_COAT: ItemId = ItemId(52);
+    pub const MINSTRELS_DOUBLET: ItemId = ItemId(53);
+    pub const NOVICES_VESTMENTS: ItemId = ItemId(54);
+    pub const GROVEKEEPERS_ROBE: ItemId = ItemId(55);
+    pub const APPRENTICES_ROBE: ItemId = ItemId(56);
+    pub const EMBERSPUN_ROBE: ItemId = ItemId(57);
+    pub const SHADOWSPUN_ROBE: ItemId = ItemId(58);
+    pub const SQUIRES_LEGPLATES: ItemId = ItemId(59);
+    pub const HIDE_BREECHES: ItemId = ItemId(60);
+    pub const INITIATES_TROUSERS: ItemId = ItemId(61);
+    pub const TRAVELERS_TROUSERS: ItemId = ItemId(62);
+    pub const NOVICES_LEGGINGS: ItemId = ItemId(63);
+    pub const SQUIRES_GAUNTLETS: ItemId = ItemId(64);
+    pub const HIDE_BRACERS: ItemId = ItemId(65);
+    pub const HAND_WRAPS: ItemId = ItemId(66);
+    pub const SCOUTS_GLOVES: ItemId = ItemId(67);
+    pub const SQUIRES_SABATONS: ItemId = ItemId(68);
+    pub const FUR_BOOTS: ItemId = ItemId(69);
+    pub const WORN_BOOTS: ItemId = ItemId(70);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2847,6 +2962,14 @@ const fn armor(
     }
 }
 
+/// Starting clothes: worn for looks, with no stats.
+const fn starter(name: &'static str, slot: Slot, color: (f32, f32, f32)) -> Item {
+    Item {
+        description: "Plain clothes for a new adventurer. They give no stats.",
+        ..armor(name, slot, 0.0, 0.0, 0.0, Quality::Common, color, 4)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 const fn weapon(
     name: &'static str,
@@ -2912,7 +3035,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 47] = [
+pub static ITEMS: [Item; 71] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -3362,6 +3485,30 @@ pub static ITEMS: [Item; 47] = [
         (0.55, 0.85, 1.0),
         9500,
     ),
+    starter("Squire's Hauberk", Slot::Chest, (0.6, 0.62, 0.66)),
+    starter("Acolyte's Breastplate", Slot::Chest, (0.85, 0.85, 0.88)),
+    starter("Initiate's Wrap", Slot::Chest, (0.92, 0.55, 0.15)),
+    starter("Cutpurse's Jerkin", Slot::Chest, (0.2, 0.2, 0.22)),
+    starter("Tracker's Jerkin", Slot::Chest, (0.3, 0.42, 0.22)),
+    starter("Tinker's Coat", Slot::Chest, (0.5, 0.36, 0.22)),
+    starter("Minstrel's Doublet", Slot::Chest, (0.15, 0.55, 0.6)),
+    starter("Novice's Vestments", Slot::Chest, (0.95, 0.93, 0.86)),
+    starter("Grovekeeper's Robe", Slot::Chest, (0.36, 0.48, 0.25)),
+    starter("Apprentice's Robe", Slot::Chest, (0.34, 0.24, 0.72)),
+    starter("Emberspun Robe", Slot::Chest, (0.62, 0.12, 0.16)),
+    starter("Shadowspun Robe", Slot::Chest, (0.16, 0.1, 0.2)),
+    starter("Squire's Legplates", Slot::Legs, (0.55, 0.57, 0.62)),
+    starter("Hide Breeches", Slot::Legs, (0.35, 0.25, 0.17)),
+    starter("Initiate's Trousers", Slot::Legs, (0.42, 0.24, 0.06)),
+    starter("Traveler's Trousers", Slot::Legs, (0.3, 0.26, 0.22)),
+    starter("Novice's Leggings", Slot::Legs, LINEN),
+    starter("Squire's Gauntlets", Slot::Hands, (0.5, 0.52, 0.56)),
+    starter("Hide Bracers", Slot::Hands, (0.45, 0.32, 0.2)),
+    starter("Hand Wraps", Slot::Hands, (0.9, 0.86, 0.75)),
+    starter("Scout's Gloves", Slot::Hands, (0.3, 0.22, 0.15)),
+    starter("Squire's Sabatons", Slot::Feet, (0.42, 0.43, 0.47)),
+    starter("Fur Boots", Slot::Feet, (0.3, 0.2, 0.13)),
+    starter("Worn Boots", Slot::Feet, (0.32, 0.22, 0.14)),
 ];
 
 /// Cooked food heals three quarters of what a Healing Potion does.
@@ -4387,7 +4534,7 @@ pub struct Appearance {
     /// Characters made before races existed are human.
     #[serde(default)]
     pub race: Race,
-    /// 0: broad build, 1: slender build.
+    /// 0: male, 1: female.
     pub body: u8,
     pub skin: u8,
     pub hair_style: u8,
@@ -4432,7 +4579,7 @@ impl Appearance {
     pub const HAIR_COLORS: u8 = 6;
 
     pub fn hair_style_name(self) -> &'static str {
-        ["Bald", "Short", "Long", "Ponytail", "Mohawk"][self.hair_style as usize % 5]
+        ["Shaved", "Parted", "Long", "Buns", "Mohawk"][self.hair_style as usize % 5]
     }
 
     /// Keeps every field in range (for data from the network or a save file).
@@ -4700,6 +4847,33 @@ mod tests {
     }
 
     #[test]
+    fn starter_gear_fits_its_slots_and_gives_no_stats() {
+        for class in Class::ALL {
+            let gear = class.starter_gear();
+            assert!(
+                gear[Slot::Legs.index()].is_some(),
+                "{} has no trousers",
+                class.name()
+            );
+            for (i, id) in gear.iter().enumerate() {
+                let Some(id) = id else { continue };
+                match item(*id).kind {
+                    ItemKind::Armor {
+                        slot,
+                        armor,
+                        stamina,
+                        power,
+                    } => {
+                        assert_eq!(slot.index(), i, "{} in the wrong slot", item(*id).name);
+                        assert_eq!((armor, stamina, power), (0.0, 0.0, 0.0));
+                    }
+                    _ => panic!("{} is not armor", item(*id).name),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn item_ids_match_their_names() {
         use items::*;
         for (id, name) in [
@@ -4714,6 +4888,8 @@ mod tests {
             (EMBERFALL_GREATAXE, "Emberfall Greataxe"),
             (RIMEHEART_CHESTGUARD, "Rimeheart Chestguard"),
             (HRIMFANG_GLAIVE, "Hrimfang Glaive"),
+            (SQUIRES_HAUBERK, "Squire's Hauberk"),
+            (WORN_BOOTS, "Worn Boots"),
         ] {
             assert_eq!(item(id).name, name);
         }

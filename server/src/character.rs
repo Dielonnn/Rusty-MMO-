@@ -30,6 +30,11 @@ pub struct Character {
     /// the class's default layout.
     #[serde(default)]
     pub hotbar: Option<Hotbar>,
+    /// Whether they've been given their class's starting clothes. Characters
+    /// saved before starting clothes existed get them once, in any empty
+    /// slots, when they next load.
+    #[serde(default)]
+    pub dressed: bool,
 }
 
 impl Character {
@@ -47,11 +52,12 @@ impl Character {
             pos: start.to_array(),
             yaw: 0.0,
             bags: vec![None; BAG_SLOTS],
-            gear: [None; 5],
+            gear: class.starter_gear(),
             weapon: None,
             talents: [0; TALENTS],
             quests: QuestLog::default(),
             hotbar: None,
+            dressed: true,
         }
     }
 
@@ -73,6 +79,14 @@ impl Character {
         self.hotbar = self.hotbar.map(|bar| self.class.sanitize_hotbar(&bar));
         self.quests.sanitize();
         self.appearance = self.appearance.clamped();
+        if !self.dressed {
+            for (slot, starter) in self.gear.iter_mut().zip(self.class.starter_gear()) {
+                if slot.is_none() {
+                    *slot = starter;
+                }
+            }
+            self.dressed = true;
+        }
         self.bags.resize(BAG_SLOTS, None);
         for slot in &mut self.bags {
             if let Some((id, n)) = *slot {
@@ -249,5 +263,24 @@ mod tests {
         c.weapon = Some(EMBERWAND);
         c.sanitize();
         assert_eq!(c.weapon, Some(EMBERWAND));
+    }
+
+    #[test]
+    fn characters_start_dressed_and_old_ones_get_dressed_once() {
+        let c = Character::new("a", "Bob", Class::Fighter, Appearance::default());
+        assert_eq!(c.gear, Class::Fighter.starter_gear());
+        // Saved before starting clothes: empty slots fill, worn gear stays.
+        let mut old = Character::new("a", "Ann", Class::Mage, Appearance::default());
+        old.gear = [None, Some(LEATHER_VEST), None, None, None];
+        old.dressed = false;
+        old.sanitize();
+        let starter = Class::Mage.starter_gear();
+        assert_eq!(old.gear[1], Some(LEATHER_VEST));
+        assert_eq!(old.gear[3], starter[3]);
+        assert!(old.dressed);
+        // Only once: taking them off later sticks.
+        old.gear[3] = None;
+        old.sanitize();
+        assert_eq!(old.gear[3], None);
     }
 }

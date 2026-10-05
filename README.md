@@ -1,7 +1,7 @@
 # Rusty MMO
 
 A small 3D tab-targeting MMO written in Rust, in the spirit of World of Warcraft
-and Final Fantasy XIV. Pick one of six races and thirteen classes, and start in
+and Final Fantasy XIV. Pick one of seven races and thirteen classes, and start in
 your race's own starting area: autumn hills, a desert, an elven forest, a
 goblin cave, snowy peaks or a dying forest, each with its own town, merchant,
 creatures and elite. Loot leather, cloth and iron, craft armor and weapons, buy potions, and level
@@ -31,9 +31,10 @@ This opens the client. On the login screen, enter an account name, then:
   on god mode (no damage, free abilities), or refresh your cooldowns, health
   and power. Sandbox characters are kept apart from your solo ones.
 
-Then pick a character or create one: choose a name, race, class, build, skin,
-hair style and hair color, and press **Enter World**. You start in your race's
-starting area.
+Then pick a character or create one: choose a name, race, class, body (male or
+female), skin, hair style and hair color, and how tall and heavy you are, and
+press **Enter World**. You start in your race's starting area, dressed in your
+class's plain starting clothes.
 
 To host a game for friends, run the dedicated server:
 
@@ -195,6 +196,7 @@ has its own look, buildings, creatures and lighting.
 | Elf | Silverbough Glade: a twilight forest of silver trees | Aelthas | Shadowfang Wolves, Thornback Boars, Satyrs, the Ancient Treant |
 | Goblin | Grubdeep Caverns: a cave lit by crystals and mushrooms | Rustpocket | Cave Spiders, Stonehide Boars, Troggs, the Crystal Golem |
 | Gnome | Frostcog Peaks: bright snowy mountains | Gearhaven | Snow Wolves, Frost Boars, Frost Trolls, the Yeti |
+| Dwarf | Frostcog Peaks, with the gnomes | Gearhaven | Snow Wolves, Frost Boars, Frost Trolls, the Yeti |
 | Undead | Witherwood: a dying forest under a purple sky | Gravenhold | Ghoul Hounds, Plague Boars, Skeletons and Necromancers, the Bone Colossus |
 
 ### Classes
@@ -317,8 +319,11 @@ Chestguard and Heartstone Greatsword. Click gear in your backpack to wear or
 hold it, and click it in the character window to take it off. Armor reduces
 physical damage, a weapon adds damage to every auto attack, stamina adds
 health, and power adds to the damage and healing you do. What you wear shows on
-your character (weapons don't yet; your class's own weapon is drawn instead).
-Any class can use any weapon.
+your character, modeled over their body: a robe, a jerkin or plate, trousers,
+gloves, boots or sandals, and a hood, hat or helmet (weapons don't show yet;
+your class's own weapon is drawn instead). Under it all everyone wears plain
+underwear. New characters start in their class's plain clothes, which are
+ordinary items that give no stats. Any class can use any weapon.
 
 ### Merchants
 
@@ -397,8 +402,8 @@ client/   The macroquad client: login, character select and creation,
   Scenery is placed by a seeded generator in `shared/src/props.rs`, so what the
   client draws is exactly what players bump into and where the server spawns
   mobs. (Mobs don't collide with scenery yet.)
-- **Rendering.** Everything is built from boxes, ellipsoids and cones in a
-  custom batcher, lit per pixel on the GPU: a warm sun, a cool sky fill and a
+- **Rendering.** People are rigged 3D models (below); everything else is
+  built from boxes, ellipsoids and cones in a custom batcher, and all of it is lit per pixel on the GPU: a warm sun, a cool sky fill and a
   warm bounce from the ground, a soft rim light, a faint painted grain and
   distance fog (`client/src/gfx/shader.rs`). Boxes shade like slightly rounded
   blocks and cones like round ones, and everything standing on the ground casts
@@ -424,15 +429,29 @@ client/   The macroquad client: login, character select and creation,
   of light, drains pour a beam back to the caster, casters stand in a
   glowing rune circle, and auras show on whoever has them: shield bubbles,
   stun stars, roots, frost, flames, poison, bleeding and more.
-- **Models and animation.** Characters and creatures (`client/src/models/`)
-  are posed each frame from what they're doing. Every class fights and casts
-  in its own way: barbarians chop overhead with both hands, fighters slash
-  behind a raised shield, monks jab and kick from a guard, rogues stab with
-  both daggers, rangers draw their bows, artificers aim and feel the kick,
-  bards strum, clerics raise their arms, druids spread theirs, and warlocks
-  claw at the air. People flinch when hit, tuck their legs when they jump and
-  blink; wolves sniff about and snap their jaws, boars root around, spiders
-  rear up and scorpions sway their tails.
+- **Models and animation.** Players, townsfolk and humanoid mobs are rigged,
+  skinned models with skeletal animation (`client/assets/characters/`):
+  Quaternius' Universal Base Characters and Universal Animation Library 1
+  and 2, with KayKit weapons, hats, skeletons and a few moves carried over
+  (all CC0). Orcs and elves have their own male and female bodies,
+  sculpted from the base bodies in Blender by
+  `client/assets/characters/sculpt.py` and the race files beside it (the
+  other races borrow the human body at their own size for now), and every
+  body shares one skeleton and one set of animation clips. The `.glb` loader (`client/src/gfx/model_file.rs`) reads
+  skeletons, skins and clips; `client/src/models/rigged.rs` picks a body,
+  hair and props for each character or mob, dresses it in what it wears
+  (`rigged/clothes.rs` lifts each piece off the skin it covers as a shell
+  that bends with the body, cut cleanly where it ends), sizes it by the
+  height and weight sliders, and blends clips from what someone is doing:
+  running, idling, casting,
+  attacking (with the upper body only while running), flinching, jumping
+  and dying. Every class fights in its own way: barbarians chop with a great
+  axe, fighters slash behind a shield, monks punch and kick, rogues stab
+  with two knives, rangers and artificers shoot crossbows, and casters
+  channel and hurl spells. Creatures
+  and giants are still built from shapes and posed in code: wolves sniff about
+  and snap their jaws, boars root around, spiders rear up and scorpions sway
+  their tails.
 
 ## Ideas for what's next
 
