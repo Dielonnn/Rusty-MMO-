@@ -2,9 +2,9 @@
 //! tracker under the minimap, and the "!" and "?" over quest givers' heads.
 
 use macroquad::prelude::*;
-use shared::data::{format_money, item};
+use shared::data::{Race, format_money, item};
 use shared::protocol::Stack;
-use shared::quests::{Goal, Quest, QuestId, QuestLog, quest, zone_quests};
+use shared::quests::{Goal, Quest, QuestId, QuestLog, offered, quest};
 use shared::world::Zone;
 
 use crate::drag::{self, Win};
@@ -54,9 +54,15 @@ pub enum Marker {
     Available,
 }
 
-pub fn marker(log: &QuestLog, zone: Zone, level: u8, bags: &[Option<Stack>]) -> Option<Marker> {
-    let all: Vec<Status> = zone_quests(zone)
-        .iter()
+pub fn marker(
+    log: &QuestLog,
+    zone: Zone,
+    race: Race,
+    level: u8,
+    bags: &[Option<Stack>],
+) -> Option<Marker> {
+    let all: Vec<Status> = offered(zone, race)
+        .into_iter()
         .map(|q| status(log, q, level, bags))
         .collect();
     if all.contains(&Status::Ready) {
@@ -102,22 +108,38 @@ pub struct GiverLayout {
     pub close: Rect,
 }
 
-pub fn giver_layout(zone: Zone, log: &QuestLog, level: u8, bags: &[Option<Stack>]) -> GiverLayout {
-    let (w, h) = (screen_width(), screen_height());
+/// A quest's row in the giver's window: full height, or a single line once
+/// it's done.
+const ROW: f32 = 158.0;
+const DONE_ROW: f32 = 30.0;
+
+pub fn giver_layout(
+    zone: Zone,
+    race: Race,
+    log: &QuestLog,
+    level: u8,
+    bags: &[Option<Stack>],
+) -> GiverLayout {
+    let h = screen_height();
+    let quests = offered(zone, race);
+    let heights: Vec<f32> = quests
+        .iter()
+        .map(|q| match status(log, q, level, bags) {
+            Status::Done => DONE_ROW,
+            _ => ROW,
+        })
+        .collect();
+    let height = 44.0 + heights.iter().map(|r| r + 8.0).sum::<f32>();
     let window = drag::place(
         Win::QuestGiver,
-        Rect::new(16.0, ((h - 560.0) / 2.0).max(110.0), 470.0, 560.0),
+        Rect::new(16.0, ((h - height) / 2.0).max(60.0), 470.0, height),
     );
-    let _ = w;
     let mut rows = Vec::new();
     let mut buttons = Vec::new();
-    for (i, q) in zone_quests(zone).iter().enumerate() {
-        let row = Rect::new(
-            window.x + 12.0,
-            window.y + 40.0 + i as f32 * 166.0,
-            window.w - 24.0,
-            158.0,
-        );
+    let mut y = window.y + 40.0;
+    for (q, row_h) in quests.into_iter().zip(heights) {
+        let row = Rect::new(window.x + 12.0, y, window.w - 24.0, row_h);
+        y += row_h + 8.0;
         let b = Rect::new(row.right() - 110.0, row.bottom() - 36.0, 100.0, 30.0);
         match status(log, q, level, bags) {
             Status::Available => buttons.push((b, Action::Accept(q.id))),
@@ -184,11 +206,12 @@ fn reward_line(q: &Quest, x: f32, y: f32) -> Option<(Rect, shared::data::ItemId)
 pub fn draw_giver(
     giver_name: &str,
     zone: Zone,
+    race: Race,
     log: &QuestLog,
     level: u8,
     bags: &[Option<Stack>],
 ) -> Option<(Rect, shared::data::ItemId)> {
-    let l = giver_layout(zone, log, level, bags);
+    let l = giver_layout(zone, race, log, level, bags);
     let r = l.window;
     panel(r);
     draw_rectangle(
@@ -202,7 +225,7 @@ pub fn draw_giver(
     button(l.close, "x");
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let mut hover = None;
-    for (q, row) in zone_quests(zone).iter().zip(&l.rows) {
+    for (q, row) in offered(zone, race).into_iter().zip(&l.rows) {
         let s = status(log, q, level, bags);
         draw_rectangle(
             row.x,
@@ -236,6 +259,9 @@ pub fn draw_giver(
             15.0,
             sc,
         );
+        if s == Status::Done {
+            continue;
+        }
         let body = if s == Status::Ready {
             q.done_text
         } else {
@@ -420,6 +446,7 @@ pub fn draw_marker(m: Marker, at: Vec2, time: f32) {
 mod tests {
     use super::*;
     use shared::data::items;
+    use shared::quests::zone_quests;
 
     #[test]
     fn statuses_follow_progress_and_bags() {
@@ -429,7 +456,7 @@ mod tests {
         assert_eq!(status(&log, q, 1, &[]), Status::Available);
         assert_eq!(status(&log, craft, 1, &[]), Status::TooLow(2));
         assert_eq!(
-            marker(&log, Zone::Amberfall, 1, &[]),
+            marker(&log, Zone::Amberfall, Race::Human, 1, &[]),
             Some(Marker::Available)
         );
         log.active.push((q.id, 3));
@@ -437,13 +464,21 @@ mod tests {
         assert_eq!(status(&log, q, 2, &[]), Status::InProgress(3, 8));
         let bags = [Some((items::LEATHER_VEST, 1))];
         assert_eq!(status(&log, craft, 2, &bags), Status::Ready);
-        assert_eq!(marker(&log, Zone::Amberfall, 2, &bags), Some(Marker::Ready));
+        assert_eq!(
+            marker(&log, Zone::Amberfall, Race::Human, 2, &bags),
+            Some(Marker::Ready)
+        );
         assert_eq!(
             objective(q, Status::InProgress(3, 8)),
             "Gray Wolves slain: 3/8"
         );
         log.active.clear();
         log.done = vec![q.id, craft.id, zone_quests(Zone::Amberfall)[2].id];
-        assert_eq!(marker(&log, Zone::Amberfall, 10, &[]), None);
+        // Only humans are sent after the Sunken King from here.
+        assert_eq!(marker(&log, Zone::Amberfall, Race::Orc, 10, &[]), None);
+        assert_eq!(
+            marker(&log, Zone::Amberfall, Race::Human, 10, &[]),
+            Some(Marker::Available)
+        );
     }
 }

@@ -998,6 +998,7 @@ pub fn draw(game: &Game, layout: &Layout, cam: &Camera3D) {
         && let Some((icon, id)) = crate::quests_ui::draw_giver(
             &giver.view.name,
             game.zone,
+            game.race(),
             &game.me.quests,
             level,
             &game.me.bags,
@@ -1645,6 +1646,7 @@ fn nameplates(game: &Game, cam: &Camera3D) {
                 && let Some(m) = crate::quests_ui::marker(
                     &game.me.quests,
                     Zone::at(e.pos),
+                    game.race(),
                     my_level,
                     &game.me.bags,
                 )
@@ -1761,8 +1763,13 @@ fn minimap(game: &Game, layout: &Layout) {
             continue;
         }
         if matches!(e.view.kind, EntityKind::QuestGiver(_))
-            && let Some(mk) =
-                crate::quests_ui::marker(&game.me.quests, zone, game.level(), &game.me.bags)
+            && let Some(mk) = crate::quests_ui::marker(
+                &game.me.quests,
+                zone,
+                game.race(),
+                game.level(),
+                &game.me.bags,
+            )
         {
             let s = if mk == crate::quests_ui::Marker::Ready {
                 "?"

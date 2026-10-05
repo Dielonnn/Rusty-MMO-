@@ -7,7 +7,7 @@ built from that commit.
 
 ## v7.11
 
-Commit: the one titled "v7.11: boss teleporter, spells hit on impact, tougher Sunken Vault".
+Commit: the one titled "v7.11: boss teleporter, spells hit on impact, tougher Sunken Vault, vault quest".
 
 - **Teleporter after the boss**: when the Sunken King dies, a teleporter opens
   in the throne room. Stand on it and press `F` to travel to any town, just
@@ -22,6 +22,11 @@ Commit: the one titled "v7.11: boss teleporter, spells hit on impact, tougher Su
   a row, the second one wherever you're standing when the first hits, and the
   whole mechanic is 15% faster (about every 10.4 seconds, with 2.2 seconds to
   step out).
+- **New quest, The Sunken King**: from level 8, your own race's quest giver
+  (and only theirs) sends you into the Sunken Vault to kill Morvane. The reward
+  is the **Tidebreaker Trident**, a new blue weapon (8 damage, 7 stamina,
+  4 power), plus 1200 experience and 50 silver. Finished quests now shrink to
+  one line in the quest giver's window, to make room.
 - Protocol version 13 (an older client can't join a v7.11 server).
 
 ## v7.10

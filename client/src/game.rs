@@ -245,6 +245,11 @@ impl Game {
         self.my_view().map_or(1, |v| v.level)
     }
 
+    pub fn race(&self) -> shared::data::Race {
+        self.my_view()
+            .map_or(shared::data::Race::Human, |v| v.appearance.race)
+    }
+
     fn send(&mut self, msg: ClientMsg) {
         // A failed send shows up as a disconnect on the next poll.
         let _ = self.conn.send(&msg);
@@ -284,9 +289,14 @@ impl Game {
         let mut draggable = layout.draggable();
         if self.windows.quest_giver.is_some() {
             let level = self.level();
-            let giver =
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags)
-                    .window;
+            let giver = crate::quests_ui::giver_layout(
+                self.zone,
+                self.race(),
+                &self.me.quests,
+                level,
+                &self.me.bags,
+            )
+            .window;
             layout.quest_window = Some(giver);
             draggable.push((crate::drag::Win::QuestGiver, giver));
         }
@@ -1132,8 +1142,13 @@ impl Game {
         if let Some(giver) = self.windows.quest_giver
             && left
         {
-            let l =
-                crate::quests_ui::giver_layout(self.zone, &self.me.quests, level, &self.me.bags);
+            let l = crate::quests_ui::giver_layout(
+                self.zone,
+                self.race(),
+                &self.me.quests,
+                level,
+                &self.me.bags,
+            );
             if l.close.contains(mouse) {
                 self.windows.quest_giver = None;
                 return;

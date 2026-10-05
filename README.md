@@ -130,6 +130,8 @@ Deep, which a kick or other interrupt stops. Every enemy in the vault rolls
 gear for each player separately, so only you can loot your own gear.
 Once he's dead, a teleporter opens in the throne room that works like the
 waystone at the entrance.
+From level 8, your own race's quest giver has a quest to kill him, which
+rewards the Tidebreaker Trident, a blue weapon.
 Your party shares one copy of the vault; anyone else gets their own. Mobs you
 kill there stay dead, and a copy that's been empty for 5 minutes resets. Die
 inside and you come back at the vault's entrance; the waystone there takes you

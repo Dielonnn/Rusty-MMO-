@@ -1,10 +1,11 @@
 //! Quests: every starting area's quest giver offers three. Hunt a number of
 //! the area's beasts, craft a piece of armor and hand it over, and slay the
-//! area's elite.
+//! area's elite. Each also sends their own race's heroes into the Sunken
+//! Vault after its king.
 
 use serde::{Deserialize, Serialize};
 
-use crate::data::{ItemId, MobKind, items};
+use crate::data::{ItemId, MobKind, Race, items};
 use crate::world::Zone;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -35,6 +36,8 @@ pub struct Quest {
     /// In copper.
     pub money: u32,
     pub reward: Option<ItemId>,
+    /// Only offered to the race whose home town this is.
+    pub race_only: bool,
 }
 
 /// Quests you can have at once.
@@ -106,6 +109,21 @@ pub fn zone_quests(zone: Zone) -> &'static [Quest] {
     &QUESTS[i..i + 3]
 }
 
+/// The Sunken Vault quest a zone's quest giver offers its own race.
+pub fn vault_quest(zone: Zone) -> &'static Quest {
+    &QUESTS[18 + zone.index()]
+}
+
+/// Every quest a zone's quest giver offers a player of `race`: the zone's
+/// three, and the vault quest if it's their home town.
+pub fn offered(zone: Zone, race: Race) -> Vec<&'static Quest> {
+    let mut all: Vec<&'static Quest> = zone_quests(zone).iter().collect();
+    if race.zone() == zone {
+        all.push(vault_quest(zone));
+    }
+    all
+}
+
 /// The quest giver in each town.
 pub fn quest_giver_name(zone: Zone) -> &'static str {
     match zone {
@@ -140,6 +158,7 @@ const fn hunt(
         xp: 250,
         money: 150,
         reward: Some(reward),
+        race_only: false,
     }
 }
 
@@ -163,6 +182,7 @@ const fn craft(
         xp: 350,
         money: 300,
         reward: Some(reward),
+        race_only: false,
     }
 }
 
@@ -186,12 +206,32 @@ const fn elite(
         xp: 600,
         money: 2000,
         reward: Some(reward),
+        race_only: false,
+    }
+}
+
+const fn vault(id: u16, zone: Zone, text: &'static str, done_text: &'static str) -> Quest {
+    Quest {
+        id: QuestId(id),
+        zone,
+        name: "The Sunken King",
+        text,
+        done_text,
+        goal: Goal::Kill {
+            kind: MobKind::SunkenKing,
+            count: 1,
+        },
+        min_level: 8,
+        xp: 1200,
+        money: 5000,
+        reward: Some(TIDEBREAKER_TRIDENT),
+        race_only: true,
     }
 }
 
 use items::*;
 
-pub static QUESTS: [Quest; 18] = [
+pub static QUESTS: [Quest; 24] = [
     // Amberfall Vale
     hunt(
         0,
@@ -366,6 +406,43 @@ pub static QUESTS: [Quest; 18] = [
         "The colossus is dust. Gravenhold stands because of you.",
         IRONBARK_JERKIN,
     ),
+    // The Sunken Vault, one for each race, in zone order.
+    vault(
+        18,
+        Zone::Amberfall,
+        "Beyond the waystone lies the Sunken Vault, where Morvane the Sunken King gathers drowned men to his throne. Take the waystone, gather friends, and end his reign before the tide reaches Hearthmere.",
+        "Morvane is dead? Then the tide turns at last. Hearthmere's smiths pulled this trident from the vault's spoils; it's yours.",
+    ),
+    vault(
+        19,
+        Zone::Scorchsand,
+        "There's a drowned king beneath the world who thinks he can take orc lands for his sea. Go through the waystone into his Sunken Vault and bring the Horde his crown's last breath.",
+        "The Sunken King is fish food! Take his trident, champion. Every warrior in Kragmaw will want to hear how you won it.",
+    ),
+    vault(
+        20,
+        Zone::Silverbough,
+        "The moonwell's waters grow brackish. The cause lies deep in the Sunken Vault: Morvane, a king who would drown the whole world. The waystone will take you there. Elune guide your blade.",
+        "The well runs clear again. This trident was his; may it serve the glade better than it served him.",
+    ),
+    vault(
+        21,
+        Zone::Grubdeep,
+        "Somebody's flooding my lower tunnels, and the somebody is a dead king in a vault full of treasure. Take the waystone, sink the Sunken King, and we split the profits. Mostly in your favor! Probably.",
+        "You did it! Here, the trident's yours, fair and square. I only took the gems off it. Some of the gems.",
+    ),
+    vault(
+        22,
+        Zone::Frostcog,
+        "My tide gauges show something enormous rising in the Sunken Vault. Hypothesis: a very angry dead king. Please use the waystone and test that hypothesis by defeating him.",
+        "Hypothesis confirmed, and also defeated! I've recalibrated his trident for you. It's ever so slightly more pointy now.",
+    ),
+    vault(
+        23,
+        Zone::Witherwood,
+        "Morvane the Sunken King calls the drowned to serve him, and some of them were ours. Go through the waystone into his vault and silence him. No one commands the Forsaken but the Forsaken.",
+        "His call is silent. Our drowned kin rest. Take his trident; Gravenhold has no use for a dead king's toys.",
+    ),
 ];
 
 #[cfg(test)]
@@ -397,6 +474,30 @@ mod tests {
             }
             assert!(matches!(qs[2].goal, Goal::Kill { kind, count: 1 } if kind == mobs[4]));
             assert!(mobs[4].template().elite);
+        }
+    }
+
+    #[test]
+    fn every_race_gets_the_vault_quest_at_home_only() {
+        for race in Race::ALL {
+            for zone in Zone::ALL {
+                let offered = offered(zone, race);
+                let has = offered.iter().any(|q| q.race_only);
+                assert_eq!(has, race.zone() == zone, "{race:?} in {zone:?}");
+                assert_eq!(offered.len(), if has { 4 } else { 3 });
+            }
+            let q = vault_quest(race.zone());
+            assert_eq!(q.zone, race.zone());
+            assert!(matches!(
+                q.goal,
+                Goal::Kill {
+                    kind: MobKind::SunkenKing,
+                    count: 1
+                }
+            ));
+            let reward = item(q.reward.unwrap());
+            assert!(matches!(reward.kind, ItemKind::Weapon { .. }));
+            assert_eq!(reward.quality, crate::data::Quality::Rare);
         }
     }
 

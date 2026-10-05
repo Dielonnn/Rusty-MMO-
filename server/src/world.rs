@@ -1421,8 +1421,16 @@ impl World {
         let Brain::Npc(n) = &g.brain else {
             return Err("They have no quests for you.");
         };
-        if n.role != NpcRole::QuestGiver || quests::quest(quest).zone != n.zone {
+        let q = quests::quest(quest);
+        if n.role != NpcRole::QuestGiver || q.zone != n.zone {
             return Err("They have no quests for you.");
+        }
+        if q.race_only
+            && me
+                .player()
+                .is_some_and(|p| p.appearance.race.zone() != n.zone)
+        {
+            return Err("They only give that quest to their own people.");
         }
         if g.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
             return Err("You are too far away.");
@@ -3930,6 +3938,28 @@ mod tests {
         assert!(w.buy(p, giver, items::HEALING_POTION).is_err());
         w.handle(p, ClientMsg::AbandonQuest(elite));
         assert_eq!(w.entities[&p].player().unwrap().quests.active.len(), 0);
+    }
+
+    #[test]
+    fn only_your_own_race_is_sent_after_the_sunken_king() {
+        let mut w = World::new(45);
+        let p = join(&mut w, "Hero", Class::Mage, 10);
+        let home = w.entities[&p].player().unwrap().appearance.race.zone();
+        let away = Zone::ALL.into_iter().find(|z| *z != home).unwrap();
+        let giver = visit_giver(&mut w, p, away);
+        let theirs = quests::vault_quest(away).id;
+        assert!(w.accept_quest(p, giver, theirs).is_err());
+        let giver = visit_giver(&mut w, p, home);
+        let ours = quests::vault_quest(home).id;
+        assert_eq!(w.accept_quest(p, giver, ours), Ok(()));
+        // Kill the King, and the trident is yours.
+        let king = boss_fight(&mut w, p);
+        w.kill(king, Some(p));
+        assert_eq!(w.entities[&p].player().unwrap().quests.progress(ours), Some(1));
+        let giver = visit_giver(&mut w, p, home);
+        assert_eq!(w.turn_in_quest(p, giver, ours), Ok(()));
+        let bags = &w.entities[&p].player().unwrap().bags;
+        assert!(bags.contains(&Some((items::TIDEBREAKER_TRIDENT, 1))));
     }
 
     #[test]
