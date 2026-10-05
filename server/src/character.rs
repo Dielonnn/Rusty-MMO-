@@ -57,6 +57,7 @@ impl Character {
             level: self.level,
             appearance: self.appearance,
             gear: self.gear,
+            weapon: self.weapon,
         }
     }
 

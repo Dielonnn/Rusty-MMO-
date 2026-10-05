@@ -417,6 +417,8 @@ struct Create {
     name: String,
     class: Class,
     appearance: Appearance,
+    /// The slider being dragged (0: height, 1: weight).
+    dragging: Option<usize>,
 }
 
 pub struct Characters {
@@ -440,11 +442,46 @@ pub enum CharacterOutcome {
     Play(Box<Game>),
 }
 
+/// A labeled slider from 0 to `Appearance::SLIDER_MAX`; `r` is the track
+/// area, with the label drawn to its left and the end names under it.
+fn slider(r: Rect, label: &str, value: u8, ends: [&str; 2], active: bool) {
+    let hover = active || r.contains(mouse());
+    text(label, r.x - 110.0, r.y + 21.0, 19.0, WHITE);
+    let track_y = r.y + 12.0;
+    draw_rectangle(r.x, track_y, r.w, 6.0, Color::new(0.15, 0.11, 0.06, 0.95));
+    let t = value as f32 / Appearance::SLIDER_MAX as f32;
+    draw_rectangle(
+        r.x,
+        track_y,
+        r.w * t,
+        6.0,
+        Color::new(0.6, 0.45, 0.18, 0.95),
+    );
+    draw_rectangle_lines(r.x, track_y, r.w, 6.0, 1.0, BORDER);
+    // The middle, where every character starts.
+    draw_line(
+        r.x + r.w / 2.0,
+        track_y - 3.0,
+        r.x + r.w / 2.0,
+        track_y + 9.0,
+        1.0,
+        BORDER,
+    );
+    let knob = vec2(r.x + r.w * t, track_y + 3.0);
+    draw_circle(knob.x, knob.y, 8.0, if hover { GOLD } else { WHITE });
+    draw_circle_lines(knob.x, knob.y, 8.0, 1.5, BORDER);
+    let grey = Color::new(0.7, 0.7, 0.7, 1.0);
+    text(ends[0], r.x, r.y + 32.0, 14.0, grey);
+    let right = measure_text(ends[1], None, 14, 1.0).width;
+    text(ends[1], r.right() - right, r.y + 32.0, 14.0, grey);
+}
+
 fn new_character() -> Create {
     Create {
         name: String::new(),
         class: Class::Barbarian,
         appearance: Appearance::default(),
+        dragging: None,
     }
 }
 
@@ -768,6 +805,11 @@ impl Characters {
                 )
             })
             .collect();
+        // Height and weight sliders, below the options.
+        let sliders: [Rect; 2] = std::array::from_fn(|i| {
+            let y = options_y + (4 + i) as f32 * 38.0;
+            Rect::new(inner + 110.0, y, iw - 110.0, 32.0)
+        });
         let create = Rect::new(inner, p.bottom() - 62.0, iw * 0.5 - 6.0, 44.0);
         let back = Rect::new(
             inner + iw * 0.5 + 6.0,
@@ -806,12 +848,26 @@ impl Characters {
                     *value = (*value + 1) % count;
                 }
             }
+            c.dragging = sliders.iter().position(|r| r.contains(m));
             if create.contains(m) {
                 submit = true;
             } else if back.contains(m) && has_characters {
                 self.create = None;
                 self.message = None;
                 return CharacterOutcome::Stay;
+            }
+        }
+        if !is_mouse_button_down(MouseButton::Left) {
+            c.dragging = None;
+        }
+        if let Some(i) = c.dragging {
+            let r = sliders[i];
+            let t = ((mouse().x - r.x) / r.w).clamp(0.0, 1.0);
+            let value = (t * Appearance::SLIDER_MAX as f32).round() as u8;
+            if i == 0 {
+                c.appearance.height = value;
+            } else {
+                c.appearance.weight = value;
             }
         }
         if is_key_pressed(KeyCode::Escape) && has_characters {
@@ -934,6 +990,14 @@ impl Characters {
             22.0,
             render::hair_color(appearance.hair_color),
         );
+        let slider_values = [
+            ("Height", appearance.height, ["Short", "Tall"]),
+            ("Weight", appearance.weight, ["Thin", "Heavy"]),
+        ];
+        for (i, (r, (label, value, ends))) in sliders.iter().zip(slider_values).enumerate() {
+            let active = self.create.as_ref().is_some_and(|c| c.dragging == Some(i));
+            slider(*r, label, value, ends, active);
+        }
         button(create, "Create");
         button_ex(back, "Back", has_characters);
         CharacterOutcome::Stay

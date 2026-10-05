@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v7.3
+## v7.5
 
-Commit: the one titled "v7.3: Textured spell effects".
+Commit: the one titled "v7.5: Textured spell effects".
 
 - **Glowing spell effects**: spells are now drawn with soft, textured light
   that brightens whatever is behind it, instead of flat colored balls. Each
@@ -26,6 +26,19 @@ Commit: the one titled "v7.3: Textured spell effects".
 - **Auras**: burning targets have real flames, poison and curses wreathe them
   in mist, stuns spin stars over the head, slows spread frost underfoot,
   shields glint, and empowered characters have red flames at their feet
+
+## v7.3
+
+Commit: the one titled "v7.3: Height and weight sliders".
+
+- **Height and weight sliders** in character creation: drag them to make a
+  character shorter or taller, thinner or heavier. The choice is saved with
+  the character and sent to everyone who sees them. Characters don't change
+  shape yet: the models catch up in a later release
+- Characters made before v7.3 start with both sliders in the middle
+- Other players and the character list now know which weapon each character
+  holds, ready for the models to draw it
+- Protocol version 9: clients and servers must both be v7.3
 
 ## v7.2
 
