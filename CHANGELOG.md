@@ -5,6 +5,52 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.0
+
+Commit: the one titled "v8.0: Orc and elf bodies, underwear and starter clothes".
+
+- **Real character models**: players, townsfolk and humanoid mobs are now
+  rigged 3D models with bending limbs, skin, faces and skeletal animation,
+  instead of stacks of boxes, built from Quaternius' free Universal Base
+  Characters (CC0). Pick a male or female body
+- **Orcs and elves have bodies of their own**, sculpted from the base
+  models rather than reskinned: orcs are hulking and hunched, with huge
+  shoulders, a heavy brow and jaw and lower tusks (about a head taller than
+  a human); elves are tall, slim and upright, with long swept-back ears and
+  sharp faces. Humans keep the base body. Goblins, gnomes, dwarves and the
+  undead still borrow the human body at their own size (goblins and gnomes
+  with long ears, dwarf men bearded) until they get theirs
+- **Dwarves**: a new playable race, starting in Frostcog Peaks with the
+  gnomes
+- **Underwear and real clothes**: everyone wears plain underwear, and their
+  clothes are the items they have on, modeled over the body and moving with
+  it: shirts, jerkins, plate and robes, trousers, gloves, gauntlets and
+  bracers, boots and sandals, with belts and, for fighters, paladins and
+  clerics, a tabard. Plate stands thick and smooth, cloth thin. A hood,
+  hat or helmet shows when you wear something on your head
+- **Starter clothes**: every class now starts dressed in its own plain
+  outfit, such as a squire's hauberk and legplates for fighters, hide
+  breeches, bracers and fur boots for bare-chested barbarians, a wrap and
+  hand wraps for barefoot monks, and robes for casters. They're ordinary
+  items that give no stats, so you can swap them for armor. Characters made
+  before get them once, in their empty slots
+- **Height and weight** sliders now shape your character: taller or
+  shorter, thinner or heavier
+- Classes carry KayKit weapons (CC0): swords and shields, great axes,
+  knives, crossbows, staves, wands and spellbooks
+- **Hairstyles**: short, parted, long, buns, a beard, or a mohawk, in the
+  color you picked
+- **Animations** from Quaternius' Universal Animation Library 1 and 2
+  (CC0), plus KayKit moves carried over to the new skeleton: idle, running,
+  jumping, casting, hit reactions and dying, and attacks for every fighting
+  style. Attacking while running swings with the upper body while the legs
+  keep running
+- **Mobs**: bandits, raiders, mystics and troggs wear the human bodies in
+  their own colors, shamans and trolls the orc's, and satyrs the elf's;
+  skeletons and necromancers are KayKit skeletons rebuilt on the same
+  skeleton. Beasts and giants are still built from shapes
+- Older games can't join a v8.0 server (protocol 16)
+
 ## v7.14
 
 Commit: the one titled "v7.14: the Cinderforge and Frosthowl Cavern dungeons".

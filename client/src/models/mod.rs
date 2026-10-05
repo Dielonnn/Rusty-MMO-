@@ -1,11 +1,15 @@
 //! Character and creature models, and how they move.
 //!
-//! Every model is built from shaded primitives in its own `Frame`, so all of
-//! it turns together. Humanoids are posed by an `Anim` (angles for each arm
-//! and leg, a lean and a crouch) worked out from what they're doing and from
-//! their class: a barbarian chops overhead with both hands, a monk throws
-//! alternating punches and kicks, a ranger draws a bow, a druid spreads their
-//! arms to cast, and so on.
+//! People (players, townsfolk and humanoid mobs) are rigged, animated models
+//! (`rigged`): each race's own male or female body (or a skeleton) on a
+//! shared skeleton, dressed in what they wear, and animated by how they
+//! fight: a barbarian chops with a great axe, a monk throws punches and
+//! kicks, a rogue stabs with two knives, casters channel and throw spells,
+//! and so on.
+//!
+//! Creatures and giants are still built from shaded primitives in their own
+//! `Frame`, so all of it turns together, posed by an `Anim` (angles for each
+//! limb, a lean and a crouch). They become models too in a later release.
 
 use macroquad::prelude::*;
 use shared::data::{
@@ -19,6 +23,7 @@ mod anim;
 mod creatures;
 mod gear;
 mod humanoid;
+mod rigged;
 
 use anim::*;
 use creatures::*;
@@ -95,6 +100,11 @@ fn race_shape(race: Race) -> RaceShape {
             head: 1.35,
             limbs: 1.0,
         },
+        Race::Dwarf => RaceShape {
+            scale: 0.73,
+            head: 1.2,
+            limbs: 1.25,
+        },
         Race::Undead => RaceShape {
             scale: 0.98,
             head: 0.95,
@@ -107,7 +117,7 @@ fn race_shape(race: Race) -> RaceShape {
 pub fn model_height(kind: EntityKind, appearance: Appearance) -> f32 {
     match kind {
         EntityKind::Player(_) | EntityKind::Merchant(_) | EntityKind::QuestGiver(_) => {
-            2.1 * race_shape(appearance.race).scale
+            rigged::stature(appearance.race, appearance.body == 1) * appearance.height_scale()
         }
         EntityKind::Mob { kind, .. } => match kind.template().model {
             MobModel::Wolf => 1.3,
@@ -140,9 +150,9 @@ pub fn draw_model(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
 
 fn draw_body(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
     match look.kind {
-        EntityKind::Player(class) => humanoid(b, pos, yaw, Outfit::Class(class), look, pose),
-        EntityKind::Merchant(_) => humanoid(b, pos, yaw, Outfit::Merchant, look, pose),
-        EntityKind::QuestGiver(_) => humanoid(b, pos, yaw, Outfit::QuestGiver, look, pose),
+        EntityKind::Player(class) => rigged::draw(b, look, Outfit::Class(class), pos, yaw, pose),
+        EntityKind::Merchant(_) => rigged::draw(b, look, Outfit::Merchant, pos, yaw, pose),
+        EntityKind::QuestGiver(_) => rigged::draw(b, look, Outfit::QuestGiver, pos, yaw, pose),
         EntityKind::Mob { kind, .. } => {
             let t = kind.template();
             let colors = t.colors.map(rgb);
@@ -152,7 +162,7 @@ fn draw_body(b: &mut Batch, look: &Look, pos: Vec3, yaw: f32, pose: Pose) {
                 MobModel::Spider => spider(b, pos, yaw, colors, look.seed, pose),
                 MobModel::Scorpion => scorpion(b, pos, yaw, colors, pose),
                 MobModel::Humanoid(style) => {
-                    humanoid(b, pos, yaw, Outfit::Mob(style, colors), look, pose)
+                    rigged::draw(b, look, Outfit::Mob(style, colors), pos, yaw, pose)
                 }
                 MobModel::Giant(style) => {
                     humanoid(b, pos, yaw, Outfit::Giant(style, colors), look, pose)
@@ -198,6 +208,13 @@ pub fn skin_color(race: Race, i: u8) -> Color {
             c(0.85, 0.65, 0.5),
             c(0.7, 0.5, 0.38),
             c(0.98, 0.88, 0.84),
+        ],
+        Race::Dwarf => [
+            c(0.96, 0.78, 0.66),
+            c(0.9, 0.68, 0.55),
+            c(0.78, 0.55, 0.42),
+            c(0.6, 0.4, 0.3),
+            c(0.42, 0.28, 0.2),
         ],
         Race::Undead => [
             c(0.62, 0.66, 0.62),
