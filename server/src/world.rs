@@ -17,12 +17,15 @@ use shared::props::{ARRIVAL_SPOT, MERCHANT_SPOT, QUEST_SPOT};
 use shared::quests::{self, Goal, QuestId, QuestLog};
 
 mod boss;
+mod ground;
 mod instance;
 mod party;
 
 use boss::{BossTimers, Hazard};
+use ground::GroundItem;
 pub use instance::{Instance, Owner};
 pub use party::{Party, PartyId};
+use shared::emote::Emote;
 
 /// Who a message is for.
 #[derive(Clone, Copy, Debug)]
@@ -211,6 +214,8 @@ pub struct Entity {
     pub dead: bool,
     pub in_combat: bool,
     pub moving: bool,
+    /// The emote being played, and seconds since it started.
+    pub emote: Option<(Emote, f32)>,
     pub brain: Brain,
 }
 
@@ -396,6 +401,9 @@ impl Entity {
             gear,
             weapon,
             lootable,
+            emote: self
+                .emote
+                .map(|(emote, elapsed)| EmoteView { emote, elapsed }),
         }
     }
 }
@@ -482,6 +490,9 @@ pub struct World {
     hazards: Vec<Hazard>,
     /// Spells in flight.
     missiles: Vec<Missile>,
+    /// Items dropped on the ground.
+    ground: Vec<GroundItem>,
+    next_ground: u32,
 }
 
 /// How hard an ability hits, fixed when it's used.
@@ -520,6 +531,8 @@ impl World {
             free_camps: Vec::new(),
             hazards: Vec::new(),
             missiles: Vec::new(),
+            ground: Vec::new(),
+            next_ground: 1,
         };
         for camp in 0..world.camps.len() {
             for _ in 0..world.camps[camp].count {
@@ -580,6 +593,7 @@ impl World {
                 dead: false,
                 in_combat: false,
                 moving: false,
+                emote: None,
                 brain: Brain::Npc(NpcData {
                     role,
                     zone,
@@ -619,6 +633,7 @@ impl World {
             dead: false,
             in_combat: false,
             moving: false,
+            emote: None,
             brain: Brain::Mob(MobData {
                 kind: self.camps[camp].kind,
                 camp,
@@ -707,6 +722,7 @@ impl World {
                 dead: false,
                 in_combat: false,
                 moving: false,
+                emote: None,
                 brain: Brain::Player(PlayerData {
                     account: c.account.clone(),
                     class: c.class,
@@ -835,6 +851,7 @@ impl World {
             tick: self.tick,
             hazards: self.hazards_near(me.pos),
             portal: self.portal_at(me.pos),
+            ground: self.ground_near(id, me.pos),
             entities,
             me: SelfView {
                 xp: p.xp,
@@ -937,6 +954,16 @@ impl World {
             }
             ClientMsg::UseItem(slot) => {
                 if let Err(e) = self.use_item(id, slot) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::DropItem(slot) => {
+                if let Err(e) = self.drop_item(id, slot) {
+                    self.error(id, e);
+                }
+            }
+            ClientMsg::PickUp(item) => {
+                if let Err(e) = self.pick_up(id, item) {
                     self.error(id, e);
                 }
             }
@@ -1081,12 +1108,17 @@ impl World {
                 "kick" if !arg.is_empty() => self.party_kick(id, arg),
                 "promote" if !arg.is_empty() => self.party_promote(id, arg),
                 "p" | "party" if !arg.is_empty() => self.party_chat(id, arg),
+                c if Emote::from_command(c).is_some() => {
+                    self.emote(id, Emote::from_command(c).unwrap())
+                }
                 _ => {
                     self.send(
                         Audience::Only(id),
                         GameEvent::System(
                             "Commands: /who, /invite NAME, /accept, /decline, /leave, \
-                             /kick NAME, /promote NAME, /p MESSAGE (party chat)"
+                             /kick NAME, /promote NAME, /p MESSAGE (party chat). \
+                             Emotes: /kiss, /sit, /backflip, /wave, /flipoff, /no, /point \
+                             (at your target, if you have one)."
                                 .into(),
                         ),
                     );
@@ -1100,6 +1132,31 @@ impl World {
         }
         let from = self.entities[&id].name.clone();
         self.send(Audience::Everyone, GameEvent::Chat { from, text });
+    }
+
+    /// Plays an emote and tells everyone nearby.
+    fn emote(&mut self, id: EntityId, emote: Emote) -> Result<(), &'static str> {
+        let e = &self.entities[&id];
+        if e.dead {
+            return Err("You are dead.");
+        }
+        let target = e
+            .target
+            .filter(|t| *t != id)
+            .and_then(|t| self.entities.get(&t))
+            .map(|t| t.name.as_str());
+        let text = emote.text(&e.name, target);
+        let pos = e.pos;
+        self.entities.get_mut(&id).unwrap().emote = Some((emote, 0.0));
+        self.send(
+            Audience::Near(pos),
+            GameEvent::Emote {
+                who: id,
+                emote,
+                text,
+            },
+        );
+        Ok(())
     }
 
     fn release(&mut self, id: EntityId) {
@@ -2434,6 +2491,7 @@ impl World {
         self.tick_instances(dt);
         self.tick_hazards(dt);
         self.tick_missiles(dt);
+        self.tick_ground(dt);
         let ids: Vec<EntityId> = self.entities.keys().copied().collect();
         for &id in &ids {
             self.tick_timers(id, dt);
@@ -2466,6 +2524,18 @@ impl World {
         };
         e.gcd = (e.gcd - dt).max(0.0);
         e.swing_timer = (e.swing_timer - dt).max(0.0);
+        // Emotes play out; dying or casting ends them, and sitting also
+        // ends when you move or fight.
+        if let Some((emote, elapsed)) = &mut e.emote {
+            *elapsed += dt;
+            let over = emote.duration().is_some_and(|d| *elapsed >= d);
+            let busy = e.dead || e.cast.is_some();
+            let stand_up = *emote == Emote::Sit
+                && (e.moving || e.in_combat || e.player().is_some_and(|p| p.auto_attack));
+            if over || busy || stand_up {
+                e.emote = None;
+            }
+        }
         e.cooldowns.retain(|_, (r, _)| {
             *r -= dt;
             *r > 0.0
@@ -5019,5 +5089,107 @@ mod tests {
             }
         }
         assert!(w.hazards.is_empty());
+    }
+
+    #[test]
+    fn dropped_items_are_the_droppers_for_five_seconds() {
+        let mut w = World::new(81);
+        let a = join(&mut w, "Dropper", Class::Fighter, 3);
+        let b = join(&mut w, "Grabber", Class::Fighter, 3);
+        let at = w.entities[&a].pos;
+        w.entities.get_mut(&b).unwrap().pos = at;
+        let pa = w.entities.get_mut(&a).unwrap().player_mut().unwrap();
+        pa.bags[59] = Some((items::LIGHT_LEATHER, 7));
+        w.handle(a, ClientMsg::DropItem(59));
+        assert_eq!(w.entities[&a].player().unwrap().bags[59], None);
+        let g = w.ground[0].id;
+        assert_eq!(w.snapshot_for(b).unwrap().ground[0].locked, DROP_PROTECTION);
+        assert_eq!(w.snapshot_for(a).unwrap().ground[0].locked, 0.0);
+
+        // Too soon for anyone else.
+        w.handle(b, ClientMsg::PickUp(g));
+        assert_eq!(w.ground.len(), 1);
+        run(&mut w, DROP_PROTECTION + 0.1);
+        w.handle(b, ClientMsg::PickUp(g));
+        assert!(w.ground.is_empty());
+        let bags = &w.entities[&b].player().unwrap().bags;
+        assert_eq!(count_item(bags, items::LIGHT_LEATHER), 7);
+    }
+
+    #[test]
+    fn the_dropper_can_take_it_back_and_the_ground_clears() {
+        let mut w = World::new(82);
+        let a = join(&mut w, "Dropper", Class::Fighter, 3);
+        let pa = w.entities.get_mut(&a).unwrap().player_mut().unwrap();
+        pa.bags[0] = Some((items::LIGHT_LEATHER, 2));
+        pa.bags[1] = Some((items::LIGHT_LEATHER, 3));
+        w.handle(a, ClientMsg::DropItem(0));
+        w.handle(a, ClientMsg::DropItem(1));
+        w.handle(a, ClientMsg::DropItem(2)); // empty: nothing happens
+        assert_eq!(w.ground.len(), 2);
+        let g = w.ground[0].id;
+        w.handle(a, ClientMsg::PickUp(g));
+        assert_eq!(w.ground.len(), 1);
+        let bags = &w.entities[&a].player().unwrap().bags;
+        assert_eq!(count_item(bags, items::LIGHT_LEATHER), 2);
+        run(&mut w, DROP_LIFETIME + 0.1);
+        assert!(w.ground.is_empty());
+    }
+
+    #[test]
+    fn emotes_tell_everyone_nearby_and_sitting_ends_on_moving() {
+        let mut w = World::new(83);
+        let a = join(&mut w, "Waver", Class::Bard, 3);
+        let b = join(&mut w, "Friend", Class::Bard, 3);
+        w.entities.get_mut(&a).unwrap().target = Some(b);
+        w.drain_outbox();
+        w.handle(a, ClientMsg::Chat("/wave".into()));
+        let said: Vec<String> = w
+            .drain_outbox()
+            .into_iter()
+            .filter_map(|(to, m)| match (to, m) {
+                (Audience::Near(_), ServerMsg::Event(GameEvent::Emote { who, text, .. })) => {
+                    assert_eq!(who, a);
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, vec!["Waver waves at Friend.".to_string()]);
+        let view = w.snapshot_for(b).unwrap();
+        let seen = view.entities.iter().find(|e| e.id == a).unwrap();
+        assert_eq!(seen.emote.map(|e| e.emote), Some(Emote::Wave));
+        run(&mut w, 3.0);
+        assert_eq!(w.entities[&a].emote, None);
+
+        w.handle(a, ClientMsg::Chat("/sit".into()));
+        run(&mut w, 30.0);
+        assert_eq!(w.entities[&a].emote.map(|e| e.0), Some(Emote::Sit));
+        let pos = w.entities[&a].pos + Vec3::X;
+        w.handle(
+            a,
+            ClientMsg::Move {
+                pos,
+                yaw: 0.0,
+                moving: true,
+            },
+        );
+        run(&mut w, 0.1);
+        assert_eq!(w.entities[&a].emote, None);
+    }
+
+    #[test]
+    fn dungeon_bosses_have_double_health_and_their_mobs_a_quarter_more() {
+        for kind in MobKind::DUNGEON {
+            let listed = kind.template().hp;
+            let want = if kind.template().boss { 2.0 } else { 1.25 };
+            assert_eq!(kind.max_hp(1), listed * want, "{kind:?}");
+        }
+        assert_eq!(MobKind::Boar.max_hp(1), MobKind::Boar.template().hp);
+        let bosses = MobKind::DUNGEON
+            .iter()
+            .filter(|k| k.template().boss)
+            .count();
+        assert_eq!(bosses, shared::dungeon::DungeonId::ALL.len());
     }
 }

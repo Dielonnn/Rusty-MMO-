@@ -38,9 +38,20 @@ pub const HOTBAR_SLOTS: usize = 2 * BAR_SLOTS;
 pub type Hotbar = [Option<AbilityId>; HOTBAR_SLOTS];
 /// The key each slot of a hotbar is bound to.
 pub const BAR_KEYS: [&str; BAR_SLOTS] = ["1", "2", "3", "4", "5", "6", "Q", "E"];
-pub const BAG_SLOTS: usize = 20;
-/// How close you have to be to loot a corpse.
+pub const BAG_SLOTS: usize = 60;
+/// Bag slots in each row of the backpack window.
+pub const BAG_COLUMNS: usize = 10;
+/// How close you have to be to loot a corpse or pick up a dropped item.
 pub const LOOT_RANGE: f32 = 6.0;
+/// Seconds an item dropped on the ground is only the dropper's to pick up.
+pub const DROP_PROTECTION: f32 = 5.0;
+/// Seconds before an item left on the ground disappears.
+pub const DROP_LIFETIME: f32 = 300.0;
+/// Dungeon bosses have this many times their listed health.
+pub const BOSS_HEALTH_SCALE: f32 = 2.0;
+/// Other dungeon mobs (elites included) have this many times their listed
+/// health.
+pub const DUNGEON_HEALTH_SCALE: f32 = 1.25;
 /// The most players in one party.
 pub const MAX_PARTY_SIZE: usize = 8;
 /// Party members this close to a kill share its experience, quest credit
@@ -4279,7 +4290,18 @@ impl MobKind {
     }
 
     pub fn max_hp(self, level: u8) -> f32 {
-        self.template().hp * (1.0 + 0.3 * (level.max(1) - 1) as f32)
+        self.template().hp * self.health_scale() * (1.0 + 0.3 * (level.max(1) - 1) as f32)
+    }
+
+    /// Extra health for dungeon mobs, on top of their listed `hp`.
+    pub fn health_scale(self) -> f32 {
+        if self.template().boss {
+            BOSS_HEALTH_SCALE
+        } else if Self::DUNGEON.contains(&self) {
+            DUNGEON_HEALTH_SCALE
+        } else {
+            1.0
+        }
     }
 
     /// The dungeons' mobs, each dungeon's elite and boss last.

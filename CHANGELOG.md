@@ -5,6 +5,26 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.15
+
+Commit: the one titled "v7.15: bigger bags, tougher dungeons, dropping items, emotes".
+
+- **Three times the bag space**: the backpack holds 60 stacks instead of 20
+  (10 to a row). Existing characters get the extra room too.
+- **Tougher dungeons**: the three dungeon bosses (the Sunken King, Warlord
+  Gorrak Ashfist and Hrimja the Frostmother) have twice their health, and
+  every other dungeon mob, elites included, has a quarter more.
+- **Dropping items**: Shift+right-click an item in your bags to drop it on the
+  ground. For 5 seconds only you can pick it back up; then anyone nearby can
+  right-click it to take it. Items left on the ground disappear after 5
+  minutes.
+- **Emotes**: `/kiss`, `/sit`, `/backflip`, `/wave`, `/flipoff`, `/no` (a
+  finger-wag) and `/point`. Players nearby see it in chat ("Dielon waves at
+  Bob."), aimed at your target if you have one, with a label over your head.
+  Sitting and the backflip move your character; sitting lasts until you move
+  or fight.
+- Protocol version 16 (an older client can't join a v7.15 server).
+
 ## v7.14
 
 Commit: the one titled "v7.14: the Cinderforge and Frosthowl Cavern dungeons".

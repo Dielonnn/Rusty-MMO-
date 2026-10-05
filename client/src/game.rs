@@ -14,6 +14,8 @@ use shared::world::*;
 
 use crate::hud::{self, Layout};
 use crate::render::{self, Batch, Look, Pose, Scene};
+use macroquad::models::{Mesh, draw_mesh};
+use shared::emote::Emote;
 
 /// How far Tab looks for enemies.
 const TAB_RANGE: f32 = 45.0;
@@ -35,6 +37,9 @@ pub struct Ent {
     combo: u32,
     /// Seconds since last hurt.
     hurt: f32,
+    /// The emote playing, and seconds into it (kept smooth between
+    /// snapshots). Jonah's animation code can play it from here.
+    pub emote: Option<(shared::emote::Emote, f32)>,
 }
 
 impl Ent {
@@ -147,6 +152,8 @@ pub struct Game {
     hazards: Vec<HazardView>,
     /// The vault's teleporter out, once its boss is dead.
     portal: Option<Vec3>,
+    /// Items dropped on the ground nearby.
+    pub ground: Vec<GroundItemView>,
     pub floats: Vec<FloatText>,
     pub banner: Option<(String, String, f32)>,
     /// "Interrupted" and similar, shown on the cast bar.
@@ -214,6 +221,7 @@ impl Game {
             errors: Vec::new(),
             hazards: Vec::new(),
             portal: None,
+            ground: Vec::new(),
             floats: Vec::new(),
             banner: None,
             cast_flash: None,
@@ -449,7 +457,19 @@ impl Game {
                 for view in snap.entities {
                     seen.insert(view.id);
                     match self.entities.get_mut(&view.id) {
-                        Some(e) => e.view = view,
+                        Some(e) => {
+                            // Follow the server's emote, but keep our own
+                            // smoother clock while they agree.
+                            e.emote = view.emote.map(|v| match e.emote {
+                                Some((emote, t))
+                                    if emote == v.emote && (t - v.elapsed).abs() < 0.5 =>
+                                {
+                                    (emote, t)
+                                }
+                                _ => (v.emote, v.elapsed),
+                            });
+                            e.view = view;
+                        }
                         None => {
                             let (pos, yaw) = (view.pos, view.yaw);
                             self.entities.insert(
@@ -462,6 +482,7 @@ impl Game {
                                     swing: 10.0,
                                     combo: 0,
                                     hurt: 10.0,
+                                    emote: None,
                                 },
                             );
                         }
@@ -470,6 +491,7 @@ impl Game {
                 self.entities.retain(|id, _| seen.contains(id));
                 self.hazards = std::mem::take(&mut snap.hazards);
                 self.portal = snap.portal;
+                self.ground = std::mem::take(&mut snap.ground);
                 if snap.me.talents != self.me.talents {
                     self.bonuses = shared::talents::Bonuses::new(self.class, &snap.me.talents);
                 }
@@ -782,6 +804,15 @@ impl Game {
                 color: Color::new(0.55, 0.75, 1.0, 1.0),
             }),
             GameEvent::System(text) => self.system(&text),
+            GameEvent::Emote { who, emote, text } => {
+                if let Some(e) = self.entities.get_mut(&who) {
+                    e.emote = Some((emote, 0.0));
+                }
+                self.chat.push(ChatLine {
+                    text,
+                    color: Color::new(1.0, 0.55, 0.25, 1.0),
+                });
+            }
         }
         if self.chat.len() > 100 {
             self.chat.drain(..self.chat.len() - 100);
@@ -1117,8 +1148,33 @@ impl Game {
         None
     }
 
-    /// Right click in the world: loot a corpse, or target and attack.
+    /// The dropped item under the mouse cursor, if any.
+    pub fn pick_ground(&self, cam: &Camera3D, mouse: Vec2) -> Option<&GroundItemView> {
+        self.ground
+            .iter()
+            .filter_map(|g| {
+                let p = hud::project(cam, g.pos + Vec3::Y * 0.25)?;
+                let d = p.distance(mouse);
+                (d < 22.0).then_some((d, g))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, g)| g)
+    }
+
+    /// Right click in the world: pick up a dropped item, loot a corpse, or
+    /// target and attack.
     fn right_click(&mut self, cam: &Camera3D, at: Vec2) {
+        if let Some(g) = self.pick_ground(cam, at) {
+            let (id, pos, locked) = (g.id, g.pos, g.locked);
+            if pos.distance(self.pos) > LOOT_RANGE {
+                self.error("You are too far away.");
+            } else if locked > 0.0 {
+                self.error("Someone just dropped that. Wait a moment.");
+            } else {
+                self.send(ClientMsg::PickUp(id));
+            }
+            return;
+        }
         let Some(id) = self.pick(cam, at) else { return };
         self.set_target(Some(id));
         let Some(e) = self.entities.get(&id) else {
@@ -1259,7 +1315,10 @@ impl Game {
             // armor wears it and right clicking a potion drinks it.
             if let Some(Some((id, _))) = self.me.bags.get(i) {
                 let kind = item(*id).kind;
-                if let (Some(merchant), false) = (self.windows.vendor, left) {
+                let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+                if shift && !left {
+                    self.send(ClientMsg::DropItem(i));
+                } else if let (Some(merchant), false) = (self.windows.vendor, left) {
                     self.send(ClientMsg::Sell { merchant, slot: i });
                 } else if matches!(kind, ItemKind::Armor { .. } | ItemKind::Weapon { .. }) {
                     self.send(ClientMsg::Equip(i));
@@ -1494,6 +1553,9 @@ impl Game {
             }
             e.swing += dt * 2.5;
             e.hurt += dt;
+            if let Some((_, t)) = &mut e.emote {
+                *t += dt;
+            }
         }
 
         for f in &mut self.floats {
@@ -1628,6 +1690,37 @@ impl Game {
             let bob = 1.6 + 0.15 * (self.time * 2.0).sin();
             b.glow_sphere(at + Vec3::Y * bob, 0.35, Color::new(0.7, 0.9, 1.0, 1.0));
         }
+        // Dropped items: a little sack ringed in its quality color, sparkling
+        // once you may pick it up.
+        for g in &self.ground {
+            let it = item(g.stack.0);
+            let color = Color::new(it.color.0, it.color.1, it.color.2, 1.0);
+            let ring = hud::quality_color(it.quality);
+            let ready = g.locked <= 0.0;
+            b.ground_ring(
+                g.pos,
+                0.45,
+                0.07,
+                Color::new(ring.r, ring.g, ring.b, if ready { 0.9 } else { 0.35 }),
+            );
+            b.block(
+                g.pos + Vec3::Y * 0.18,
+                vec3(0.2, 0.18, 0.16),
+                0.6,
+                Color::new(0.45, 0.3, 0.16, 1.0),
+            );
+            b.sphere(g.pos + Vec3::Y * 0.4, 0.12, color);
+            if ready {
+                let a = self.time * 2.0 + g.id as f32;
+                let p = g.pos
+                    + vec3(
+                        a.cos() * 0.35,
+                        0.5 + (self.time * 3.0).sin() * 0.1,
+                        a.sin() * 0.35,
+                    );
+                b.glow_sphere(p, 0.05, Color::new(1.0, 0.88, 0.35, 1.0));
+            }
+        }
         for e in self.entities.values() {
             let mine = Some(e.view.id) == self.my_id;
             let airborne = if mine {
@@ -1646,7 +1739,20 @@ impl Game {
                 hurt: (1.0 - e.hurt / 0.35).max(0.0),
                 time: self.time + e.view.id as f32,
             };
-            render::draw_model(b, &e.look(), e.pos, e.yaw, pose);
+            match e.emote.filter(|_| e.view.kind.is_player() && !e.view.dead) {
+                // Whole-body emotes: draw the model on its own and bend it.
+                Some((emote @ (Emote::Backflip | Emote::Sit), t)) => {
+                    let mut own = Batch::recording();
+                    render::draw_model(&mut own, &e.look(), e.pos, e.yaw, pose);
+                    b.flush();
+                    let height = render::model_height(e.view.kind, e.view.appearance);
+                    for mut mesh in own.finish() {
+                        bend(&mut mesh, emote, t, e.pos, e.yaw, height);
+                        draw_mesh(&mesh);
+                    }
+                }
+                _ => render::draw_model(b, &e.look(), e.pos, e.yaw, pose),
+            }
             // Corpses you can loot sparkle.
             if e.view.lootable {
                 for k in 0..4 {
@@ -1702,6 +1808,53 @@ impl Game {
             scene.draw_water(self.zone);
         }
         self.vfx.draw_glows();
+    }
+}
+
+/// Bends a character's model drawn at `pos` for a whole-body emote, `t`
+/// seconds in: a backflip spins it over backwards in a hop, sitting folds
+/// the legs forward at the hips and lowers it to the ground. The rest of
+/// the emotes need the animation code in `models/`.
+fn bend(mesh: &mut Mesh, emote: Emote, t: f32, pos: Vec3, yaw: f32, height: f32) {
+    let forward = vec3(yaw.sin(), 0.0, yaw.cos());
+    // Turning about this axis tips the top backwards and the bottom forwards.
+    let axis = forward.cross(Vec3::Y);
+    let ease = |k: f32| {
+        let k = k.clamp(0.0, 1.0);
+        k * k * (3.0 - 2.0 * k)
+    };
+    let hip = height * 0.47;
+    for v in &mut mesh.vertices {
+        let normal = v.normal.truncate();
+        // The blob shadow has no normal: leave it on the ground.
+        if normal == Vec3::ZERO {
+            continue;
+        }
+        let (pivot, turn, shift) = match emote {
+            Emote::Backflip => {
+                let k = (t / emote.duration().unwrap_or(1.0)).clamp(0.0, 1.0);
+                let lift = 4.0 * k * (1.0 - k) * 1.3;
+                (
+                    pos + Vec3::Y * height * 0.5,
+                    ease(k) * std::f32::consts::TAU,
+                    Vec3::Y * lift,
+                )
+            }
+            _ => {
+                // Sitting down takes a moment; below the hips, legs turn
+                // to point forward.
+                let k = ease(t / 0.4);
+                let below = ease((hip + 0.05 - (v.position.y - pos.y)) / 0.2);
+                (
+                    pos + Vec3::Y * hip,
+                    below * std::f32::consts::FRAC_PI_2 * k,
+                    -Vec3::Y * (hip - 0.12) * k,
+                )
+            }
+        };
+        let q = Quat::from_axis_angle(axis, turn);
+        v.position = pivot + q * (v.position - pivot) + shift;
+        v.normal = (q * normal).extend(v.normal.w);
     }
 }
 
