@@ -10,6 +10,7 @@ use shared::protocol::{Destination, EntityKind, SandboxCmd};
 use shared::talents::{self, TALENTS, TIER_RANKS, TIER_REQUIRES};
 use shared::world::*;
 
+use crate::drag::{self, Win};
 use crate::game::Game;
 use crate::hud::{
     BORDER, GOLD, PANEL, button, button_ex, class_color, panel, reaction_color, text,
@@ -394,11 +395,14 @@ pub struct TalentLayout {
 
 pub fn talent_layout() -> TalentLayout {
     let (w, h) = (screen_width(), screen_height());
-    let window = Rect::new(
-        (w - 690.0) / 2.0,
-        ((h - 470.0) / 2.0).max(20.0),
-        690.0,
-        470.0,
+    let window = drag::place(
+        Win::Talents,
+        Rect::new(
+            (w - 690.0) / 2.0,
+            ((h - 470.0) / 2.0).max(20.0),
+            690.0,
+            470.0,
+        ),
     );
     let boxes = std::array::from_fn(|i| {
         let (branch, tier) = (i / 3, i % 3);
@@ -595,7 +599,10 @@ pub enum SandboxAction {
 
 pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
     let (w, _) = (screen_width(), screen_height());
-    let window = Rect::new(w - 16.0 - 300.0 - 280.0, 110.0, 280.0, 560.0);
+    let window = drag::place(
+        Win::Sandbox,
+        Rect::new(w - 16.0 - 300.0 - 280.0, 110.0, 280.0, 560.0),
+    );
     let mut buttons = Vec::new();
     let x = window.x + 12.0;
     let iw = window.w - 24.0;
@@ -849,7 +856,10 @@ pub struct TravelLayout {
 pub fn travel_window() -> Rect {
     let rows = Zone::ALL.len() + 1;
     let h = 92.0 + rows as f32 * 40.0 + 30.0;
-    Rect::new(screen_width() / 2.0 - 190.0, 140.0, 380.0, h)
+    drag::place(
+        Win::Travel,
+        Rect::new(screen_width() / 2.0 - 190.0, 140.0, 380.0, h),
+    )
 }
 
 pub fn travel_layout(place: Place, level: u8) -> TravelLayout {

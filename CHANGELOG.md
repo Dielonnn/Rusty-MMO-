@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v7.9
+## v7.10
 
-Commit: the one titled "v7.9: casters drop potions, elites and the Sunken King drop materials".
+Commit: the one titled "v7.10: casters drop potions, elites and the Sunken King drop materials".
 
 - **Casters drop potions**: mystics, shamans, tricksters, necromancers and
   the Drowned Adept drop a Healing Potion 35% of the time
@@ -15,6 +15,27 @@ Commit: the one titled "v7.9: casters drop potions, elites and the Sunken King d
   drop 5 Iron Scrap, on top of their Ancient Core and Linen Cloth
 - **The Sunken King drops materials**: Morvane always drops 3 to 5 Iron
   Scrap and 3 to 5 Light Leather, on top of the rest of his loot
+
+## v7.9.5
+
+Commit: the one titled "v7.9.5: movable windows, the Sunken King boss fight, personal dungeon loot".
+
+- **Movable windows**: drag the Backpack, Character, Skills, Talents, Sandbox,
+  Travel, vendor and quest windows around by their title bars. They stay where
+  you leave them until you close the game.
+- **The Sunken King is a Boss**: his nameplate says "Boss" instead of "Elite",
+  and he has a fight of his own:
+  - **Tidal Crash**: every 12 seconds a red circle marks the ground under each
+    player fighting him and fills up over 2.5 seconds. Step out before it's
+    full or take a heavy hit.
+  - **Drowning Grasp**: a 2.5-second cast that hits his target for 28-34.
+  - **Call of the Deep**: when he's below 90% health, a 3-second cast that heals
+    him for 140-145.
+  - Both spells can be interrupted.
+- **Personal dungeon loot**: in the Sunken Vault, every enemy rolls gear for
+  each player in the group separately. Only you can loot your own gear;
+  materials and coins are still shared as before.
+- Protocol version 12 (an older client can't join a v7.9.5 server).
 
 ## v7.8
 
