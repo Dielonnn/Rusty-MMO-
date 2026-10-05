@@ -80,6 +80,16 @@ impl World {
                 }
             }
         }
+        // A human quest giver waits by the way in.
+        let pos = dungeon::to_world(index, dungeon::QUEST_GIVER);
+        let entrance = dungeon::to_world(index, dungeon::ENTRANCE);
+        self.spawn_npc_at(
+            Zone::Amberfall,
+            NpcRole::QuestGiver,
+            quests::VAULT_GIVER,
+            pos,
+            yaw_towards(pos, entrance),
+        );
         self.instances.insert(
             index,
             Instance {
@@ -92,7 +102,8 @@ impl World {
         Ok(index)
     }
 
-    /// Closes a copy of the vault: its mobs and corpses are gone.
+    /// Closes a copy of the vault: its mobs, corpses and quest giver are
+    /// gone.
     fn close_instance(&mut self, index: u32) {
         let Some(inst) = self.instances.remove(&index) else {
             return;
@@ -100,7 +111,11 @@ impl World {
         let gone: Vec<EntityId> = self
             .entities
             .values()
-            .filter(|e| e.mob().is_some_and(|m| inst.camps.contains(&m.camp)))
+            .filter(|e| {
+                e.mob().is_some_and(|m| inst.camps.contains(&m.camp))
+                    || (matches!(e.brain, Brain::Npc(_))
+                        && Place::at(e.pos) == Place::Dungeon(index))
+            })
             .map(|e| e.id)
             .collect();
         for id in gone {

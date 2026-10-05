@@ -537,14 +537,25 @@ impl World {
 
     /// A townsperson standing at their spot in a zone's town.
     fn spawn_npc(&mut self, zone: Zone, role: NpcRole) -> EntityId {
-        let id = self.alloc_id();
         let (spot, name) = match role {
             NpcRole::Merchant => (MERCHANT_SPOT, zone.merchant_name()),
             NpcRole::QuestGiver => (QUEST_SPOT, quests::quest_giver_name(zone)),
         };
         let pos = zone.ground_local(spot);
         let center = zone.ground_local(Vec2::ZERO);
-        let yaw = yaw_towards(pos, center);
+        self.spawn_npc_at(zone, role, name, pos, yaw_towards(pos, center))
+    }
+
+    /// Puts an NPC of `zone`'s race at `pos`.
+    fn spawn_npc_at(
+        &mut self,
+        zone: Zone,
+        role: NpcRole,
+        name: &str,
+        pos: Vec3,
+        yaw: f32,
+    ) -> EntityId {
+        let id = self.alloc_id();
         self.entities.insert(
             id,
             Entity {
@@ -1421,16 +1432,9 @@ impl World {
         let Brain::Npc(n) = &g.brain else {
             return Err("They have no quests for you.");
         };
-        let q = quests::quest(quest);
-        if n.role != NpcRole::QuestGiver || q.zone != n.zone {
+        let theirs = quests::offered(Place::at(g.pos));
+        if n.role != NpcRole::QuestGiver || !theirs.iter().any(|q| q.id == quest) {
             return Err("They have no quests for you.");
-        }
-        if q.race_only
-            && me
-                .player()
-                .is_some_and(|p| p.appearance.race.zone() != n.zone)
-        {
-            return Err("They only give that quest to their own people.");
         }
         if g.pos.distance(me.pos) > MERCHANT_RANGE + 1.0 {
             return Err("You are too far away.");
@@ -3941,25 +3945,49 @@ mod tests {
     }
 
     #[test]
-    fn only_your_own_race_is_sent_after_the_sunken_king() {
+    fn dungeon_master_joe_sends_you_after_the_sunken_king() {
         let mut w = World::new(45);
         let p = join(&mut w, "Hero", Class::Mage, 10);
-        let home = w.entities[&p].player().unwrap().appearance.race.zone();
-        let away = Zone::ALL.into_iter().find(|z| *z != home).unwrap();
-        let giver = visit_giver(&mut w, p, away);
-        let theirs = quests::vault_quest(away).id;
-        assert!(w.accept_quest(p, giver, theirs).is_err());
-        let giver = visit_giver(&mut w, p, home);
-        let ours = quests::vault_quest(home).id;
-        assert_eq!(w.accept_quest(p, giver, ours), Ok(()));
-        // Kill the King, and the trident is yours.
-        let king = boss_fight(&mut w, p);
+        let ours = quests::vault_quest().id;
+        // The town quest givers don't offer it.
+        let giver = visit_giver(&mut w, p, Zone::Amberfall);
+        assert!(w.accept_quest(p, giver, ours).is_err());
+        at_waystone(&mut w, p);
+        w.handle(p, ClientMsg::Travel(Destination::Dungeon));
+        let Place::Dungeon(index) = place(&w, p) else {
+            panic!("not in the vault")
+        };
+        let joe = w
+            .entities
+            .values()
+            .find(|e| e.name == quests::VAULT_GIVER && Place::at(e.pos) == Place::Dungeon(index))
+            .unwrap()
+            .id;
+        assert_eq!(w.entities[&joe].kind(), EntityKind::QuestGiver(Race::Human));
+        assert!(
+            w.accept_quest(p, joe, quests::zone_quests(Zone::Amberfall)[0].id)
+                .is_err()
+        );
+        assert_eq!(w.accept_quest(p, joe, ours), Ok(()));
+        // Kill the King, come back to Joe, and the trident is yours.
+        let king = vault_mobs(&w, index)
+            .into_iter()
+            .find(|m| w.entities[m].mob().unwrap().kind == MobKind::SunkenKing)
+            .unwrap();
+        w.provoke(p, king, 10.0);
         w.kill(king, Some(p));
-        assert_eq!(w.entities[&p].player().unwrap().quests.progress(ours), Some(1));
-        let giver = visit_giver(&mut w, p, home);
-        assert_eq!(w.turn_in_quest(p, giver, ours), Ok(()));
+        assert_eq!(
+            w.entities[&p].player().unwrap().quests.progress(ours),
+            Some(1)
+        );
+        assert_eq!(w.turn_in_quest(p, joe, ours), Ok(()));
         let bags = &w.entities[&p].player().unwrap().bags;
         assert!(bags.contains(&Some((items::TIDEBREAKER_TRIDENT, 1))));
+        // Joe goes when the vault closes.
+        w.entities.get_mut(&p).unwrap().pos = dungeon::to_world(index, dungeon::EXIT_STONE);
+        w.handle(p, ClientMsg::Travel(Destination::Town(Zone::Amberfall)));
+        run(&mut w, dungeon::EMPTY_RESET + 5.0);
+        assert!(!w.entities.contains_key(&joe));
     }
 
     #[test]

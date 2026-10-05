@@ -37,6 +37,8 @@ pub const WALL_THICKNESS: f32 = 1.0;
 pub const ENTRANCE: Vec2 = Vec2::new(0.0, -2.0);
 /// The waystone that takes you back out.
 pub const EXIT_STONE: Vec2 = Vec2::new(0.0, -6.0);
+/// Where the vault's quest giver stands, beside the way in.
+pub const QUEST_GIVER: Vec2 = Vec2::new(4.0, -3.0);
 /// The teleporter that opens in the throne room once the boss is dead. It
 /// works like the waystone at the entrance.
 pub const PORTAL: Vec2 = Vec2::new(-10.0, 128.0);
@@ -452,7 +454,7 @@ mod tests {
 
     #[test]
     fn entrance_packs_and_stone_are_on_open_floor() {
-        assert!(open(ENTRANCE) && open(EXIT_STONE) && open(PORTAL));
+        assert!(open(ENTRANCE) && open(EXIT_STONE) && open(PORTAL) && open(QUEST_GIVER));
         assert!(!blocked(to_world(0, ENTRANCE), 0.45));
         for p in &PACKS {
             assert!(open(p.center), "pack at {}", p.center);

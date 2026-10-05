@@ -2,10 +2,10 @@
 //! tracker under the minimap, and the "!" and "?" over quest givers' heads.
 
 use macroquad::prelude::*;
-use shared::data::{Race, format_money, item};
+use shared::data::{format_money, item};
 use shared::protocol::Stack;
 use shared::quests::{Goal, Quest, QuestId, QuestLog, offered, quest};
-use shared::world::Zone;
+use shared::world::Place;
 
 use crate::drag::{self, Win};
 use crate::hud::{
@@ -54,15 +54,9 @@ pub enum Marker {
     Available,
 }
 
-pub fn marker(
-    log: &QuestLog,
-    zone: Zone,
-    race: Race,
-    level: u8,
-    bags: &[Option<Stack>],
-) -> Option<Marker> {
-    let all: Vec<Status> = offered(zone, race)
-        .into_iter()
+pub fn marker(log: &QuestLog, place: Place, level: u8, bags: &[Option<Stack>]) -> Option<Marker> {
+    let all: Vec<Status> = offered(place)
+        .iter()
         .map(|q| status(log, q, level, bags))
         .collect();
     if all.contains(&Status::Ready) {
@@ -114,14 +108,13 @@ const ROW: f32 = 158.0;
 const DONE_ROW: f32 = 30.0;
 
 pub fn giver_layout(
-    zone: Zone,
-    race: Race,
+    place: Place,
     log: &QuestLog,
     level: u8,
     bags: &[Option<Stack>],
 ) -> GiverLayout {
     let h = screen_height();
-    let quests = offered(zone, race);
+    let quests = offered(place);
     let heights: Vec<f32> = quests
         .iter()
         .map(|q| match status(log, q, level, bags) {
@@ -137,7 +130,7 @@ pub fn giver_layout(
     let mut rows = Vec::new();
     let mut buttons = Vec::new();
     let mut y = window.y + 40.0;
-    for (q, row_h) in quests.into_iter().zip(heights) {
+    for (q, row_h) in quests.iter().zip(heights) {
         let row = Rect::new(window.x + 12.0, y, window.w - 24.0, row_h);
         y += row_h + 8.0;
         let b = Rect::new(row.right() - 110.0, row.bottom() - 36.0, 100.0, 30.0);
@@ -205,13 +198,12 @@ fn reward_line(q: &Quest, x: f32, y: f32) -> Option<(Rect, shared::data::ItemId)
 /// tooltip.
 pub fn draw_giver(
     giver_name: &str,
-    zone: Zone,
-    race: Race,
+    place: Place,
     log: &QuestLog,
     level: u8,
     bags: &[Option<Stack>],
 ) -> Option<(Rect, shared::data::ItemId)> {
-    let l = giver_layout(zone, race, log, level, bags);
+    let l = giver_layout(place, log, level, bags);
     let r = l.window;
     panel(r);
     draw_rectangle(
@@ -225,7 +217,7 @@ pub fn draw_giver(
     button(l.close, "x");
     let mouse = vec2(mouse_position().0, mouse_position().1);
     let mut hover = None;
-    for (q, row) in offered(zone, race).into_iter().zip(&l.rows) {
+    for (q, row) in offered(place).iter().zip(&l.rows) {
         let s = status(log, q, level, bags);
         draw_rectangle(
             row.x,
@@ -378,11 +370,7 @@ pub fn draw_log(log: &QuestLog, level: u8, bags: &[Option<Stack>]) {
             Color::new(1.0, 0.95, 0.6, 1.0),
         );
         text(
-            &format!(
-                "From {}, {}",
-                shared::quests::quest_giver_name(q.zone),
-                q.zone.town_name()
-            ),
+            &format!("From {}, {}", q.giver().0, q.giver().1),
             r.x + 14.0,
             y + 78.0,
             14.0,
@@ -411,7 +399,7 @@ pub fn draw_tracker(log: &QuestLog, level: u8, bags: &[Option<Stack>], top: f32)
         y += 17.0;
         let (line, c) = if s == Status::Ready {
             (
-                format!("  Return to {}", shared::quests::quest_giver_name(q.zone)),
+                format!("  Return to {}", q.giver().0),
                 Color::new(0.4, 1.0, 0.4, 1.0),
             )
         } else {
@@ -447,6 +435,7 @@ mod tests {
     use super::*;
     use shared::data::items;
     use shared::quests::zone_quests;
+    use shared::world::Zone;
 
     #[test]
     fn statuses_follow_progress_and_bags() {
@@ -456,7 +445,7 @@ mod tests {
         assert_eq!(status(&log, q, 1, &[]), Status::Available);
         assert_eq!(status(&log, craft, 1, &[]), Status::TooLow(2));
         assert_eq!(
-            marker(&log, Zone::Amberfall, Race::Human, 1, &[]),
+            marker(&log, Place::Zone(Zone::Amberfall), 1, &[]),
             Some(Marker::Available)
         );
         log.active.push((q.id, 3));
@@ -465,7 +454,7 @@ mod tests {
         let bags = [Some((items::LEATHER_VEST, 1))];
         assert_eq!(status(&log, craft, 2, &bags), Status::Ready);
         assert_eq!(
-            marker(&log, Zone::Amberfall, Race::Human, 2, &bags),
+            marker(&log, Place::Zone(Zone::Amberfall), 2, &bags),
             Some(Marker::Ready)
         );
         assert_eq!(
@@ -474,10 +463,10 @@ mod tests {
         );
         log.active.clear();
         log.done = vec![q.id, craft.id, zone_quests(Zone::Amberfall)[2].id];
-        // Only humans are sent after the Sunken King from here.
-        assert_eq!(marker(&log, Zone::Amberfall, Race::Orc, 10, &[]), None);
+        assert_eq!(marker(&log, Place::Zone(Zone::Amberfall), 10, &[]), None);
+        // The vault's quest giver has one of his own.
         assert_eq!(
-            marker(&log, Zone::Amberfall, Race::Human, 10, &[]),
+            marker(&log, Place::Dungeon(0), 10, &[]),
             Some(Marker::Available)
         );
     }

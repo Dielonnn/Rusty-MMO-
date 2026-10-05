@@ -327,8 +327,7 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
             EntityKind::QuestGiver(_) => {
                 if let Some(m) = crate::quests_ui::marker(
                     &game.me.quests,
-                    zone,
-                    game.race(),
+                    Place::Zone(zone),
                     game.level(),
                     &game.me.bags,
                 ) {
