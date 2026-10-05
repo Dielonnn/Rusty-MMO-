@@ -1,4 +1,7 @@
-//! People, giants and humanoid mobs: bodies, faces, hair and headwear.
+//! Humanoids built from shapes: bodies, faces, hair and headwear.
+//!
+//! Since v8.0 people and humanoid mobs are rigged models (`rigged`), so this
+//! only draws giants. It goes when giants become models too.
 
 use super::*;
 

@@ -199,7 +199,7 @@ impl Race {
             Race::Orc => Zone::Scorchsand,
             Race::Elf => Zone::Silverbough,
             Race::Goblin => Zone::Grubdeep,
-            Race::Gnome => Zone::Frostcog,
+            Race::Gnome | Race::Dwarf => Zone::Frostcog,
             Race::Undead => Zone::Witherwood,
         }
     }
