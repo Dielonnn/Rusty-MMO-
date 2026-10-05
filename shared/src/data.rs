@@ -3,9 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spells;
 use crate::world::Zone;
 
-pub const MAX_LEVEL: u8 = 10;
+pub const MAX_LEVEL: u8 = 20;
 /// The global cooldown every ability triggers.
 pub const GCD: f32 = 1.5;
 pub const MELEE_RANGE: f32 = 4.0;
@@ -20,12 +21,23 @@ pub const MANA_REGEN_DELAY: f32 = 5.0;
 /// Energy comes back this fast, in or out of combat.
 pub const ENERGY_PER_SECOND: f32 = 10.0;
 pub const MAX_COMBO_POINTS: u8 = 5;
-/// Abilities per class: keys 1-6 and E.
-pub const ACTION_BAR_SLOTS: usize = 7;
-/// The action bar slot bound to the E key.
-pub const E_SLOT: usize = 6;
-/// The level each action bar slot's ability is learned at (the last is E).
-pub const UNLOCK_LEVELS: [u8; ACTION_BAR_SLOTS] = [1, 2, 4, 6, 8, 10, 3];
+/// Each class's first abilities, learned by level 10 (originally keys 1-6
+/// and E).
+pub const CORE_ABILITIES: usize = 7;
+/// The level each core ability is learned at (the last was on E).
+pub const UNLOCK_LEVELS: [u8; CORE_ABILITIES] = [1, 2, 4, 6, 8, 10, 3];
+/// Everything in a class's spell book: the core abilities, then the spells
+/// learned at levels 12-20.
+pub const SPELLBOOK_SIZE: usize = CORE_ABILITIES + spells::PER_CLASS;
+/// Slots on one hotbar: keys 1-6, Q and E.
+pub const BAR_SLOTS: usize = 8;
+/// Both hotbars: the bottom one (1-6, Q, E), then the top one (the same keys
+/// with Shift).
+pub const HOTBAR_SLOTS: usize = 2 * BAR_SLOTS;
+/// What's on each hotbar slot.
+pub type Hotbar = [Option<AbilityId>; HOTBAR_SLOTS];
+/// The key each slot of a hotbar is bound to.
+pub const BAR_KEYS: [&str; BAR_SLOTS] = ["1", "2", "3", "4", "5", "6", "Q", "E"];
 pub const BAG_SLOTS: usize = 20;
 /// How close you have to be to loot a corpse.
 pub const LOOT_RANGE: f32 = 6.0;
@@ -311,9 +323,9 @@ impl Class {
         self.auto_attack().range <= MELEE_RANGE
     }
 
-    /// The class's action bar: keys 1-6, then E. Slot `i` is learned at
-    /// `UNLOCK_LEVELS[i]`.
-    pub fn abilities(self) -> [AbilityId; ACTION_BAR_SLOTS] {
+    /// The class's core abilities: originally keys 1-6, then E. Ability `i`
+    /// is learned at `UNLOCK_LEVELS[i]`.
+    pub fn abilities(self) -> [AbilityId; CORE_ABILITIES] {
         use ids::*;
         match self {
             Class::Barbarian => [
@@ -436,21 +448,95 @@ impl Class {
         }
     }
 
+    /// Where this class's block of level 12-20 spells sits in
+    /// `spells::SPELLS`. Never reorder: the ids are saved on hotbars.
+    fn spell_block(self) -> u16 {
+        match self {
+            Class::Barbarian => 0,
+            Class::Fighter => 1,
+            Class::Paladin => 2,
+            Class::Monk => 3,
+            Class::Rogue => 4,
+            Class::Ranger => 5,
+            Class::Artificer => 6,
+            Class::Bard => 7,
+            Class::Cleric => 8,
+            Class::Druid => 9,
+            Class::Mage => 10,
+            Class::Sorcerer => 11,
+            Class::Warlock => 12,
+        }
+    }
+
+    /// The spells learned at `spells::LEVELS` (12, 14, 16, 18 and 20).
+    pub fn spells(self) -> [AbilityId; spells::PER_CLASS] {
+        let first = FIRST_SPELL + self.spell_block() * spells::PER_CLASS as u16;
+        std::array::from_fn(|i| AbilityId(first + i as u16))
+    }
+
+    /// Every ability the class ever learns and the level it's learned at,
+    /// lowest level first: the spell book.
+    pub fn spellbook(self) -> [(AbilityId, u8); SPELLBOOK_SIZE] {
+        let mut book = [(AbilityId(0), 0); SPELLBOOK_SIZE];
+        let all = self
+            .abilities()
+            .into_iter()
+            .zip(UNLOCK_LEVELS)
+            .chain(self.spells().into_iter().zip(spells::LEVELS));
+        for (slot, entry) in book.iter_mut().zip(all) {
+            *slot = entry;
+        }
+        book.sort_by_key(|(_, level)| *level);
+        book
+    }
+
     /// The level this class learns an ability at, if it ever does.
     pub fn unlock_level(self, ability: AbilityId) -> Option<u8> {
-        self.abilities()
-            .iter()
-            .position(|a| *a == ability)
-            .map(|i| UNLOCK_LEVELS[i])
+        self.spellbook()
+            .into_iter()
+            .find(|(a, _)| *a == ability)
+            .map(|(_, l)| l)
     }
 
     /// Abilities known at a level.
     pub fn known(self, level: u8) -> impl Iterator<Item = AbilityId> {
-        self.abilities()
+        self.spellbook()
             .into_iter()
-            .zip(UNLOCK_LEVELS)
             .filter(move |(_, l)| *l <= level)
             .map(|(a, _)| a)
+    }
+
+    /// The hotbars of a character who hasn't rearranged them: the core
+    /// abilities where they always were (1-6 and E), the level 12 spell on
+    /// Q and the later ones on Shift+1-4.
+    pub fn default_hotbar(self) -> Hotbar {
+        let core = self.abilities();
+        let new = self.spells();
+        let mut bar = [None; HOTBAR_SLOTS];
+        for (slot, id) in bar.iter_mut().zip(&core[..6]) {
+            *slot = Some(*id);
+        }
+        bar[6] = Some(new[0]);
+        bar[7] = Some(core[6]);
+        for (slot, id) in bar[BAR_SLOTS..].iter_mut().zip(&new[1..]) {
+            *slot = Some(*id);
+        }
+        bar
+    }
+
+    /// A hotbar with anything that isn't this class's, and any ability that
+    /// appears twice, taken off.
+    pub fn sanitize_hotbar(self, bar: &Hotbar) -> Hotbar {
+        let mut out = [None; HOTBAR_SLOTS];
+        for (i, id) in bar.iter().enumerate() {
+            if let Some(id) = *id
+                && self.unlock_level(id).is_some()
+                && !out.contains(&Some(id))
+            {
+                out[i] = Some(id);
+            }
+        }
+        out
     }
 
     /// Rogues and monks build points to spend on finishers.
@@ -467,11 +553,14 @@ pub fn level_scale(level: u8) -> f32 {
 }
 
 /// Experience needed to go from `level` to the next one. Zero at the cap.
+/// From level 10 on it climbs faster (placeholder numbers).
 pub fn xp_to_next(level: u8) -> u32 {
     if level >= MAX_LEVEL {
         0
-    } else {
+    } else if level < 10 {
         100 + 85 * (level as u32 - 1)
+    } else {
+        1000 + 200 * (level as u32 - 10)
     }
 }
 
@@ -671,8 +760,20 @@ impl Ability {
     }
 }
 
+/// The id of the first level 12-20 spell; the original abilities come
+/// before it.
+pub const FIRST_SPELL: u16 = 98;
+
 pub fn ability(id: AbilityId) -> &'static Ability {
-    &ABILITIES[id.0 as usize]
+    try_ability(id).expect("unknown ability")
+}
+
+/// An ability, if the id is one.
+pub fn try_ability(id: AbilityId) -> Option<&'static Ability> {
+    match id.0.checked_sub(FIRST_SPELL) {
+        None => ABILITIES.get(id.0 as usize),
+        Some(i) => spells::SPELLS.get(i as usize),
+    }
 }
 
 pub mod ids {
@@ -795,7 +896,7 @@ pub mod ids {
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn ab(
+pub(crate) const fn ab(
     name: &'static str,
     description: &'static str,
     school: School,
@@ -824,17 +925,17 @@ const fn ab(
     }
 }
 
-const fn threat(mut a: Ability, threat: f32) -> Ability {
+pub(crate) const fn threat(mut a: Ability, threat: f32) -> Ability {
     a.threat = threat;
     a
 }
 
-const fn projectile(mut a: Ability) -> Ability {
+pub(crate) const fn projectile(mut a: Ability) -> Ability {
     a.projectile = true;
     a
 }
 
-const fn stacks(mut a: Ability, max: u8) -> Ability {
+pub(crate) const fn stacks(mut a: Ability, max: u8) -> Ability {
     a.max_stacks = max;
     a
 }
@@ -844,7 +945,7 @@ const fn behind(mut a: Ability) -> Ability {
     a
 }
 
-const fn min_range(mut a: Ability, min: f32) -> Ability {
+pub(crate) const fn min_range(mut a: Ability, min: f32) -> Ability {
     a.min_range = min;
     a
 }
@@ -4047,12 +4148,16 @@ mod tests {
 
     #[test]
     fn ability_ids_match_table() {
-        assert_eq!(ABILITIES.len(), 98);
+        assert_eq!(ABILITIES.len(), FIRST_SPELL as usize);
+        assert_eq!(spells::SPELLS.len(), Class::ALL.len() * spells::PER_CLASS);
         for class in Class::ALL {
-            for id in class.abilities() {
-                assert!((id.0 as usize) < ABILITIES.len());
+            for (id, _) in class.spellbook() {
+                assert!(try_ability(id).is_some());
             }
         }
+        assert_eq!(ability(Class::Barbarian.spells()[0]).name, "Bloodthirst");
+        assert_eq!(ability(Class::Warlock.spells()[4]).name, "Summon Infernal");
+        assert!(try_ability(AbilityId(FIRST_SPELL + 65)).is_none());
         assert_eq!(ability(ids::GROUND_SLAM).name, "Ground Slam");
         assert_eq!(ability(ids::SMITE).name, "Smite");
         assert_eq!(ability(ids::FIREBALL).name, "Fireball");
@@ -4076,7 +4181,21 @@ mod tests {
                 );
             }
             assert_eq!(class.known(1).count(), 1, "{class:?}");
-            assert_eq!(class.known(MAX_LEVEL).count(), ACTION_BAR_SLOTS);
+            assert_eq!(class.known(10).count(), CORE_ABILITIES);
+            assert_eq!(class.known(MAX_LEVEL).count(), SPELLBOOK_SIZE);
+            let book = class.spellbook();
+            assert!(book.windows(2).all(|w| w[0].1 < w[1].1), "{class:?}");
+            for (i, (x, _)) in book.iter().enumerate() {
+                assert!(
+                    book[i + 1..].iter().all(|(y, _)| y != x),
+                    "{class:?} repeats {}",
+                    ability(*x).name
+                );
+            }
+            // Everything fits on the hotbars at first.
+            let bar = class.default_hotbar();
+            assert_eq!(class.sanitize_hotbar(&bar), bar);
+            assert_eq!(bar.iter().flatten().count(), SPELLBOOK_SIZE);
             assert_eq!(class.unlock_level(class.abilities()[0]), Some(1));
             // The first ability always does damage, so everyone can fight.
             let first = ability(a[0]);
@@ -4089,7 +4208,12 @@ mod tests {
                 "{class:?}"
             );
         }
-        assert_eq!(Class::Barbarian.abilities()[E_SLOT], ids::CHARGE);
+        assert_eq!(Class::Barbarian.default_hotbar()[7], Some(ids::CHARGE));
+        assert_eq!(Class::Mage.unlock_level(Class::Mage.spells()[4]), Some(20));
+        assert_eq!(
+            Class::Mage.sanitize_hotbar(&[Some(ids::SMITE); HOTBAR_SLOTS]),
+            [None; HOTBAR_SLOTS]
+        );
         assert_eq!(Class::Mage.unlock_level(ids::SMITE), None);
     }
 

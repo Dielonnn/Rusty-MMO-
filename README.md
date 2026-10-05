@@ -91,7 +91,9 @@ title and on the login screen.
 | Left click | Target |
 | Right click | Attack an enemy, loot a sparkling corpse, trade with a merchant, or talk to a quest giver |
 | `F1` | Target yourself |
-| `1`-`6`, `E`, or click the action bar | Use an ability |
+| `1`-`6`, `Q`, `E`, or click the bottom hotbar | Use an ability |
+| `Shift` + `1`-`6`, `Q`, `E`, or click the top hotbar | Use an ability on the top hotbar |
+| `Y` | Spell book: drag spells onto the hotbars |
 | `T` | Start / stop auto attack |
 | `B` / `C` / `K` | Backpack / character / skills (crafting and cooking) |
 | `N` | Talents |
@@ -180,7 +182,8 @@ has its own look, buildings, creatures and lighting.
 
 Every class starts with one ability and learns the rest at levels 2, 4, 6, 8
 and 10. The seventh ability, on `E`, is learned at level 3 and is usually a
-way to move: Charge, Blink, Disengage and so on.
+way to move: Charge, Blink, Disengage and so on. Five more spells come at
+levels 12, 14, 16, 18 and 20 (see below).
 
 | Class | Resource | Abilities (keys 1-6, then E) |
 | --- | --- | --- |
@@ -203,6 +206,36 @@ back quickly. Mana regenerates quickly once you haven't spent any for 5
 seconds. Health regenerates out of combat. Rogues and Monks build combo points
 and spend them on Eviscerate or Blackout Kick. Backstab only works from behind.
 The Warrior is now the Barbarian; old Warrior characters load as Barbarians.
+
+### Spell book and hotbars
+
+There are two hotbars: the bottom one on `1`-`6`, `Q` and `E`, and one above
+it on the same keys with `Shift`. Press `Y` to open your spell book, which
+lists every ability your class learns and the level it comes at. With the
+book open, drag a spell onto any hotbar slot, drag slots onto each other to
+swap them, or drag one off the bars to take it off. Clicking a spell in the
+book uses it. Your layout is saved with your character on the server.
+
+Out of the box, the core abilities sit where they always were (`1`-`6` and
+`E`), the level 12 spell is on `Q` and the level 14-20 spells are on
+`Shift`+`1`-`4`. If you've rearranged your bars, a newly learned spell goes
+into the first empty slot.
+
+| Class | Spells at levels 12, 14, 16, 18, 20 |
+| --- | --- |
+| Barbarian | Bloodthirst, Cleave, Berserker Rage, Execute, Bladestorm |
+| Fighter | Revenge, Challenging Shout, Shockwave, Unbreakable, Avatar |
+| Paladin | Flash of Light, Divine Storm, Avenger's Shield, Blessing of Protection, Avenging Wrath |
+| Monk | Flurry of Blows, Paralysis, Expel Harm, Whirling Dragon Punch, Strike of the Windlord |
+| Rogue | Hemorrhage, Fan of Knives, Shadow Dash, Kidney Shot, Marked for Death |
+| Ranger | Arcane Shot, Aimed Shot, Freezing Trap, Explosive Shot, Barrage |
+| Artificer | Flamethrower, Mending Drone, Lightning Coil, Force Field, Doomsday Cannon |
+| Bard | Shattering Note, Cure Wounds, Dissonant Chord, Heroism, Power Word: Heal |
+| Cleric | Mind Blast, Greater Heal, Psychic Scream, Guardian Spirit, Divine Hymn |
+| Druid | Regrowth, Insect Swarm, Hurricane, Barkskin, Force of Nature |
+| Mage | Cone of Cold, Polymorph, Pyroblast, Ice Block, Flamestrike |
+| Sorcerer | Scorching Ray, Witch Bolt, Counterspell, Globe of Invulnerability, Chain Lightning |
+| Warlock | Immolate, Fear, Death Coil, Rain of Fire, Summon Infernal |
 
 ### Quests
 
@@ -299,7 +332,7 @@ the corner turns with your camera and shows N, E, S and W around its edge. Your
 coordinates (relative to the town) are shown under the minimap.
 
 Killing a mob gives experience. Mobs far below your level give none, and
-everyone who fought a mob shares the kill. The level cap is 10. Mob level
+everyone who fought a mob shares the kill. The level cap is 20. Mob level
 numbers are colored by difficulty: grey (trivial), green, yellow, orange and
 red (deadly). Bandits call nearby friends for help; animals fight alone.
 
