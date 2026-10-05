@@ -1,6 +1,7 @@
 // Release builds on Windows shouldn't open a console window next to the game.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio;
 mod drag;
 mod game;
 mod gfx;
@@ -12,6 +13,7 @@ mod quests_ui;
 mod render;
 mod settings;
 mod spellbook;
+mod synth;
 mod vfx;
 mod world;
 
@@ -48,11 +50,13 @@ enum Screen {
 #[macroquad::main(window_conf)]
 async fn main() {
     let scene = Scene::new();
+    audio::init().await;
     // The login screen lives for the whole run, so solo play keeps using
     // the same local server.
     let mut login = Login::new();
     let mut screen = Screen::Login;
     loop {
+        audio::update();
         screen = match screen {
             Screen::Login => match login.frame(&scene) {
                 Some(chars) => Screen::Characters(Box::new(chars)),

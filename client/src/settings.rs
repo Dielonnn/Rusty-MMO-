@@ -1,13 +1,14 @@
 //! The Settings window, opened from the login screen or the Game Menu, and
 //! the settings it saves to `client_settings.txt` in the data folder.
 //!
-//! Only the Audio tab works so far: its volumes are saved and ready for
-//! when the game has sounds. The other tabs are listed but greyed out.
+//! Only the Audio tab works so far. The other tabs are listed but greyed
+//! out.
 
 use std::cell::RefCell;
 
 use macroquad::prelude::*;
 
+use crate::audio::{self, Sfx};
 use crate::hud::{BORDER, GOLD, PANEL, button, button_ex, text, text_centered, window};
 use shared::data_dir;
 
@@ -75,6 +76,12 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// A bus's volume, 0 to 1.
+    pub fn volume(&self, bus: Bus) -> f32 {
+        let i = Bus::ALL.iter().position(|b| *b == bus).unwrap_or(0);
+        self.volumes[i] as f32 / 100.0
+    }
+
     /// Reads `key=value` lines. Unknown keys and bad values are skipped, so a
     /// file from an older or newer version still loads.
     fn parse(text: &str) -> Self {
@@ -147,6 +154,7 @@ struct Layout {
     mute_all: Rect,
     mute_background: Rect,
     reset: Rect,
+    test: Rect,
     done: Rect,
 }
 
@@ -176,6 +184,7 @@ impl Layout {
             mute_all: Rect::new(r.x + 40.0, r.y + 334.0, 22.0, 22.0),
             mute_background: Rect::new(r.x + 270.0, r.y + 334.0, 22.0, 22.0),
             reset: Rect::new(r.x + 24.0, r.bottom() - 60.0, 200.0, 40.0),
+            test: Rect::new(r.x + (w - 180.0) / 2.0, r.y + 368.0, 180.0, 32.0),
             done: Rect::new(r.right() - 164.0, r.bottom() - 60.0, 140.0, 40.0),
         }
     }
@@ -207,6 +216,15 @@ impl SettingsWindow {
 
         if is_mouse_button_pressed(MouseButton::Left) {
             self.dragging = l.sliders.iter().position(|r| r.contains(m));
+            if [l.mute_all, l.mute_background, l.reset, l.test, l.done]
+                .iter()
+                .any(|r| r.contains(m))
+            {
+                audio::play(Sfx::Click);
+            }
+            if l.test.contains(m) {
+                audio::play(Sfx::Heal);
+            }
             if l.mute_all.contains(m) {
                 self.settings.mute_all = !self.settings.mute_all;
             } else if l.mute_background.contains(m) {
@@ -218,7 +236,12 @@ impl SettingsWindow {
             }
         }
         if !is_mouse_button_down(MouseButton::Left) {
-            self.dragging = None;
+            // Letting go of a slider plays a sound at its new volume.
+            match self.dragging.take().map(|i| Bus::ALL[i]) {
+                Some(Bus::Master | Bus::Interface) => audio::play(Sfx::Click),
+                Some(Bus::Effects) => audio::play(Sfx::Hit),
+                _ => {}
+            }
         }
         if let Some(i) = self.dragging {
             let r = l.sliders[i];
@@ -294,16 +317,10 @@ impl SettingsWindow {
         checkbox(l.mute_all, "Mute all", self.settings.mute_all);
         checkbox(
             l.mute_background,
-            "Mute in background",
+            "Mute when minimized",
             self.settings.mute_in_background,
         );
-        text_centered(
-            "The game has no sounds yet. These volumes are used once it does.",
-            r.x + r.w / 2.0,
-            r.y + 392.0,
-            16.0,
-            grey,
-        );
+        button(l.test, "Test Sound");
         button(l.reset, "Reset to Defaults");
         button(l.done, "Done");
     }

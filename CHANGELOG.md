@@ -5,6 +5,30 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.4
+
+Commit: the one titled "v8.4: sound effects".
+
+- **The game has sound.** 38 sound effects, all made in code by the game
+  itself (no downloaded sound files, so nothing to license and the exe
+  barely grows).
+- **Interface**: button clicks, windows opening and closing, picking up
+  loot, coins, a sparkle for rare (blue) drops, dropping and equipping
+  items, error buzz, party chat, party and duel invites, quest accepted,
+  quest complete, level up, and crafting.
+- **Combat**: weapon swings, hits, critical hits, getting hit, dying, bow
+  shots, eating and drinking, and a cast and an impact sound for each
+  school of magic (fire, frost, arcane, holy, shadow, nature).
+- Sounds in the world get quieter with distance and can't be heard past
+  40 yards (placeholder). The same sound can't stack many times at once in
+  a big fight.
+- **Settings > Audio** now works: Master, Effects and Interface volumes,
+  Mute all, and **Mute when minimized** (renamed from "Mute in
+  background", since the game can only tell when it's minimized). Letting
+  go of a slider plays a sample, and **Test Sound** plays one. Music and
+  Ambience sliders take effect in v8.5.
+- Same protocol as v8.2 (18).
+
 ## v8.3
 
 Commit: the one titled "v8.3: settings window with audio volumes".
