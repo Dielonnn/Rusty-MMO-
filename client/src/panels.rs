@@ -342,7 +342,7 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
                 }
                 GOLD
             }
-            _ => reaction_color(&e.view, game.class),
+            _ => reaction_color(&e.view, game),
         };
         draw_circle(p.x, p.y, 3.0, c);
     }

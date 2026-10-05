@@ -5,6 +5,26 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.1
+
+Commit: the one titled "v8.1: duels between players".
+
+- **Duels.** Target another player and click **Duel** (under the party
+  Invite button), or type `/duel NAME`. They get an Accept / Decline popup;
+  an unanswered challenge runs out after 30 seconds.
+- Once accepted, a 3 second countdown runs, then "Fight!" and the two of
+  you can attack each other with everything you have. Nobody else can join
+  in, and outside a duel players still can't hurt each other.
+- **Nobody dies.** The duel ends when one of you drops to 1 health; the
+  winner is announced to everyone nearby. No loot, money or experience
+  changes hands, and spells you put on each other are cleared.
+- The duel area is 40 yards around where it started. Stay outside it for
+  5 seconds and you forfeit. You also lose by typing `/forfeit`, dying to
+  something else, or logging out.
+- You must be within 30 yards to challenge someone, and you can't duel in
+  a dungeon.
+- Every duel number above is a placeholder.
+
 ## v8.0
 
 Commit: the one titled "v8.0: Orc and elf bodies, underwear and starter clothes".
