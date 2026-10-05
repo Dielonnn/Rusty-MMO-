@@ -39,7 +39,7 @@ pub const ENTRANCE: Vec2 = Vec2::new(0.0, -2.0);
 pub const EXIT_STONE: Vec2 = Vec2::new(0.0, -6.0);
 
 /// You must be this level to enter.
-pub const MIN_LEVEL: u8 = 8;
+pub const MIN_LEVEL: u8 = 10;
 /// An instance nobody is in is closed (and its mobs are gone) after this
 /// many seconds.
 pub const EMPTY_RESET: f32 = 300.0;

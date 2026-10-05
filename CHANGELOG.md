@@ -12,7 +12,7 @@ Commit: the one titled "v7.4: Waystones and the Sunken Vault".
 - **Waystones**: every town has a rune stone beside its square. Stand next to
   it and press `F` to travel to any other starting area's town, so all six
   areas are now linked. Travel is free, but not while you're in combat
-- **The Sunken Vault**, the first dungeon, for level 8 and up: flooded stone
+- **The Sunken Vault**, the first dungeon, for level 10: flooded stone
   halls with Vault Hounds, Vault Crawlers, Drowned Enforcers and Drowned
   Adepts (levels 9 and 10), the Stone Warden halfway through, and Morvane the
   Sunken King at the end. Enter from any town's waystone
