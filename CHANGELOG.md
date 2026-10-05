@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v8.1
+## v8.2
 
-Commit: the one titled "v8.1: duels between players".
+Commit: the one titled "v8.2: duels between players".
 
 - **Duels.** Target another player and click **Duel** (under the party
   Invite button), or type `/duel NAME`. They get an Accept / Decline popup;
