@@ -10,6 +10,7 @@ mod models;
 mod panels;
 mod quests_ui;
 mod render;
+mod spellbook;
 mod vfx;
 mod world;
 

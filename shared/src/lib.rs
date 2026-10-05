@@ -8,6 +8,7 @@ pub mod net;
 pub mod props;
 pub mod protocol;
 pub mod quests;
+pub mod spells;
 pub mod talents;
 pub mod world;
 

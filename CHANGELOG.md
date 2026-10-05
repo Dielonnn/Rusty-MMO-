@@ -5,9 +5,9 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
-## v7.12
+## v7.14
 
-Commit: the one titled "v7.12: the Cinderforge and Frosthowl Cavern dungeons".
+Commit: the one titled "v7.14: the Cinderforge and Frosthowl Cavern dungeons".
 
 - **Two new dungeons**, built like the Sunken Vault: a copy of your own for
   you or your party, Dungeon Master Joe at the entrance, an elite partway
@@ -34,9 +34,30 @@ Commit: the one titled "v7.12: the Cinderforge and Frosthowl Cavern dungeons".
   - Drops the **Rimeheart Chestguard** (blue chest, 25%). Joe's quest **The
     Frostmother** rewards the **Hrimfang Glaive** (blue), 4000 experience
     and 2 gold.
-- Every number above is a placeholder until it's been played. Until the level
-  cap goes above 10, nobody can enter the new dungeons.
-- Protocol version 14 (an older client can't join a v7.12 server).
+- Every number above is a placeholder until it's been played.
+- Protocol version 15 (an older client can't join a v7.14 server).
+## v7.13
+
+Commit: the one titled "v7.13: level 20, spell book, two hotbars".
+
+- **Level cap 20**: characters now level up to 20. Levels 10-19 take more
+  experience: 1000 to reach 11, then 200 more each level (2800 to reach 20).
+  These are placeholder numbers.
+- **Five new spells per class**, learned at levels 12, 14, 16, 18 and 20. Every
+  class gets its own (Bloodthirst and Bladestorm for the Barbarian, Polymorph
+  and Flamestrike for the Mage, Fear and Summon Infernal for the Warlock, and
+  so on; the README lists them all). Damage, healing and cooldowns are
+  placeholders.
+- **Spell book (`Y`)**: lists every ability your class learns, the level it
+  comes at, and whether it's on your hotbars. Hover a spell for its details;
+  click one to use it.
+- **Two hotbars**: the bottom bar now has `Q` as well as `1`-`6` and `E`, and a
+  second bar above it uses the same keys with `Shift`.
+- **Drag and drop**: with the spell book open, drag spells from the book onto
+  any hotbar slot, drag slots onto each other to swap them, or drag one off
+  the bars to take it off. Your layout is saved with your character. Old
+  characters start with the usual layout (`1`-`6` and `E` as before, the new
+  spells on `Q` and `Shift`+`1`-`4`).
 
 ## v7.11
 

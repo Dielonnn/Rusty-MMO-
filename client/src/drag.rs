@@ -16,6 +16,7 @@ pub enum Win {
     Talents,
     Sandbox,
     Travel,
+    Spellbook,
     QuestGiver,
     QuestLog,
 }

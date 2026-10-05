@@ -99,6 +99,8 @@ pub struct PlayerData {
     pub talents: Ranks,
     /// What the talents add up to.
     pub bonuses: Bonuses,
+    /// Rearranged hotbars; `None` until the player first moves something.
+    pub hotbar: Option<Hotbar>,
     /// Sandbox god mode: no damage taken, abilities are free.
     pub god: bool,
     pub quests: QuestLog,
@@ -722,6 +724,7 @@ impl World {
                     potion_cooldown: 0.0,
                     talents: ranks,
                     bonuses,
+                    hotbar: c.hotbar.map(|bar| c.class.sanitize_hotbar(&bar)),
                     god: false,
                     quests: c.quests.clone(),
                     party: None,
@@ -761,6 +764,7 @@ impl World {
             gear: p.gear,
             weapon: p.weapon,
             talents: p.talents,
+            hotbar: p.hotbar,
             quests: p.quests.clone(),
         })
     }
@@ -856,6 +860,7 @@ impl World {
                     .invite
                     .and_then(|(from, _)| self.entities.get(&from))
                     .map(|e| e.name.clone()),
+                hotbar: p.hotbar.unwrap_or_else(|| p.class.default_hotbar()),
             },
         })
     }
@@ -888,6 +893,10 @@ impl World {
             ClientMsg::StopAttack => {
                 let e = self.entities.get_mut(&id).unwrap();
                 e.player_mut().unwrap().auto_attack = false;
+            }
+            ClientMsg::SetHotbar(bar) => {
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                p.hotbar = Some(p.class.sanitize_hotbar(&bar));
             }
             ClientMsg::Chat(text) => self.chat(id, text),
             ClientMsg::ReleaseSpirit => self.release(id),
@@ -1667,7 +1676,7 @@ impl World {
 
     /// Checks whether `caster` can use `ability` right now, and starts it.
     pub fn try_use(&mut self, caster: EntityId, id: AbilityId) -> Result<(), &'static str> {
-        let a = ABILITIES.get(id.0 as usize).ok_or("Unknown ability.")?;
+        let a = try_ability(id).ok_or("Unknown ability.")?;
         let e = &self.entities[&caster];
         if let Some(p) = e.player() {
             match p.class.unlock_level(id) {
@@ -2404,9 +2413,17 @@ impl World {
         let e = self.entities.get_mut(&id).unwrap();
         e.hp = e.max_hp;
         self.send(Audience::Near(pos), GameEvent::LevelUp { id, level });
-        for (ability, unlock) in class.abilities().into_iter().zip(UNLOCK_LEVELS) {
+        for (ability, unlock) in class.spellbook() {
             if unlock > old_level && unlock <= level {
                 self.send(Audience::Only(id), GameEvent::Learned(ability));
+                // A rearranged hotbar gets new spells in its first free slot.
+                let p = self.entities.get_mut(&id).unwrap().player_mut().unwrap();
+                if let Some(bar) = &mut p.hotbar
+                    && !bar.contains(&Some(ability))
+                    && let Some(slot) = bar.iter_mut().find(|s| s.is_none())
+                {
+                    *slot = Some(ability);
+                }
             }
         }
     }
@@ -3760,6 +3777,58 @@ mod tests {
                 .iter()
                 .any(|a| a.ability == ids::FROSTBOLT)
         );
+    }
+
+    #[test]
+    fn hotbars_are_saved_and_new_spells_land_on_them() {
+        let mut w = World::new(32);
+        let p = join(&mut w, "Bars", Class::Mage, 11);
+        assert!(w.character(p).unwrap().hotbar.is_none(), "default layout");
+        // Move Fireball to Shift+E and clear Q.
+        let mut bar = Class::Mage.default_hotbar();
+        let fireball = bar[0];
+        bar[15] = fireball;
+        bar[0] = None;
+        bar[6] = None;
+        // Junk is dropped: another class's ability, and a repeat.
+        bar[13] = Some(ids::SMITE);
+        bar[14] = fireball;
+        w.handle(p, ClientMsg::SetHotbar(bar));
+        let saved = w.character(p).unwrap().hotbar.unwrap();
+        assert_eq!(saved[15], None, "the later copy of Fireball is dropped");
+        assert_eq!(saved[14], fireball);
+        assert_eq!(saved[13], None);
+        assert_eq!(saved[0], None);
+        // Level 12's spell isn't on the bars any more; learning it puts it
+        // in the first free slot.
+        let new = Class::Mage.spells()[0];
+        assert!(!saved.contains(&Some(new)));
+        w.give_xp(p, xp_to_next(11), "test");
+        assert_eq!(w.entities[&p].level, 12);
+        assert_eq!(w.character(p).unwrap().hotbar.unwrap()[0], Some(new));
+    }
+
+    #[test]
+    fn new_spells_are_learned_from_level_12() {
+        for class in Class::ALL {
+            let mut w = World::new(33);
+            let p = join(&mut w, "Learner", class, 11);
+            let first = class.spells()[0];
+            assert!(w.try_use(p, first).is_err(), "{class:?} too early");
+            w.entities.get_mut(&p).unwrap().level = MAX_LEVEL;
+            for id in class.spells() {
+                assert_ne!(
+                    w.try_use(p, id),
+                    Err("You don't know that ability."),
+                    "{class:?}"
+                );
+                assert_ne!(
+                    w.try_use(p, id),
+                    Err("You haven't learned that yet."),
+                    "{class:?}"
+                );
+            }
+        }
     }
 
     #[test]
