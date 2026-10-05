@@ -3207,7 +3207,10 @@ const FIGHTER_LOOT: LootTable = LootTable {
 };
 const CASTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
-    items: &[(items::LINEN_CLOTH, 0.75, 1, 3)],
+    items: &[
+        (items::LINEN_CLOTH, 0.75, 1, 3),
+        (items::HEALING_POTION, 0.35, 1, 1),
+    ],
 };
 const BOSS_LOOT: LootTable = LootTable {
     copper_per_level: (40, 80),
@@ -3222,6 +3225,7 @@ const ELITE_LOOT: LootTable = LootTable {
     items: &[
         (items::ANCIENT_CORE, 1.0, 1, 1),
         (items::LINEN_CLOTH, 1.0, 2, 4),
+        (items::IRON_SCRAP, 1.0, 5, 5),
     ],
 };
 

@@ -232,7 +232,8 @@ loot (everyone who fought it may loot it; the first to do so gets it).
 - Boars (and some wolves) drop **Light Leather**
 - Bandits (and the other humanoids) drop **Linen Cloth**
 - Bandits, raiders and the other fighters also drop **Iron Scrap**
-- Each starting area's elite drops an **Ancient Core**
+- Mystics, shamans and the other casters sometimes drop a **Healing Potion**
+- Each starting area's elite drops an **Ancient Core** and 5 **Iron Scrap**
 - Any mob may drop a piece of **green** gear (rarely; elites usually do):
   helms, chests, gloves, legs and boots, each sturdy (armor and stamina) or
   arcane (power). Greens are better than crafted leather and linen, but not

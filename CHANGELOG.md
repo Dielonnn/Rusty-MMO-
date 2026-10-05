@@ -5,6 +5,15 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.7
+
+Commit: the one titled "v7.7: casters drop potions, elites drop iron scrap".
+
+- **Casters drop potions**: mystics, shamans, tricksters, necromancers and
+  the Drowned Adept drop a Healing Potion 35% of the time
+- **Elites drop Iron Scrap**: every zone elite and the Stone Warden always
+  drop 5 Iron Scrap, on top of their Ancient Core and Linen Cloth
+
 ## v7.6
 
 Commit: the one titled "v7.6: Waystones and the Sunken Vault".

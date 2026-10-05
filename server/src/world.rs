@@ -3816,6 +3816,26 @@ mod tests {
     }
 
     #[test]
+    fn casters_drop_potions_and_elites_drop_scrap() {
+        let mut w = World::new(17);
+        let mut potions = 0;
+        for _ in 0..400 {
+            let loot = w.roll_loot(MobKind::BanditMystic, 3, vec![1]).unwrap();
+            for (id, n) in loot.items {
+                if id == items::HEALING_POTION {
+                    assert_eq!(n, 1);
+                    potions += 1;
+                }
+            }
+        }
+        assert!((100..=180).contains(&potions), "{potions} potions from 400");
+        for kind in [MobKind::Golem, MobKind::Yeti, MobKind::StoneWarden] {
+            let loot = w.roll_loot(kind, 5, vec![1]).unwrap();
+            assert!(loot.items.contains(&(items::IRON_SCRAP, 5)), "{kind:?}");
+        }
+    }
+
+    #[test]
     fn fighters_drop_scrap_for_weapons_and_mobs_drop_weapons() {
         let mut w = World::new(9);
         let mut scrap = 0;
