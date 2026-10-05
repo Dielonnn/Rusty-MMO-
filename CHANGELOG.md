@@ -7,7 +7,7 @@ built from that commit.
 
 ## v7.7
 
-Commit: the one titled "v7.7: casters drop potions, elites and the Sunken King drop materials".
+Commit: the one titled "v7.7: casters drop potions, elites drop iron scrap".
 
 - **Casters drop potions**: mystics, shamans, tricksters, necromancers and
   the Drowned Adept drop a Healing Potion 35% of the time
