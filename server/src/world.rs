@@ -4041,10 +4041,10 @@ mod tests {
     fn a_party_shares_a_copy_of_the_vault_and_others_get_their_own() {
         let mut w = World::new(12);
         let (a, b) = party_of_two(&mut w);
-        let c = join(&mut w, "Cy", Class::Rogue, 10);
+        let c = join(&mut w, "Cy", Class::Rogue, 9);
         let low = join(&mut w, "Lo", Class::Rogue, dungeon::MIN_LEVEL - 1);
         for p in [a, b] {
-            w.entities.get_mut(&p).unwrap().level = 10;
+            w.entities.get_mut(&p).unwrap().level = 9;
         }
         for p in [a, b, c, low] {
             at_waystone(&mut w, p);
@@ -4120,11 +4120,11 @@ mod tests {
     fn leaving_the_party_takes_you_out_of_its_vault() {
         let mut w = World::new(14);
         let (a, b) = party_of_two(&mut w);
-        let c = join(&mut w, "Cy", Class::Rogue, 10);
+        let c = join(&mut w, "Cy", Class::Rogue, 9);
         w.handle(a, ClientMsg::PartyInvite("cy".into()));
         w.handle(c, ClientMsg::PartyAccept);
         for p in [a, b, c] {
-            w.entities.get_mut(&p).unwrap().level = 10;
+            w.entities.get_mut(&p).unwrap().level = 9;
             at_waystone(&mut w, p);
             w.handle(p, ClientMsg::Travel(Destination::Dungeon));
         }
@@ -4146,7 +4146,7 @@ mod tests {
     #[test]
     fn logging_out_in_the_vault_saves_you_in_town() {
         let mut w = World::new(15);
-        let p = join(&mut w, "Ivo", Class::Mage, 10);
+        let p = join(&mut w, "Ivo", Class::Mage, 9);
         w.entities.get_mut(&p).unwrap().pos =
             Zone::Grubdeep.ground_local(WAYSTONE_SPOT + vec2(1.0, 0.0));
         w.handle(p, ClientMsg::Travel(Destination::Dungeon));

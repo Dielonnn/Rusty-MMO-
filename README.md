@@ -119,7 +119,7 @@ chat; `/leave`, `/kick NAME` and `/promote NAME` do what they say.
 ### Waystones and the Sunken Vault
 
 Every town has a waystone beside its square. Stand next to it and press `F`
-to travel to any other starting area's town, or, at level 10, into the
+to travel to any other starting area's town, or, from level 8, into the
 Sunken Vault: a dungeon of flooded halls, packs of hounds, crawlers and
 drowned cultists, the Stone Warden and, at the end, Morvane the Sunken King,
 who sometimes drops the Crown of the Sunken King, a blue helm.

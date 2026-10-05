@@ -176,7 +176,7 @@ impl World {
                     return Err("You are already in the vault.");
                 };
                 if e.level < dungeon::MIN_LEVEL {
-                    return Err("You must be level 10 to enter the Sunken Vault.");
+                    return Err("You must be level 8 to enter the Sunken Vault.");
                 }
                 let owner = self.owner_for(id);
                 let index = match self.instance_owned_by(&owner) {
