@@ -301,6 +301,7 @@ impl Game {
         render::draw_sky(&cam, self.zone, self.time, |p| hud::project(&cam, p));
         set_camera(&cam);
         scene.begin_3d(self.zone);
+        self.vfx.begin(cam.position);
         self.draw_world(scene);
         scene.end_3d();
         set_default_camera();
@@ -1439,10 +1440,9 @@ impl Game {
             if e.view.dead {
                 continue;
             }
-            crate::vfx::draw_auras(b, a, &e.view.auras, self.time);
+            self.vfx.draw_auras(b, a, &e.view.auras, self.time);
             if let Some(cast) = &e.view.cast {
-                crate::vfx::draw_casting(
-                    b,
+                self.vfx.draw_casting(
                     a,
                     cast.ability,
                     cast.elapsed / cast.total.max(0.01),
@@ -1454,6 +1454,7 @@ impl Game {
         scene.draw_effects(self.zone, b, self.time, self.pos);
         b.flush();
         scene.draw_water(self.zone);
+        self.vfx.draw_glows();
     }
 }
 

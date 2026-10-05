@@ -5,6 +5,28 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v7.5
+
+Commit: the one titled "v7.5: Textured spell effects".
+
+- **Glowing spell effects**: spells are now drawn with soft, textured light
+  that brightens whatever is behind it, instead of flat colored balls. Each
+  school keeps its colors
+- **Missiles**: fireballs trail licking flames and smoke, frostbolts carry an
+  ice crystal and shed snowflakes, shadow bolts swirl with dark mist, arcane
+  missiles spin with stars, holy bolts flare gold, nature bolts trail green
+  mist, and arrows and bullets leave faint tracer streaks
+- **Impacts**: hits flash with a star-shaped burst and a puff of light, with
+  sparks streaking out; area spells send a glowing ring across the ground
+- **Heals and beams**: healing pillars are columns of light with motes
+  drifting down, healing spirals rise in sparkles, and drain spells pull a
+  flickering ribbon of light from the target
+- **Casting**: a turning circle of runes glows under anyone casting, with a
+  ring closing in as the cast fills
+- **Auras**: burning targets have real flames, poison and curses wreathe them
+  in mist, stuns spin stars over the head, slows spread frost underfoot,
+  shields glint, and empowered characters have red flames at their feet
+
 ## v7.3
 
 Commit: the one titled "v7.3: Height and weight sliders".
