@@ -1549,11 +1549,13 @@ impl World {
             .copied()
             .flatten()
             .ok_or("That slot is empty.")?;
-        let ItemKind::Potion { health, power } = item(item_id).kind else {
-            return Err("You can't use that.");
+        let (health, power) = match item(item_id).kind {
+            ItemKind::Potion { health, power } => (health, power),
+            ItemKind::Food { health } => (health, 0.0),
+            _ => return Err("You can't use that."),
         };
         if p.potion_cooldown > 0.0 {
-            return Err("Potions are not ready yet.");
+            return Err("Potions and food are not ready yet.");
         }
         p.potion_cooldown = POTION_COOLDOWN;
         p.bags[slot] = (count > 1).then_some((item_id, count - 1));
@@ -3890,6 +3892,57 @@ mod tests {
                 assert!(e.pos.y < zone.water_level() + 0.5, "{zone:?} {}", e.pos);
             }
         }
+    }
+
+    #[test]
+    fn boars_and_water_mobs_drop_food_to_cook_and_eat() {
+        let mut w = World::new(23);
+        let count = |w: &mut World, kind: MobKind, food: ItemId| {
+            (0..200)
+                .map(|_| {
+                    let loot = w.roll_loot(kind, 4, vec![1]).unwrap();
+                    loot.items.iter().filter(|(i, _)| *i == food).count()
+                })
+                .sum::<usize>()
+        };
+        for boar in [MobKind::Boar, MobKind::PlagueBoar] {
+            assert!(count(&mut w, boar, items::BOAR_MEAT) > 60, "{boar:?}");
+        }
+        assert_eq!(count(&mut w, MobKind::Hyena, items::BOAR_MEAT), 0);
+        for fish in [MobKind::MudsnapCrab, MobKind::BogLurker] {
+            assert!(count(&mut w, fish, items::RAW_FISH) > 80, "{fish:?}");
+        }
+
+        let p = join(&mut w, "Cook", Class::Fighter, 5);
+        let pd = w.entities.get_mut(&p).unwrap().player_mut().unwrap();
+        add_item(&mut pd.bags, items::RAW_FISH, 2);
+        let (fish, _) = Skill::Cooking
+            .recipes()
+            .find(|(_, r)| r.result == items::COOKED_FISH)
+            .unwrap();
+        w.craft(p, fish).unwrap();
+        w.craft(p, fish).unwrap();
+        let pd = w.entities[&p].player().unwrap();
+        assert_eq!(count_item(&pd.bags, items::COOKED_FISH), 2);
+
+        // Eating heals three quarters of a potion, and shares its cooldown.
+        let e = w.entities.get_mut(&p).unwrap();
+        e.hp = 1.0;
+        let max = e.max_hp;
+        let slot = e
+            .player()
+            .unwrap()
+            .bags
+            .iter()
+            .position(|s| matches!(s, Some((i, _)) if *i == items::COOKED_FISH))
+            .unwrap();
+        w.use_item(p, slot).unwrap();
+        let healed = w.entities[&p].hp - 1.0;
+        assert!(
+            (healed - max * 0.35 * 0.75).abs() < 1.0,
+            "healed {healed} of {max}"
+        );
+        assert!(w.use_item(p, slot).is_err());
     }
 
     fn party_of_two(w: &mut World) -> (EntityId, EntityId) {

@@ -75,7 +75,9 @@ struct Press {
 pub struct Windows {
     pub bags: bool,
     pub character: bool,
-    pub crafting: bool,
+    /// The skills window (K), and which skill's tab is showing.
+    pub skills: bool,
+    pub skill: Skill,
     /// The merchant whose wares are shown.
     pub vendor: Option<EntityId>,
     pub talents: bool,
@@ -93,7 +95,7 @@ impl Windows {
     pub fn any(&self) -> bool {
         self.bags
             || self.character
-            || self.crafting
+            || self.skills
             || self.vendor.is_some()
             || self.talents
             || self.sandbox
@@ -1017,7 +1019,7 @@ impl Game {
             self.windows.character = !self.windows.character;
         }
         if is_key_pressed(KeyCode::K) {
-            self.windows.crafting = !self.windows.crafting;
+            self.windows.skills = !self.windows.skills;
         }
         if is_key_pressed(KeyCode::M) {
             self.windows.map = !self.windows.map;
@@ -1173,10 +1175,10 @@ impl Game {
                     self.send(ClientMsg::Sell { merchant, slot: i });
                 } else if matches!(kind, ItemKind::Armor { .. } | ItemKind::Weapon { .. }) {
                     self.send(ClientMsg::Equip(i));
-                } else if matches!(kind, ItemKind::Potion { .. }) {
+                } else if matches!(kind, ItemKind::Potion { .. } | ItemKind::Food { .. }) {
                     self.send(ClientMsg::UseItem(i));
                 } else if !left {
-                    self.error("You can't wear that. Use it for crafting (K).");
+                    self.error("You can't wear that. Use it in your skills (K).");
                 }
             }
         } else if let Some(i) = layout
@@ -1194,12 +1196,19 @@ impl Game {
                 });
             }
         } else if let Some(i) = layout
+            .skill_tabs
+            .iter()
+            .position(|r| self.windows.skills && r.contains(mouse))
+        {
+            self.windows.skill = Skill::ALL[i];
+        } else if let Some(i) = layout
             .craft_buttons
             .iter()
-            .position(|r| self.windows.crafting && r.contains(mouse))
+            .position(|r| self.windows.skills && r.contains(mouse))
             && left
+            && let Some((recipe, _)) = self.windows.skill.recipes().nth(i)
         {
-            self.send(ClientMsg::Craft(i));
+            self.send(ClientMsg::Craft(recipe));
         } else if let Some(merchant) = self.windows.vendor
             && let Some(i) = layout.vendor_buttons.iter().position(|r| r.contains(mouse))
         {

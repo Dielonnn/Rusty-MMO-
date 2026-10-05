@@ -2401,6 +2401,8 @@ pub enum ItemKind {
     },
     /// Used up to restore this fraction of health and power.
     Potion { health: f32, power: f32 },
+    /// Eaten to restore this fraction of health. Shares the potion cooldown.
+    Food { health: f32 },
     /// Held in the weapon slot. Any class can use any weapon.
     Weapon {
         /// Added to every auto attack, before scaling with level.
@@ -2479,6 +2481,11 @@ pub mod items {
     pub const MOONWHISPER_STAFF: ItemId = ItemId(36);
     // The Sunken Vault.
     pub const CROWN_OF_THE_SUNKEN_KING: ItemId = ItemId(37);
+    // Cooking.
+    pub const RAW_FISH: ItemId = ItemId(38);
+    pub const BOAR_MEAT: ItemId = ItemId(39);
+    pub const COOKED_FISH: ItemId = ItemId(40);
+    pub const ROASTED_BOAR: ItemId = ItemId(41);
 }
 
 /// Green items any mob may drop (and quests give): a little better than
@@ -2594,6 +2601,23 @@ const fn weapon(
     }
 }
 
+const fn food(
+    name: &'static str,
+    description: &'static str,
+    health: f32,
+    color: (f32, f32, f32),
+) -> Item {
+    Item {
+        name,
+        description,
+        kind: ItemKind::Food { health },
+        quality: Quality::Common,
+        max_stack: 20,
+        color,
+        price: 30,
+    }
+}
+
 const fn potion(
     name: &'static str,
     description: &'static str,
@@ -2616,7 +2640,7 @@ const LEATHER: (f32, f32, f32) = (0.5, 0.33, 0.18);
 const LINEN: (f32, f32, f32) = (0.85, 0.8, 0.68);
 const IRON: (f32, f32, f32) = (0.62, 0.64, 0.68);
 
-pub static ITEMS: [Item; 38] = [
+pub static ITEMS: [Item; 42] = [
     material(
         "Light Leather",
         "Tanned hide from the beasts of the wilds. Used to make leather armor.",
@@ -2731,7 +2755,7 @@ pub static ITEMS: [Item; 38] = [
     potion(
         "Healing Potion",
         "Restores 35% of your health. 30 sec shared cooldown.",
-        0.35,
+        HEALING_POTION_HEALTH,
         0.0,
         (0.85, 0.15, 0.15),
     ),
@@ -2984,7 +3008,37 @@ pub static ITEMS: [Item; 38] = [
             4000,
         )
     },
+    material(
+        "Raw Fish",
+        "Slippery and fresh from the shallows. Cook it to eat it.",
+        Quality::Common,
+        (0.55, 0.68, 0.75),
+        10,
+    ),
+    material(
+        "Boar Meat",
+        "A tough cut of boar. Cook it to eat it.",
+        Quality::Common,
+        (0.75, 0.32, 0.3),
+        10,
+    ),
+    food(
+        "Cooked Fish",
+        "Flaky and warm.",
+        FOOD_HEALTH,
+        (0.85, 0.62, 0.38),
+    ),
+    food(
+        "Roasted Boar",
+        "Charred on the outside, juicy within.",
+        FOOD_HEALTH,
+        (0.55, 0.3, 0.18),
+    ),
 ];
+
+/// Cooked food heals three quarters of what a Healing Potion does.
+pub const FOOD_HEALTH: f32 = HEALING_POTION_HEALTH * 0.75;
+const HEALING_POTION_HEALTH: f32 = 0.35;
 
 /// What every merchant sells.
 pub const MERCHANT_GOODS: [ItemId; 4] = [
@@ -2994,75 +3048,129 @@ pub const MERCHANT_GOODS: [ItemId; 4] = [
     items::LINEN_CLOTH,
 ];
 
+/// A trade you make things with. Each has its own tab in the skills
+/// window (K).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Skill {
+    #[default]
+    Crafting,
+    Cooking,
+}
+
+impl Skill {
+    pub const ALL: [Skill; 2] = [Skill::Crafting, Skill::Cooking];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Skill::Crafting => "Crafting",
+            Skill::Cooking => "Cooking",
+        }
+    }
+
+    /// This skill's recipes, with their index in `RECIPES`.
+    pub fn recipes(self) -> impl Iterator<Item = (usize, &'static Recipe)> {
+        RECIPES
+            .iter()
+            .enumerate()
+            .filter(move |(_, r)| r.skill == self)
+    }
+}
+
 /// Something you can make from materials.
 #[derive(Debug)]
 pub struct Recipe {
+    pub skill: Skill,
     pub result: ItemId,
     pub materials: &'static [(ItemId, u16)],
 }
 
-pub static RECIPES: [Recipe; 15] = {
+pub static RECIPES: [Recipe; 17] = {
     use items::*;
     [
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_CAP,
             materials: &[(LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_VEST,
             materials: &[(LIGHT_LEATHER, 6)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_GLOVES,
             materials: &[(LIGHT_LEATHER, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_PANTS,
             materials: &[(LIGHT_LEATHER, 5)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LEATHER_BOOTS,
             materials: &[(LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_HOOD,
             materials: &[(LINEN_CLOTH, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_ROBE,
             materials: &[(LINEN_CLOTH, 6)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_PANTS,
             materials: &[(LINEN_CLOTH, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_GLOVES,
             materials: &[(LINEN_CLOTH, 2)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: LINEN_SANDALS,
             materials: &[(LINEN_CLOTH, 3)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HEARTSTONE_CHESTGUARD,
             materials: &[(ANCIENT_CORE, 1), (LIGHT_LEATHER, 8)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: IRON_SWORD,
             materials: &[(IRON_SCRAP, 5), (LIGHT_LEATHER, 2)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HUNTING_BOW,
             materials: &[(IRON_SCRAP, 2), (LIGHT_LEATHER, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: APPRENTICE_STAFF,
             materials: &[(IRON_SCRAP, 2), (LINEN_CLOTH, 4)],
         },
         Recipe {
+            skill: Skill::Crafting,
             result: HEARTSTONE_GREATSWORD,
             materials: &[(ANCIENT_CORE, 1), (IRON_SCRAP, 8)],
+        },
+        Recipe {
+            skill: Skill::Cooking,
+            result: COOKED_FISH,
+            materials: &[(RAW_FISH, 1)],
+        },
+        Recipe {
+            skill: Skill::Cooking,
+            result: ROASTED_BOAR,
+            materials: &[(BOAR_MEAT, 1)],
         },
     ]
 };
@@ -3202,6 +3310,20 @@ const HIDE_LOOT: LootTable = LootTable {
     copper_per_level: (1, 3),
     items: &[(items::LIGHT_LEATHER, 0.85, 1, 2)],
 };
+const BOAR_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 3),
+    items: &[
+        (items::LIGHT_LEATHER, 0.85, 1, 2),
+        (items::BOAR_MEAT, 0.5, 1, 1),
+    ],
+};
+const WATER_LOOT: LootTable = LootTable {
+    copper_per_level: (1, 4),
+    items: &[
+        (items::LIGHT_LEATHER, 0.4, 1, 1),
+        (items::RAW_FISH, 0.6, 1, 1),
+    ],
+};
 const FIGHTER_LOOT: LootTable = LootTable {
     copper_per_level: (6, 15),
     items: &[
@@ -3251,6 +3373,27 @@ const fn hunter(
         loot: BEAST_LOOT,
         model,
         colors,
+    }
+}
+
+/// A grazer that also drops boar meat.
+const fn boar(name: &'static str, model: MobModel, colors: [(f32, f32, f32); 3]) -> MobTemplate {
+    MobTemplate {
+        loot: BOAR_LOOT,
+        ..grazer(name, model, colors)
+    }
+}
+
+/// A hunter from the shallows, that drops fish.
+const fn water_hunter(
+    name: &'static str,
+    model: MobModel,
+    spell: AbilityId,
+    colors: [(f32, f32, f32); 3],
+) -> MobTemplate {
+    MobTemplate {
+        loot: WATER_LOOT,
+        ..hunter(name, model, spell, colors)
     }
 }
 
@@ -3349,7 +3492,7 @@ const WOLF: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.5, 0.48, 0.47), (0.33, 0.31, 0.31), (1.0, 0.82, 0.25)],
 );
-const BOAR: MobTemplate = grazer(
+const BOAR: MobTemplate = boar(
     "Wild Boar",
     Mm::Boar,
     [(0.43, 0.29, 0.19), (0.27, 0.18, 0.12), (0.96, 0.93, 0.83)],
@@ -3405,7 +3548,7 @@ const SHADOWFANG: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.28, 0.26, 0.36), (0.16, 0.15, 0.22), (0.7, 0.4, 1.0)],
 );
-const THORNBACK: MobTemplate = grazer(
+const THORNBACK: MobTemplate = boar(
     "Thornback Boar",
     Mm::Boar,
     [(0.35, 0.4, 0.25), (0.22, 0.3, 0.14), (0.9, 0.9, 0.75)],
@@ -3433,7 +3576,7 @@ const CAVE_SPIDER: MobTemplate = hunter(
     ids::WEB,
     [(0.25, 0.22, 0.28), (0.14, 0.12, 0.16), (0.9, 0.2, 0.2)],
 );
-const STONEHIDE: MobTemplate = grazer(
+const STONEHIDE: MobTemplate = boar(
     "Stonehide Boar",
     Mm::Boar,
     [(0.4, 0.42, 0.46), (0.26, 0.27, 0.3), (0.85, 0.85, 0.9)],
@@ -3461,7 +3604,7 @@ const SNOW_WOLF: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.9, 0.92, 0.95), (0.7, 0.74, 0.8), (0.4, 0.75, 1.0)],
 );
-const FROST_BOAR: MobTemplate = grazer(
+const FROST_BOAR: MobTemplate = boar(
     "Frost Boar",
     Mm::Boar,
     [(0.55, 0.6, 0.68), (0.4, 0.44, 0.52), (0.95, 0.97, 1.0)],
@@ -3489,7 +3632,7 @@ const GHOUL_HOUND: MobTemplate = hunter(
     ids::SAVAGE_BITE,
     [(0.42, 0.46, 0.36), (0.3, 0.26, 0.24), (0.6, 1.0, 0.3)],
 );
-const PLAGUE_BOAR: MobTemplate = grazer(
+const PLAGUE_BOAR: MobTemplate = boar(
     "Plague Boar",
     Mm::Boar,
     [(0.45, 0.42, 0.32), (0.3, 0.33, 0.2), (0.75, 0.85, 0.5)],
@@ -3581,19 +3724,19 @@ const SUNKEN_KING: MobTemplate = MobTemplate {
 };
 
 // Water mobs hunt like the zone's aggressive beasts, from the shallows.
-const MUDSNAP_CRAB: MobTemplate = hunter(
+const MUDSNAP_CRAB: MobTemplate = water_hunter(
     "Mudsnap Crab",
     Mm::Scorpion,
     ids::SAVAGE_BITE,
     [(0.45, 0.33, 0.2), (0.3, 0.24, 0.14), (0.55, 0.6, 0.3)],
 );
-const GLIMMERSHELL_CRAB: MobTemplate = hunter(
+const GLIMMERSHELL_CRAB: MobTemplate = water_hunter(
     "Glimmershell Crab",
     Mm::Scorpion,
     ids::SAVAGE_BITE,
     [(0.3, 0.62, 0.62), (0.7, 0.75, 0.8), (0.85, 0.95, 1.0)],
 );
-const BOG_LURKER: MobTemplate = hunter(
+const BOG_LURKER: MobTemplate = water_hunter(
     "Bog Lurker",
     Mm::Spider,
     ids::VENOM_STING,
@@ -3923,10 +4066,14 @@ mod tests {
     #[test]
     fn recipes_make_gear_from_drops() {
         for r in &RECIPES {
-            assert!(matches!(
-                item(r.result).kind,
-                ItemKind::Armor { .. } | ItemKind::Weapon { .. }
-            ));
+            let made = item(r.result).kind;
+            match r.skill {
+                Skill::Crafting => assert!(matches!(
+                    made,
+                    ItemKind::Armor { .. } | ItemKind::Weapon { .. }
+                )),
+                Skill::Cooking => assert!(matches!(made, ItemKind::Food { .. })),
+            }
             for (m, n) in r.materials {
                 assert_eq!(item(*m).kind, ItemKind::Material);
                 assert!(*n <= item(*m).max_stack);

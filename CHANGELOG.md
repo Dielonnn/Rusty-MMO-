@@ -15,6 +15,13 @@ Commit: the one titled "v7.8: water mobs in the lakes".
   drop money and sometimes Light Leather. Scorchsand and Frostcog have no
   lakes, and Grubdeep's one pool is too small for a pack
 - Sandbox mode can summon the area's water mob
+- **Meat and fish**: boars drop **Boar Meat** (50%) and water mobs drop
+  **Raw Fish** (60%)
+- **Cooking**: a new skill. `K` now opens a **Skills** window with a tab per
+  skill: Crafting (as before) and Cooking. Cook Boar Meat into **Roasted
+  Boar** and Raw Fish into **Cooked Fish**. Right-click cooked food to eat
+  it: it restores 26% of your health (three quarters of a Healing Potion)
+  and shares the potion cooldown
 - Old clients can't join a v7.8 server (protocol 11)
 
 ## v7.6
