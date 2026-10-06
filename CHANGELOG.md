@@ -35,6 +35,17 @@ Commit: the one titled "v8.11: Sunfold Highlands and Blightscar Badlands".
 - To make room for the passes, three camps in the starting areas moved a
   little (one each in Silverbough, Grubdeep and Witherwood).
 
+## v8.10
+
+Commit: the one titled "v8.10: emote animations".
+
+- **Emote animations**: the emotes that only showed a label now move.
+  `/wave` raises an open hand and waves it, `/point` points ahead with one
+  finger, `/flipoff` raises the middle finger, `/no` wags a finger side to
+  side, and `/kiss` touches the fingers to the lips and blows the kiss
+  out. They play on every race, standing or running, and the weapon in
+  your right hand is put away while you gesture.
+
 ## v8.9
 
 Commit: the one titled "v8.9: sandbox item tabs".
