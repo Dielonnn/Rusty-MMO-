@@ -1079,6 +1079,7 @@ impl World {
             return;
         }
         let interrupt = dist > 0.05 && e.cast.is_some();
+        let was_in_pass = pass_at(e.pos).is_some();
         e.pos = pos;
         e.yaw = yaw;
         e.moving = moving;
@@ -1092,6 +1093,26 @@ impl World {
                 },
             );
         }
+        if let Some(pass) = pass_at(pos) {
+            self.cross_pass(id, pass, was_in_pass);
+        }
+    }
+
+    /// A player walked to the end of a mountain pass: over they go, into
+    /// the next zone (but not in the middle of a fight).
+    fn cross_pass(&mut self, id: EntityId, pass: &Pass, was_in_pass: bool) {
+        if self.entities[&id].in_combat {
+            if !was_in_pass {
+                self.error(id, "You can't leave while in combat.");
+            }
+            return;
+        }
+        let (pos, yaw) = pass.exit();
+        self.teleport(id, pos, yaw);
+        self.send(
+            Audience::Only(id),
+            GameEvent::System(format!("You cross into {}.", pass.to.name())),
+        );
     }
 
     fn chat(&mut self, id: EntityId, text: String) {
@@ -3492,6 +3513,7 @@ mod tests {
         let mut w = World::new(5);
         let p = join(&mut w, "Caster", Class::Mage, 10);
         let boar = engage(&mut w, p, MobKind::Boar);
+        sturdy(&mut w, boar);
         w.try_use(p, ids::FIREBALL).unwrap();
         assert!(w.entities[&p].cast.is_some());
         assert_eq!(
@@ -4729,6 +4751,40 @@ mod tests {
 
     fn place(w: &World, p: EntityId) -> Place {
         Place::at(w.entities[&p].pos)
+    }
+
+    /// Walks a player from just inside a pass to just past its end.
+    fn walk_through(w: &mut World, p: EntityId, pass: &Pass, fighting: bool) {
+        let from = pass.zone.ground_local(pass.spot(PASS_END - 1.0));
+        let to = pass.zone.ground_local(pass.spot(PASS_END + 1.0));
+        w.entities.get_mut(&p).unwrap().pos = from;
+        run(w, 1.0);
+        w.entities.get_mut(&p).unwrap().in_combat = fighting;
+        w.handle(
+            p,
+            ClientMsg::Move {
+                pos: to,
+                yaw: 0.0,
+                moving: true,
+            },
+        );
+    }
+
+    #[test]
+    fn passes_lead_to_the_connecting_zones_and_back() {
+        let mut w = World::new(3);
+        let p = join(&mut w, "Wanderer", Class::Barbarian, 14);
+        for pass in &PASSES {
+            walk_through(&mut w, p, pass, false);
+            assert_eq!(place(&w, p), Place::Zone(pass.to), "{pass:?}");
+            let (pos, _) = pass.exit();
+            assert!(flat_distance(w.entities[&p].pos, pos) < 0.01);
+            assert!(pass_at(pos).is_none(), "{pass:?} arrives in a pass's end");
+        }
+        // Not in a fight.
+        let pass = &PASSES[0];
+        walk_through(&mut w, p, pass, true);
+        assert_eq!(place(&w, p), Place::Zone(pass.zone));
     }
 
     fn vault_mobs(w: &World, index: u32) -> Vec<EntityId> {

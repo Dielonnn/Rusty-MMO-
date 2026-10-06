@@ -51,6 +51,8 @@ pub(super) fn lamp_color(zone: Zone) -> Color {
         Zone::Silverbough => c(0.7, 0.85, 1.0),
         Zone::Grubdeep => c(0.5, 1.0, 0.45),
         Zone::Witherwood => c(0.55, 1.0, 0.35),
+        Zone::Sunfold => c(1.0, 0.9, 0.6),
+        Zone::Blightscar => c(0.75, 1.0, 0.3),
     }
 }
 
@@ -65,6 +67,10 @@ pub(super) fn draw_prop(
     fires: &mut Vec<Glow>,
     flags: &mut Vec<Flag>,
 ) {
+    // Connecting zones borrow a starting area's scenery, but keep their own
+    // banners, lamps and trees.
+    let own = zone;
+    let zone = zone.style();
     let pos = p.pos;
     let yaw = p.yaw;
     let s = p.size;
@@ -102,7 +108,7 @@ pub(super) fn draw_prop(
             b.block(pos + Vec3::Y * 3.55, vec3(0.25, 0.05, 0.25), 0.0, post);
             lamps.push(Glow {
                 pos: pos + Vec3::Y * 3.85,
-                color: lamp_color(zone),
+                color: lamp_color(own),
             });
         }
         PropKind::Barrel => {
@@ -123,9 +129,10 @@ pub(super) fn draw_prop(
             );
         }
         PropKind::Crate => b.block(pos + Vec3::Y * s, Vec3::splat(s), yaw, WOOD),
-        PropKind::Tree => match zone {
+        PropKind::Tree => match own {
             Zone::Silverbough => regal_tree(b, cards, &mut rng, pos, s),
-            _ => autumn_tree(b, cards, &mut rng, pos - Vec3::Y * 0.2, s),
+            Zone::Sunfold => leafy_tree(b, cards, &mut rng, pos - Vec3::Y * 0.2, s, &SUMMER),
+            _ => leafy_tree(b, cards, &mut rng, pos - Vec3::Y * 0.2, s, &AUTUMN),
         },
         PropKind::Conifer => {
             let (green, snowy) = match zone {
@@ -207,12 +214,12 @@ pub(super) fn draw_prop(
         }
         PropKind::Shrub => {
             let col = match zone {
-                Zone::Scorchsand => c(0.55, 0.5, 0.3),
+                Zone::Scorchsand | Zone::Blightscar => c(0.55, 0.5, 0.3),
                 Zone::Silverbough => c(0.25, 0.55, 0.4),
                 Zone::Frostcog => c(0.95, 0.97, 1.0),
                 Zone::Witherwood => c(0.3, 0.2, 0.3),
                 Zone::Grubdeep => c(0.3, 0.35, 0.4),
-                Zone::Amberfall => c(0.7, 0.35, 0.1),
+                Zone::Amberfall | Zone::Sunfold => c(0.7, 0.35, 0.1),
             };
             if zone == Zone::Frostcog {
                 // A bush buried in snow.
@@ -440,12 +447,12 @@ pub(super) fn draw_prop(
         }
         PropKind::Tent => {
             let canvas = match zone {
-                Zone::Scorchsand => c(0.6, 0.38, 0.25),
+                Zone::Scorchsand | Zone::Blightscar => c(0.6, 0.38, 0.25),
                 Zone::Silverbough => c(0.35, 0.5, 0.3),
                 Zone::Grubdeep => c(0.35, 0.33, 0.35),
                 Zone::Frostcog => c(0.7, 0.8, 0.9),
                 Zone::Witherwood => c(0.18, 0.15, 0.2),
-                Zone::Amberfall => c(0.58, 0.48, 0.33),
+                Zone::Amberfall | Zone::Sunfold => c(0.58, 0.48, 0.33),
             };
             b.cone_ref(
                 pos - Vec3::Y * 0.2,
@@ -492,12 +499,12 @@ pub(super) fn draw_prop(
         }
         PropKind::Pillar => {
             let stone = match zone {
-                Zone::Scorchsand => c(0.78, 0.62, 0.42),
+                Zone::Scorchsand | Zone::Blightscar => c(0.78, 0.62, 0.42),
                 Zone::Silverbough => c(0.85, 0.85, 0.88),
                 Zone::Grubdeep => c(0.32, 0.3, 0.36),
                 Zone::Frostcog => c(0.7, 0.8, 0.9),
                 Zone::Witherwood => c(0.3, 0.28, 0.3),
-                Zone::Amberfall => c(0.52, 0.52, 0.5),
+                Zone::Amberfall | Zone::Sunfold => c(0.52, 0.52, 0.5),
             };
             let p0 = pos - Vec3::Y * 0.3;
             b.cone_ref(p0, Vec3::Y * s, forward(yaw), 0.8, 0.8, 10, stone);
@@ -675,7 +682,7 @@ pub(super) fn draw_prop(
             );
         }
         PropKind::Banner => {
-            let color = banner_color(zone);
+            let color = banner_color(own);
             b.cylinder(pos, Vec3::Y * 5.0, 0.07, 6, c(0.25, 0.2, 0.18));
             b.sphere(pos + Vec3::Y * 5.05, 0.12, GOLD);
             b.beam(
@@ -789,20 +796,39 @@ pub(super) fn banner_color(zone: Zone) -> Color {
         Zone::Grubdeep => c(0.85, 0.6, 0.15),
         Zone::Frostcog => c(0.85, 0.2, 0.25),
         Zone::Witherwood => c(0.35, 0.15, 0.45),
+        // Gold for the three kingdoms, rust and sick green for the horde.
+        Zone::Sunfold => c(0.85, 0.65, 0.15),
+        Zone::Blightscar => c(0.45, 0.6, 0.12),
     }
 }
 
-pub(super) fn autumn_tree(b: &mut Batch, cards: &mut Batch, rng: &mut Scatter, p: Vec3, size: f32) {
-    const LEAVES: [Color; 5] = [
-        c(0.9, 0.46, 0.12),
-        c(0.75, 0.2, 0.1),
-        c(0.93, 0.72, 0.2),
-        c(0.82, 0.34, 0.1),
-        c(0.6, 0.3, 0.12),
-    ];
+const AUTUMN: [Color; 5] = [
+    c(0.9, 0.46, 0.12),
+    c(0.75, 0.2, 0.1),
+    c(0.93, 0.72, 0.2),
+    c(0.82, 0.34, 0.1),
+    c(0.6, 0.3, 0.12),
+];
+const SUMMER: [Color; 5] = [
+    c(0.3, 0.5, 0.18),
+    c(0.38, 0.56, 0.2),
+    c(0.24, 0.42, 0.16),
+    c(0.5, 0.58, 0.22),
+    c(0.32, 0.46, 0.24),
+];
+
+/// A broad-leaved tree with leaves from `palette`.
+pub(super) fn leafy_tree(
+    b: &mut Batch,
+    cards: &mut Batch,
+    rng: &mut Scatter,
+    p: Vec3,
+    size: f32,
+    palette: &[Color; 5],
+) {
     let trunk = c(0.33, 0.22, 0.14);
-    let leaves = LEAVES[(rng.unit() * 5.0) as usize % 5];
-    let leaves2 = LEAVES[(rng.unit() * 5.0) as usize % 5];
+    let leaves = palette[(rng.unit() * 5.0) as usize % 5];
+    let leaves2 = palette[(rng.unit() * 5.0) as usize % 5];
     b.cone(p, Vec3::Y * 2.4 * size, 0.3 * size, 0.18 * size, 7, trunk);
     for k in 0..3 {
         let a = k as f32 * 2.1 + rng.unit();
@@ -884,7 +910,7 @@ pub(super) fn regal_tree(b: &mut Batch, cards: &mut Batch, rng: &mut Scatter, p:
 }
 
 pub(super) fn dead_tree(b: &mut Batch, zone: Zone, rng: &mut Scatter, p: Vec3, size: f32) {
-    let (trunk, moss) = match zone {
+    let (trunk, moss) = match zone.style() {
         Zone::Witherwood => (c(0.16, 0.13, 0.13), Some(c(0.35, 0.42, 0.28))),
         Zone::Scorchsand => (c(0.52, 0.42, 0.32), None),
         Zone::Frostcog => (c(0.4, 0.36, 0.34), None),
@@ -992,13 +1018,13 @@ pub(super) fn crop(b: &mut Batch, zone: Zone, p: Vec3, s: f32, field: u8) {
         }
         _ => {
             // Sheaves of grain (or moss, or snowy stubble).
-            let col = match zone {
-                Zone::Scorchsand => c(0.85, 0.72, 0.42),
+            let col = match zone.style() {
+                Zone::Scorchsand | Zone::Blightscar => c(0.85, 0.72, 0.42),
                 Zone::Silverbough => c(0.75, 0.8, 0.55),
                 Zone::Grubdeep => c(0.3, 0.5, 0.45),
                 Zone::Frostcog => c(0.8, 0.75, 0.6),
                 Zone::Witherwood => c(0.42, 0.38, 0.3),
-                Zone::Amberfall => c(0.88, 0.72, 0.36),
+                Zone::Amberfall | Zone::Sunfold => c(0.88, 0.72, 0.36),
             };
             b.cone(p, Vec3::Y * 1.3 * s, 0.35, 0.15, 7, col);
             b.cone(
@@ -1014,7 +1040,7 @@ pub(super) fn crop(b: &mut Batch, zone: Zone, p: Vec3, s: f32, field: u8) {
 }
 
 pub(super) fn scarecrow(b: &mut Batch, zone: Zone, p: Vec3) {
-    match zone {
+    match zone.style() {
         Zone::Frostcog => {
             // A snowman.
             let snow = c(0.96, 0.97, 1.0);
@@ -1037,7 +1063,7 @@ pub(super) fn scarecrow(b: &mut Batch, zone: Zone, p: Vec3) {
                 c(0.15, 0.15, 0.18),
             );
         }
-        Zone::Scorchsand => {
+        Zone::Scorchsand | Zone::Blightscar => {
             // A skull totem.
             b.cylinder(p, Vec3::Y * 2.8, 0.15, 6, WOOD);
             b.sphere(p + Vec3::Y * 2.9, 0.3, BONE);
@@ -1082,7 +1108,7 @@ pub(super) fn scarecrow(b: &mut Batch, zone: Zone, p: Vec3) {
             b.cone(p + Vec3::Y * 0.8, Vec3::Y * 1.6, 0.35, 0.2, 8, marble);
             b.sphere(p + Vec3::Y * 2.6, 0.22, marble);
         }
-        Zone::Amberfall | Zone::Witherwood => {
+        Zone::Amberfall | Zone::Sunfold | Zone::Witherwood => {
             let wood = c(0.45, 0.32, 0.2);
             b.cylinder(p, Vec3::Y * 2.6, 0.08, 6, wood);
             b.block(p + Vec3::Y * 1.9, vec3(0.9, 0.06, 0.06), 0.4, wood);
@@ -1115,13 +1141,13 @@ pub(super) fn market_stall(b: &mut Batch, zone: Zone, p: Vec3, yaw: f32, v: u8) 
     let f = forward(yaw);
     let r = vec3(-f.z, 0.0, f.x);
     let awning = match zone {
-        Zone::Scorchsand => c(0.75, 0.3, 0.15),
+        Zone::Scorchsand | Zone::Blightscar => c(0.75, 0.3, 0.15),
         Zone::Silverbough => c(0.3, 0.45, 0.75),
         Zone::Grubdeep => c(0.55, 0.45, 0.2),
         Zone::Frostcog => c(0.8, 0.2, 0.2),
         Zone::Witherwood => c(0.35, 0.2, 0.4),
         Zone::Amberfall if v.is_multiple_of(2) => c(0.75, 0.25, 0.15),
-        Zone::Amberfall => c(0.85, 0.6, 0.15),
+        Zone::Amberfall | Zone::Sunfold => c(0.85, 0.6, 0.15),
     };
     b.block(p + Vec3::Y * 0.5, vec3(1.4, 0.5, 0.6), yaw, wood);
     for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {

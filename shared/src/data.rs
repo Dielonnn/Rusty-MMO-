@@ -3724,6 +3724,18 @@ pub enum MobKind {
     MudsnapCrab,
     GlimmershellCrab,
     BogLurker,
+    // Sunfold Highlands (connecting zone)
+    HighlandProwler,
+    RidgehornBoar,
+    ThornhelmBrigand,
+    ThornhelmHexer,
+    MoorlandAncient,
+    // Blightscar Badlands (connecting zone)
+    BlightfangScorpid,
+    CarrionHyena,
+    BlightscarReaver,
+    Plaguecaller,
+    ScourgeColossus,
 }
 
 /// What a mob is built from when drawn.
@@ -4394,6 +4406,63 @@ const BOG_LURKER: MobTemplate = water_hunter(
     [(0.3, 0.38, 0.2), (0.12, 0.14, 0.1), (0.6, 0.85, 0.25)],
 );
 
+// The connecting zones' mobs: the starting areas' bodies in new colors.
+
+const HIGHLAND_PROWLER: MobTemplate = hunter(
+    "Highland Prowler",
+    Mm::Wolf,
+    ids::SAVAGE_BITE,
+    [(0.62, 0.5, 0.32), (0.4, 0.3, 0.2), (0.95, 0.9, 0.7)],
+);
+const RIDGEHORN_BOAR: MobTemplate = boar(
+    "Ridgehorn Boar",
+    Mm::Boar,
+    [(0.36, 0.3, 0.26), (0.22, 0.18, 0.15), (0.92, 0.86, 0.66)],
+);
+const THORNHELM_BRIGAND: MobTemplate = fighter(
+    "Thornhelm Brigand",
+    H::Bandit,
+    [(0.3, 0.38, 0.24), (0.22, 0.2, 0.18), (0.72, 0.6, 0.2)],
+);
+const THORNHELM_HEXER: MobTemplate = caster(
+    "Thornhelm Hexer",
+    H::Mystic,
+    ids::SHADOW_BOLT,
+    [(0.2, 0.3, 0.22), (0.14, 0.2, 0.16), (0.5, 1.0, 0.6)],
+);
+const MOORLAND_ANCIENT: MobTemplate = elite(
+    "Moorland Ancient",
+    GiantStyle::Treant,
+    [(0.42, 0.34, 0.24), (0.5, 0.56, 0.24), (1.0, 0.85, 0.35)],
+);
+const BLIGHTFANG_SCORPID: MobTemplate = hunter(
+    "Blightfang Scorpid",
+    Mm::Scorpion,
+    ids::VENOM_STING,
+    [(0.45, 0.2, 0.16), (0.25, 0.1, 0.1), (0.6, 1.0, 0.3)],
+);
+const CARRION_HYENA: MobTemplate = grazer(
+    "Carrion Hyena",
+    Mm::Wolf,
+    [(0.42, 0.36, 0.3), (0.26, 0.22, 0.2), (0.7, 0.85, 0.3)],
+);
+const BLIGHTSCAR_REAVER: MobTemplate = fighter(
+    "Blightscar Reaver",
+    H::Raider,
+    [(0.5, 0.26, 0.2), (0.24, 0.2, 0.2), (0.55, 0.9, 0.25)],
+);
+const PLAGUECALLER: MobTemplate = caster(
+    "Plaguecaller",
+    H::Necromancer,
+    ids::SHADOW_BOLT,
+    [(0.3, 0.2, 0.16), (0.18, 0.12, 0.1), (0.7, 1.0, 0.2)],
+);
+const SCOURGE_COLOSSUS: MobTemplate = elite(
+    "Scourge Colossus",
+    GiantStyle::Bone,
+    [(0.72, 0.6, 0.5), (0.45, 0.3, 0.26), (0.7, 1.0, 0.25)],
+);
+
 impl MobKind {
     pub fn template(self) -> &'static MobTemplate {
         use MobKind::*;
@@ -4446,6 +4515,16 @@ impl MobKind {
             MudsnapCrab => &MUDSNAP_CRAB,
             GlimmershellCrab => &GLIMMERSHELL_CRAB,
             BogLurker => &BOG_LURKER,
+            HighlandProwler => &HIGHLAND_PROWLER,
+            RidgehornBoar => &RIDGEHORN_BOAR,
+            ThornhelmBrigand => &THORNHELM_BRIGAND,
+            ThornhelmHexer => &THORNHELM_HEXER,
+            MoorlandAncient => &MOORLAND_ANCIENT,
+            BlightfangScorpid => &BLIGHTFANG_SCORPID,
+            CarrionHyena => &CARRION_HYENA,
+            BlightscarReaver => &BLIGHTSCAR_REAVER,
+            Plaguecaller => &PLAGUECALLER,
+            ScourgeColossus => &SCOURGE_COLOSSUS,
         }
     }
 
@@ -4505,7 +4584,11 @@ impl MobKind {
             Zone::Silverbough => Some(MobKind::GlimmershellCrab),
             Zone::Witherwood => Some(MobKind::BogLurker),
             // No lakes, or too small for a camp.
-            Zone::Scorchsand | Zone::Grubdeep | Zone::Frostcog => None,
+            Zone::Scorchsand
+            | Zone::Grubdeep
+            | Zone::Frostcog
+            | Zone::Sunfold
+            | Zone::Blightscar => None,
         }
     }
 
@@ -4532,6 +4615,20 @@ impl MobKind {
             ],
             Zone::Frostcog => [SnowWolf, FrostBoar, FrostTroll, FrostTrollShaman, Yeti],
             Zone::Witherwood => [GhoulHound, PlagueBoar, Skeleton, Necromancer, BoneColossus],
+            Zone::Sunfold => [
+                HighlandProwler,
+                RidgehornBoar,
+                ThornhelmBrigand,
+                ThornhelmHexer,
+                MoorlandAncient,
+            ],
+            Zone::Blightscar => [
+                BlightfangScorpid,
+                CarrionHyena,
+                BlightscarReaver,
+                Plaguecaller,
+                ScourgeColossus,
+            ],
         }
     }
 }

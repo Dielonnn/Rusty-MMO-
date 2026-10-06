@@ -5,6 +5,36 @@ window title, on the login screen and in the server's startup message. The
 commit for each release is listed under its heading, and a Windows .exe is
 built from that commit.
 
+## v8.11
+
+Commit: the one titled "v8.11: Sunfold Highlands and Blightscar Badlands".
+
+- **Two new zones, level 13 to 20**, each joining three starting areas:
+  - **Sunfold Highlands**: green-gold moorland on a clear morning, between
+    Amberfall Vale (humans), Silverbough Glade (elves) and Frostcog Peaks
+    (gnomes and dwarves). Its outpost is **Three Banners**.
+  - **Blightscar Badlands**: red, ash-blown badlands under a smoky sky,
+    between Witherwood (undead), Scorchsand Wastes (orcs) and Grubdeep
+    Caverns (goblins). Its outpost is **Bonecross**.
+- **Mountain passes**: each of those starting areas has a new road leading
+  out of town to a pass at the edge of the map, between steep cliffs and
+  through a gate of two pillars. Walk over the top of the pass and you come
+  out of the matching pass in the new zone (not while in combat). Each new
+  zone has three passes, one back to each of its starting areas. The world
+  map shows where each pass leads.
+- **New mobs**, on the old bodies in new colors: Highland Prowlers,
+  Ridgehorn Boars, Thornhelm Brigands and Hexers and the elite Moorland
+  Ancient in the highlands; Blightfang Scorpids, Carrion Hyenas,
+  Blightscar Reavers, Plaguecallers and the elite Scourge Colossus in the
+  badlands.
+- **Quests**: Captain Brenna Ashby in Three Banners and Overseer Varkash
+  in Bonecross each give three: hunt the zone's beasts, break its
+  fighters, and kill its elite. The rewards are placeholders.
+- Each new outpost has a merchant, a waystone (both outposts are on every
+  waystone's list), its own music, ambience, sky and weather.
+- To make room for the passes, three camps in the starting areas moved a
+  little (one each in Silverbough, Grubdeep and Witherwood).
+
 ## v8.10
 
 Commit: the one titled "v8.10: emote animations".

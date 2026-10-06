@@ -26,6 +26,8 @@ pub(super) fn weather(b: &mut Batch, zone: Zone, time: f32, around: Vec3) {
         Zone::Grubdeep => (110, 12.0),
         Zone::Frostcog => (320, 16.0),
         Zone::Witherwood => (70, 6.0),
+        Zone::Sunfold => (90, 8.0),
+        Zone::Blightscar => (180, 12.0),
     };
     let place = |base: f32, drift: f32, center: f32| {
         center + ((base * TILE + drift - center).rem_euclid(TILE) - TILE * 0.5)
@@ -107,6 +109,26 @@ pub(super) fn weather(b: &mut Batch, zone: Zone, time: f32, around: Vec3) {
                     0.07,
                     Color::new(col.r, col.g, col.b, col.a * 0.5),
                 );
+            }
+            Zone::Sunfold => {
+                // Thistledown floating on the wind.
+                let x = place(bx, time * 1.6 * speed, around.x);
+                let z = place(bz, (time * 0.5 + phase).sin() * 2.0, around.z);
+                let y = terrain_height(x, z) + 0.5 + by * height + (time * 0.8 + phase).sin() * 0.6;
+                b.glow_sphere(vec3(x, y, z), 0.035, Color::new(1.0, 0.98, 0.9, 0.7));
+            }
+            Zone::Blightscar => {
+                // Ash drifting down from the smoke.
+                let x = place(bx, time * 0.9 + (time * 0.6 + phase).sin(), around.x);
+                let z = place(bz, time * 0.4, around.z);
+                let fall = (by * height - time * speed * 0.7).rem_euclid(height);
+                let y = terrain_height(x, z) + fall;
+                let col = if i % 4 == 0 {
+                    c(0.95, 0.55, 0.2)
+                } else {
+                    c(0.32, 0.3, 0.3)
+                };
+                b.block(vec3(x, y, z), Vec3::splat(0.035), phase, col);
             }
         }
     }
@@ -190,7 +212,8 @@ fn clouds(
         Zone::Witherwood => Color::new(0.42, 0.36, 0.48, 0.8),
         Zone::Silverbough => Color::new(0.62, 0.68, 0.92, 0.6),
         Zone::Scorchsand => Color::new(1.0, 0.98, 0.95, 0.75),
-        Zone::Frostcog => Color::new(1.0, 1.0, 1.0, 0.9),
+        Zone::Frostcog | Zone::Sunfold => Color::new(1.0, 1.0, 1.0, 0.9),
+        Zone::Blightscar => Color::new(0.4, 0.34, 0.3, 0.85),
         _ => {
             let warm = mix(t.sky_horizon, Color::new(1.0, 0.86, 0.8, 1.0), 0.55);
             Color::new(warm.r, warm.g, warm.b, 0.85)

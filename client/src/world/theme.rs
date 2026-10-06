@@ -134,5 +134,41 @@ pub fn theme(zone: Zone) -> Theme {
             stars: 0.4,
             sun_disc: Some(c(0.75, 0.85, 0.6)),
         },
+        // A clear, breezy highland morning.
+        Zone::Sunfold => Theme {
+            light: Light {
+                sun_dir: vec3(0.55, 0.5, -0.4).normalize(),
+                sun: vec3(1.0, 0.95, 0.82),
+                ambient: vec3(0.48, 0.5, 0.58),
+            },
+            sky_top: c(0.26, 0.45, 0.78),
+            sky_mid: c(0.52, 0.68, 0.88),
+            sky_horizon: c(0.95, 0.9, 0.78),
+            fog: c(0.78, 0.82, 0.84),
+            fog_near: 70.0,
+            fog_far: 300.0,
+            water: Color::new(0.28, 0.45, 0.6, 0.82),
+            cave: false,
+            stars: 0.0,
+            sun_disc: Some(c(1.0, 0.96, 0.82)),
+        },
+        // Red badlands under a smoky, sickly green sky.
+        Zone::Blightscar => Theme {
+            light: Light {
+                sun_dir: vec3(-0.5, 0.42, 0.55).normalize(),
+                sun: vec3(1.0, 0.78, 0.58),
+                ambient: vec3(0.46, 0.4, 0.4),
+            },
+            sky_top: c(0.18, 0.14, 0.12),
+            sky_mid: c(0.42, 0.3, 0.22),
+            sky_horizon: c(0.72, 0.62, 0.36),
+            fog: c(0.55, 0.44, 0.32),
+            fog_near: 50.0,
+            fog_far: 240.0,
+            water: Color::new(0.3, 0.42, 0.14, 0.88),
+            cave: false,
+            stars: 0.2,
+            sun_disc: Some(c(1.0, 0.7, 0.4)),
+        },
     }
 }

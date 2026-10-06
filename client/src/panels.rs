@@ -146,7 +146,9 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
         draw_circle(x, y, 10.0, Color::new(0.85, 0.68, 0.3, 1.0));
         draw_circle(x, y, 6.0, Color::new(0.4, 0.28, 0.14, 1.0));
     }
-    let plate = Rect::new(r.x + r.w / 2.0 - 230.0, frame.y + 10.0, 460.0, 32.0);
+    let title = format!("{}  -  {}", zone.name(), zone.subtitle());
+    let pw = (text_width(&title, 22.0) + 40.0).max(460.0);
+    let plate = Rect::new(r.x + r.w / 2.0 - pw / 2.0, frame.y + 10.0, pw, 32.0);
     draw_rectangle(
         plate.x,
         plate.y,
@@ -162,13 +164,7 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
         2.0,
         Color::new(0.85, 0.68, 0.3, 1.0),
     );
-    text_centered(
-        &format!("{}  -  {}", zone.name(), zone.subtitle()),
-        r.x + r.w / 2.0,
-        plate.y + 23.0,
-        22.0,
-        GOLD,
-    );
+    text_centered(&title, r.x + r.w / 2.0, plate.y + 23.0, 22.0, GOLD);
     // The land, inked onto the parchment.
     draw_texture_ex(
         tex,
@@ -311,6 +307,29 @@ pub fn draw_map(game: &Game, tex: &Texture2D) {
             15.0,
             Color::new(1.0, 0.92, 0.75, 1.0),
         );
+    }
+    // The passes: an arrow at the map's edge, naming where they lead.
+    for pass in zone.passes() {
+        let end = to_screen(zone.to_world(pass.spot(PASS_END)));
+        let back = to_screen(zone.to_world(pass.spot(PASS_END - 14.0)));
+        let d = (end - back).normalize_or_zero();
+        let side = vec2(-d.y, d.x) * 7.0;
+        draw_triangle(end, back + side, back - side, GOLD);
+        draw_triangle_lines(end, back + side, back - side, 1.5, BLACK);
+        let label = format!("To {}", pass.to.name());
+        let lw = text_width(&label, 15.0);
+        let at = (back - d * 16.0).clamp(
+            vec2(r.x + lw / 2.0 + 8.0, r.y + 28.0),
+            vec2(r.right() - lw / 2.0 - 8.0, r.bottom() - 8.0),
+        );
+        draw_rectangle(
+            at.x - lw / 2.0 - 4.0,
+            at.y - 14.0,
+            lw + 8.0,
+            18.0,
+            Color::new(0.25, 0.17, 0.08, 0.85),
+        );
+        text_centered(&label, at.x, at.y, 15.0, GOLD);
     }
     // Everyone you can see.
     for e in game.entities.values() {
@@ -713,7 +732,7 @@ pub fn sandbox_layout(zone: Zone) -> SandboxLayout {
             SandboxAction::Command(SandboxCmd::Teleport(z)),
         ));
     }
-    y += 98.0;
+    y += Zone::ALL.len().div_ceil(3) as f32 * 36.0 + 26.0;
     // The zone's mobs (and its water mob), then a button to clear them.
     let spawns = MobKind::for_zone(zone)
         .into_iter()
