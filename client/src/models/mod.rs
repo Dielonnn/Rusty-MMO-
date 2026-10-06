@@ -47,6 +47,10 @@ pub struct Pose {
     /// Flinching from a hit: 1 just hit, fading to 0.
     pub hurt: f32,
     pub time: f32,
+    /// An emote the arms and hands act out (wave, point, ...), and seconds
+    /// into it. Sit and backflip move the whole body and are drawn by the
+    /// game instead.
+    pub emote: Option<(shared::emote::Emote, f32)>,
 }
 
 impl Pose {

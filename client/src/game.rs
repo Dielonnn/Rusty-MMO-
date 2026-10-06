@@ -2026,6 +2026,10 @@ impl Game {
                 airborne,
                 hurt: (1.0 - e.hurt / 0.35).max(0.0),
                 time: self.time + e.view.id as f32,
+                // Sit and backflip bend the whole model below instead.
+                emote: e.emote.filter(|(emote, _)| {
+                    e.view.kind.is_player() && !matches!(emote, Emote::Sit | Emote::Backflip)
+                }),
             };
             match e.emote.filter(|_| e.view.kind.is_player() && !e.view.dead) {
                 // Whole-body emotes: draw the model on its own and bend it.
@@ -2102,7 +2106,7 @@ impl Game {
 /// Bends a character's model drawn at `pos` for a whole-body emote, `t`
 /// seconds in: a backflip spins it over backwards in a hop, sitting folds
 /// the legs forward at the hips and lowers it to the ground. The rest of
-/// the emotes need the animation code in `models/`.
+/// the emotes pose the arms and hands in `models/` (`Pose::emote`).
 fn bend(mesh: &mut Mesh, emote: Emote, t: f32, pos: Vec3, yaw: f32, height: f32) {
     let forward = vec3(yaw.sin(), 0.0, yaw.cos());
     // Turning about this axis tips the top backwards and the bottom forwards.
